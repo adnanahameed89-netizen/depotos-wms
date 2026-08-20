@@ -47,7 +47,7 @@ async function login(email, password) {
 }
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
-const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D" };
+const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -154,7 +154,7 @@ function Sidebar({ view, setView, profile, onLogout }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
   const visibleItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "users", label: "Users", icon: "👥" }]
-    : ["warehouse_lead", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
+    : ["warehouse_lead", "supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
   return (
     <div style={S.sidebar}>
@@ -220,6 +220,7 @@ function DashboardView({ token, profile, setView }) {
     { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
     { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
     { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
+    { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
     { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
   ];
   return (
@@ -604,7 +605,7 @@ function PutawayView({ token, profile, showToast }) {
   const [binChoice, setBinChoice] = useState({});
   const [verified, setVerified] = useState({});
   const [scanInput, setScanInput] = useState({});
-  const canAssign = ["admin", "warehouse_lead"].includes(profile.role);
+  const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
 
   const load = useCallback(async () => {
     try {
@@ -1032,6 +1033,7 @@ function OrdersView({ token, profile, showToast }) {
           { key: "queued", label: "Queued for Pick", color: "#5B9EE8", icon: "🛒" },
           { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
           { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
+          { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
           { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
         ];
         const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => o.status === s.key).length]));
@@ -1100,24 +1102,32 @@ function PickingView({ token, profile, showToast }) {
   const [pickers, setPickers] = useState([]);
   const [bins, setBins] = useState({});
   const [taskLines, setTaskLines] = useState({});
+  const [totes, setTotes] = useState([]);
+  const [selectedForTote, setSelectedForTote] = useState({});
+  const [toteAssignPicker, setToteAssignPicker] = useState("");
+  const [openTote, setOpenTote] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [openLines, setOpenLines] = useState([]);
   const [scans, setScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
+  const canBatch = ["admin", "supervisor", "warehouse_lead"].includes(profile.role);
 
   const load = useCallback(async () => {
     try {
-      const [t, o, p, pk, b] = await Promise.all([
+      const [t, o, p, pk, b, tt] = await Promise.all([
         sb(`/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/products?select=*`, { token }),
-        sb(`/rest/v1/profiles?role=eq.picker&warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=neq.completed&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
-      setProducts(p || []); setPickers(pk || []);
+      setProducts(p || []);
+      setPickers((pk || []).filter(u => ["picker", "packer"].includes(u.role)));
       setBins(Object.fromEntries((b || []).map(x => [x.id, x])));
+      setTotes(tt || []);
       const taskIds = (t || []).map(x => x.id);
       if (taskIds.length) {
         const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token });
@@ -1129,10 +1139,27 @@ function PickingView({ token, profile, showToast }) {
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
 
-  const assign = async (task, pickerId) => {
-    await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { assigned_to: pickerId, status: "assigned", assigned_at: new Date().toISOString() } });
-    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "assigned", metadata: { assigned_to: pickerId } } });
-    showToast("Assigned"); load();
+  const queuedTasks = tasks.filter(t => t.status === "queued" && !t.tote_id);
+  const selectedCount = Object.values(selectedForTote).filter(Boolean).length;
+
+  const createTote = async () => {
+    const ids = Object.keys(selectedForTote).filter(k => selectedForTote[k]);
+    if (ids.length === 0 || ids.length > 15) { showToast("1 se 15 orders select karein", "err"); return; }
+    if (!toteAssignPicker) { showToast("Picker select karein", "err"); return; }
+    try {
+      const toteNumber = `TOTE-${Date.now().toString().slice(-6)}`;
+      const created = await sb(`/rest/v1/totes`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { tote_number: toteNumber, warehouse_id: profile.warehouse_id, assigned_to: toteAssignPicker, status: "picking" }
+      });
+      const toteId = created[0].id;
+      for (const id of ids) {
+        await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: toteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString() } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: toteId, user_id: profile.id, action: "created", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
+      showToast(`${toteNumber} created with ${ids.length} orders`);
+      setSelectedForTote({}); setToteAssignPicker(""); load();
+    } catch (e) { showToast("Tote creation failed", "err"); }
   };
 
   const openPickTask = (task) => {
@@ -1163,10 +1190,17 @@ function PickingView({ token, profile, showToast }) {
         await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: scans[l.product_id] || 0 } });
       }
       await sb(`/rest/v1/pick_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: openTask.order_id, status: "pending" } });
+      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: openTask.order_id, status: "pending", tote_id: openTask.tote_id || null } });
       await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "picking" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: openTask.id, user_id: profile.id, action: "completed" } });
-      showToast("Picked — sent to packing");
+
+      const remaining = await sb(`/rest/v1/pick_tasks?tote_id=eq.${openTask.tote_id}&status=neq.picked&select=id`, { token });
+      if (openTask.tote_id && (!remaining || remaining.length === 0)) {
+        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+        showToast("Tote fully picked — ready for packer");
+        setOpenTote(null);
+      }
+      showToast("Order picked");
       setOpenTask(null); load();
     } catch (e) { showToast("Failed to complete", "err"); }
   };
@@ -1175,7 +1209,7 @@ function PickingView({ token, profile, showToast }) {
     const o = orders[openTask.order_id];
     return (
       <div>
-        <SectionTitle title={`Picking — ${o?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back</button>} />
+        <SectionTitle title={`Picking — ${o?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back to tote</button>} />
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan each item from its location</div>
           <div style={{ display: "flex", gap: 10 }}>
@@ -1203,59 +1237,108 @@ function PickingView({ token, profile, showToast }) {
             );
           })}
           {allScanned && (
-            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completePick}>✓ Mark picked — send to packing</button>
+            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completePick}>✓ Mark picked</button>
           )}
         </div>
       </div>
     );
   }
 
+  if (openTote) {
+    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    return (
+      <div>
+        <SectionTitle title={`${openTote.tote_number} — ${toteTasks.length} orders`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
+        <div style={S.cardGrid}>
+          {toteTasks.map(t => {
+            const o = orders[t.order_id];
+            const done = t.status === "picked";
+            return (
+              <div key={t.id} style={S.card} onClick={() => !done && openPickTask(t)}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
+                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#5B9EE8", borderColor: done ? "#4CAF7D" : "#5B9EE8" }}>{done ? "Picked" : "Pending"}</span>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  {(taskLines[t.id] || []).map(l => {
+                    const p = products.find(x => x.id === l.product_id);
+                    const bin = bins[l.bin_id];
+                    return (
+                      <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+                        <span style={{ color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{p?.sku} × {l.qty_required}</span>
+                        <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace" }}>📍 {bin?.code || "—"}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {!done && <div style={{ color: "#F5A623", fontSize: 11, marginTop: 8 }}>Tap to scan & pick →</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const myTotes = totes.filter(t => t.assigned_to === profile.id && t.status === "picking");
+
   return (
     <div>
-      <SectionTitle title="Picking queue" />
-      {pickers.length === 0 && (
-        <div style={{ ...S.panel, borderColor: "#7A551A" }}>
-          <div style={{ color: "#F5A623", fontSize: 12 }}>⚠ Is warehouse mein koi picker profile nahi mila. Admin ko chahiye Users tab se picker account banana.</div>
-        </div>
-      )}
+      <SectionTitle title="My totes" />
       <div style={S.cardGrid}>
-        {tasks.map(t => {
-          const o = orders[t.order_id];
+        {myTotes.map(tt => {
+          const toteTasks = tasks.filter(t => t.tote_id === tt.id);
+          const pickedCount = toteTasks.filter(t => t.status === "picked").length;
           return (
-            <div key={t.id} style={S.card} onClick={() => t.status === "assigned" && openPickTask(t)}>
+            <div key={tt.id} style={S.card} onClick={() => setOpenTote(tt)}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id || "—"}</span>
-                <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{t.status}</span>
+                <span>🧺</span>
+                <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{tt.status}</span>
               </div>
-              <div style={{ color: "#ECEAE3", fontSize: 13, marginTop: 8 }}>{o?.courier}</div>
-              <div style={{ marginTop: 8 }}>
-                {(taskLines[t.id] || []).map(l => {
-                  const p = products.find(x => x.id === l.product_id);
-                  const bin = bins[l.bin_id];
-                  return (
-                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-                      <span style={{ color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{p?.sku} × {l.qty_required}</span>
-                      <span style={{ color: bin ? "#5B9EE8" : "#E5484D", fontFamily: "'IBM Plex Mono', monospace" }}>📍 {bin?.code || "no bin!"}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              {t.status === "queued" ? (
-                <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onClick={e => e.stopPropagation()} onChange={e => e.target.value && assign(t, e.target.value)} defaultValue="">
-                  <option value="">Assign to picker…</option>
-                  {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
-                </select>
-              ) : (
-                <>
-                  <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>Assigned: {pickers.find(p => p.id === t.assigned_to)?.full_name || "—"}</div>
-                  <div style={{ color: "#F5A623", fontSize: 11, marginTop: 4 }}>Tap to scan & pick →</div>
-                </>
-              )}
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
+              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{pickedCount} / {toteTasks.length} orders picked</div>
             </div>
           );
         })}
-        {tasks.length === 0 && <EmptyNote text="Picking queue is empty." />}
+        {myTotes.length === 0 && <EmptyNote text="Koi tote assign nahi hua." />}
       </div>
+
+      {canBatch && (
+        <>
+          <SectionTitle title={`Create picking batch (Tote) — ${selectedCount}/15 selected`} />
+          {pickers.length === 0 && (
+            <div style={{ ...S.panel, borderColor: "#7A551A" }}>
+              <div style={{ color: "#F5A623", fontSize: 12 }}>⚠ Is warehouse mein koi picker/packer profile nahi mila. Admin ko chahiye Users tab se account banana.</div>
+            </div>
+          )}
+          <div style={S.panel}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+              <select style={{ ...S.input, minWidth: 180 }} value={toteAssignPicker} onChange={e => setToteAssignPicker(e.target.value)}>
+                <option value="">Assign tote to…</option>
+                {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+              </select>
+              <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0 || selectedCount > 15}>🧺 Create tote & assign</button>
+            </div>
+            <table>
+              <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th></tr></thead>
+              <tbody>
+                {queuedTasks.map(t => {
+                  const o = orders[t.order_id];
+                  return (
+                    <tr key={t.id}>
+                      <td style={S.td}><input type="checkbox" checked={!!selectedForTote[t.id]} onChange={e => setSelectedForTote({ ...selectedForTote, [t.id]: e.target.checked })} /></td>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o?.external_order_id}</td>
+                      <td style={{ ...S.td, color: "#8B93A3" }}>{o?.courier}</td>
+                      <td style={{ ...S.td, color: "#8B93A3" }}>{(taskLines[t.id] || []).length}</td>
+                    </tr>
+                  );
+                })}
+                {queuedTasks.length === 0 && <tr><td colSpan={4}><EmptyNote text="Koi queued order nahi hai." /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1265,22 +1348,27 @@ function PackingView({ token, profile, showToast }) {
   const [tasks, setTasks] = useState([]);
   const [orders, setOrders] = useState({});
   const [products, setProducts] = useState([]);
+  const [totes, setTotes] = useState([]);
+  const [openTote, setOpenTote] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [requiredLines, setRequiredLines] = useState([]);
   const [scans, setScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
   const [orderScanInput, setOrderScanInput] = useState("");
+  const [toteScanInput, setToteScanInput] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [t, o, p] = await Promise.all([
+      const [t, o, p, tt] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=*`, { token })
+        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
       setProducts(p || []);
+      setTotes(tt || []);
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
@@ -1301,6 +1389,15 @@ function PackingView({ token, profile, showToast }) {
     const task = tasks.find(t => t.order_id === order.id);
     if (!task) { showToast("Yeh order abhi packing ke liye ready nahi hai", "err"); return; }
     openPack(task);
+  };
+
+  const scanTote = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : toteScanInput).trim();
+    setToteScanInput("");
+    if (!code) return;
+    const tote = totes.find(t => t.tote_number === code);
+    if (!tote) { showToast("Tote nahi mila ya abhi picking complete nahi hui", "err"); return; }
+    setOpenTote(tote);
   };
 
   const scanBarcode = (codeArg) => {
@@ -1326,8 +1423,17 @@ function PackingView({ token, profile, showToast }) {
       method: "PATCH", token,
       body: { status: "labeled", scans: JSON.stringify(scans), label_number: labelNumber, assigned_to: profile.id, completed_at: new Date().toISOString() }
     });
-    await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "packed" } });
+    await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "rtd" } });
     await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pack_task", entity_id: openTask.id, user_id: profile.id, action: "labeled", metadata: { label_number: labelNumber } } });
+
+    if (openTask.tote_id) {
+      const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=id`, { token });
+      if (!remaining || remaining.length === 0) {
+        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString() } });
+        showToast("Tote fully packed — all orders RTD");
+        setOpenTote(null);
+      }
+    }
     showToast(`Packed & labeled: ${labelNumber}`);
     setOpenTask(null); load();
   };
@@ -1369,33 +1475,66 @@ function PackingView({ token, profile, showToast }) {
     );
   }
 
+  if (openTote) {
+    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    return (
+      <div>
+        <SectionTitle title={`${openTote.tote_number} — ${toteTasks.length} orders to pack`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
+        <div style={S.cardGrid}>
+          {toteTasks.map(t => {
+            const o = orders[t.order_id];
+            return (
+              <div key={t.id} style={S.card} onClick={() => openPack(t)}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
+                  <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
+                </div>
+                <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{o?.courier}</div>
+              </div>
+            );
+          })}
+          {toteTasks.length === 0 && <EmptyNote text="Is tote ke sab orders pack ho chuke hain." />}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <SectionTitle title="Packing queue" />
+      <SectionTitle title="Packing" />
       <div style={S.panel}>
-        <div style={S.panelTitle}>Scan/type order number to open directly</div>
+        <div style={S.panelTitle}>Scan tote to begin packing</div>
         <div style={{ display: "flex", gap: 10 }}>
-          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Order number, then Enter"
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan/type tote number, then Enter"
+            value={toteScanInput} onChange={e => setToteScanInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && scanTote()} />
+          <CameraScanButton onScan={(text) => scanTote(text)} />
+          <button style={S.primaryBtnSm} onClick={() => scanTote()}>Open tote</button>
+        </div>
+      </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Or open a single order directly</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Order number, then Enter"
             value={orderScanInput} onChange={e => setOrderScanInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && openByOrderNumber()} />
           <CameraScanButton onScan={(text) => openByOrderNumber(text)} />
-          <button style={S.primaryBtnSm} onClick={() => openByOrderNumber()}>Open</button>
+          <button style={S.secondaryBtnSm} onClick={() => openByOrderNumber()}>Open</button>
         </div>
       </div>
+      <SectionTitle title="Totes ready for packing" />
       <div style={S.cardGrid}>
-        {tasks.map(t => {
-          const o = orders[t.order_id];
+        {totes.map(tt => {
+          const count = tasks.filter(t => t.tote_id === tt.id).length;
           return (
-            <div key={t.id} style={S.card} onClick={() => openPack(t)}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
-                <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
-              </div>
-              <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{o?.courier}</div>
+            <div key={tt.id} style={S.card} onClick={() => setOpenTote(tt)}>
+              <span>🧺</span>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
+              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
             </div>
           );
         })}
-        {tasks.length === 0 && <EmptyNote text="No orders waiting to be packed." />}
+        {totes.length === 0 && <EmptyNote text="Koi tote packing ke liye ready nahi hai." />}
       </div>
     </div>
   );
@@ -1412,7 +1551,7 @@ function DispatchView({ token, profile, showToast }) {
   const load = useCallback(async () => {
     try {
       const [o, ls] = await Promise.all([
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.packed&select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.rtd&select=*`, { token }),
         sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
       ]);
       setOrders(o || []); setLoadSheets(ls || []);
@@ -1460,37 +1599,43 @@ function DispatchView({ token, profile, showToast }) {
 
   return (
     <div>
-      <SectionTitle title="Dispatch / Load Sheet" />
+      <SectionTitle title="Dispatch / Load Sheet — RTD orders" />
       <div style={S.panel}>
-        <div style={S.panelTitle}>Scan tracking numbers to add to load sheet</div>
+        <div style={S.panelTitle}>Scan tracking numbers to verify</div>
         <div style={{ display: "flex", gap: 10 }}>
           <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan/type tracking number, then Enter"
             value={scanTrackingInput} onChange={e => setScanTrackingInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && scanTracking()} />
           <CameraScanButton onScan={(text) => scanTracking(text)} />
-          <button style={S.primaryBtnSm} onClick={() => scanTracking()}>Add</button>
+          <button style={S.primaryBtnSm} onClick={() => scanTracking()}>Verify</button>
         </div>
       </div>
       <div style={S.panel}>
-        <div style={S.panelTitle}>Packed orders — select for load sheet</div>
-        {orders.length === 0 ? <EmptyNote text="No packed orders waiting." /> : (
-          <div>
-            {orders.map(o => (
-              <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35", cursor: "pointer" }}>
-                <input type="checkbox" checked={!!selected[o.id]} onChange={() => toggle(o.id)} />
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</span>
-                <span style={{ color: "#8B93A3", fontSize: 12 }}>{o.courier}</span>
-              </label>
-            ))}
-            <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
-              <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
-                <option value="Postex">Postex</option>
-                <option value="M&P">M&P</option>
-              </select>
-              <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet</button>
-            </div>
+        <div style={S.panelTitle}>RTD orders — red = pending, green = verified</div>
+        {orders.length === 0 ? <EmptyNote text="No RTD orders waiting." /> : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+            {orders.map(o => {
+              const ok = !!selected[o.id];
+              return (
+                <div key={o.id} onClick={() => toggle(o.id)} style={{
+                  cursor: "pointer", borderRadius: 8, padding: "10px 12px",
+                  background: ok ? "rgba(76,175,125,0.12)" : "rgba(229,72,77,0.08)",
+                  border: `1px solid ${ok ? "#4CAF7D" : "#E5484D"}`
+                }}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: ok ? "#4CAF7D" : "#E5484D", fontSize: 13 }}>{o.external_order_id}</div>
+                  <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{o.courier} · {ok ? "Verified" : "Pending"}</div>
+                </div>
+              );
+            })}
           </div>
         )}
+        <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
+          <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
+            <option value="Postex">Postex</option>
+            <option value="M&P">M&P</option>
+          </select>
+          <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet (verified orders only)</button>
+        </div>
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
@@ -1557,7 +1702,7 @@ function UsersView({ token, profile, showToast }) {
     setBusy(false);
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", picker: "Picker", packer: "Packer", returns_agent: "Returns Agent" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 
   return (
     <div>
@@ -1571,6 +1716,9 @@ function UsersView({ token, profile, showToast }) {
           <select style={{ ...S.input, minWidth: 140 }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
             <option value="picker">Picker</option>
             <option value="packer">Packer</option>
+            <option value="putaway_officer">Putaway Officer</option>
+            <option value="dispatcher">Dispatcher</option>
+            <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
             <option value="returns_agent">Returns Agent</option>
             <option value="admin">Admin</option>
