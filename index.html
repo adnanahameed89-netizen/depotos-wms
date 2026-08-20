@@ -1,1 +1,2170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>DepotOS — Receiving & Putaway</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+<script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #14161B; font-family: 'Space Grotesk', sans-serif; }
+  input, select, button { font-family: inherit; }
+  table { width: 100%; border-collapse: collapse; }
+</style>
+</head>
+<body>
+<div id="root"></div>
 
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useRef } = React;
+
+/* ---------- Supabase connection ---------- */
+const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
+const ANON_KEY = "sb_publishable_rQYyp9JdDBhnSUdTcpKw-g_RJ2O5FQf";
+
+async function sb(path, { method = "GET", token, body, prefer } = {}) {
+  const headers = { apikey: ANON_KEY, "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (prefer) headers.Prefer = prefer;
+  const res = await fetch(`${SUPABASE_URL}${path}`, {
+    method, headers, body: body ? JSON.stringify(body) : undefined
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed (${res.status})`);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function login(email, password) {
+  return sb(`/auth/v1/token?grant_type=password`, { method: "POST", body: { email, password } });
+}
+
+const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
+const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D" };
+const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+
+/* ================= APP ================= */
+function App() {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [view, setView] = useState("dashboard");
+  const [toast, setToast] = useState(null);
+
+  const showToast = (msg, kind = "ok") => {
+    setToast({ msg, kind, id: uid() });
+    setTimeout(() => setToast(null), 2800);
+  };
+
+  const handleLogin = async (email, password) => {
+    setLoadErr("");
+    try {
+      const data = await login(email, password);
+      const token = data.access_token;
+      const userId = data.user.id;
+      const profiles = await sb(`/rest/v1/profiles?id=eq.${userId}&select=*`, { token });
+      if (!profiles || profiles.length === 0) {
+        setLoadErr("Login ho gaya, lekin profile record nahi mila. Admin se profile setup karwayein.");
+        return;
+      }
+      setSession({ token, userId });
+      setProfile(profiles[0]);
+    } catch (e) {
+      let detail = e.message || "";
+      try { const p = JSON.parse(detail); detail = p.error_description || p.msg || p.error || detail; } catch {}
+      setLoadErr(`Login fail: ${detail || "email/password check karein."}`);
+    }
+  };
+
+  if (!session || !profile) return <LoginScreen onLogin={handleLogin} error={loadErr} />;
+
+  return (
+    <div style={S.app}>
+      <Sidebar view={view} setView={setView} profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
+      <div style={S.main}>
+        <TopBar profile={profile} />
+        <div style={S.content}>
+          {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} />}
+          {view === "products" && <ProductsView token={session.token} showToast={showToast} />}
+          {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "inventory" && <InventoryView token={session.token} profile={profile} />}
+          {view === "orders" && <OrdersView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "picking" && <PickingView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "packing" && <PackingView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "dispatch" && <DispatchView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "users" && profile.role === "admin" && <UsersView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "returns" && <ReturnsView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
+        </div>
+      </div>
+      {toast && <Toast toast={toast} />}
+    </div>
+  );
+}
+
+/* ================= LOGIN ================= */
+function LoginScreen({ onLogin, error }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => { if (!email || !password) return; setBusy(true); await onLogin(email, password); setBusy(false); };
+  return (
+    <div style={S.loginWrap}>
+      <div style={S.loginCard}>
+        <div style={S.hazardBar} />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <span style={{ fontSize: 22 }}>📦</span>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22, color: "#ECEAE3" }}>
+            DEPOT<span style={{ color: "#F5A623" }}>OS</span>
+          </span>
+        </div>
+        <div style={{ color: "#8B93A3", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
+        <div style={S.label}>EMAIL</div>
+        <input style={S.input} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+        <div style={S.label}>PASSWORD</div>
+        <input style={S.input} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
+        <button style={S.primaryBtn} onClick={submit} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        {error && <div style={{ color: "#E5484D", fontSize: 12, marginTop: 12 }}>{error}</div>}
+        <div style={S.disclaimer}>⚠ Live production database — real accounts only.</div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= SIDEBAR / TOPBAR ================= */
+function Sidebar({ view, setView, profile, onLogout }) {
+  const items = [
+    { id: "dashboard", label: "Dashboard", icon: "🗂" },
+    { id: "products", label: "Products", icon: "📦" },
+    { id: "receiving", label: "Receiving", icon: "⬇" },
+    { id: "putaway", label: "Putaway", icon: "📍" },
+    { id: "inventory", label: "Inventory", icon: "🧰" },
+    { id: "orders", label: "Sales Orders", icon: "🧾" },
+    { id: "picking", label: "Picking", icon: "🛒" },
+    { id: "packing", label: "Packing", icon: "🏷" },
+    { id: "dispatch", label: "Dispatch", icon: "🚚" }
+  ];
+  const visibleItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "users", label: "Users", icon: "👥" }]
+    : ["warehouse_lead", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
+    : items;
+  return (
+    <div style={S.sidebar}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "22px 20px 26px" }}>
+        <span style={{ fontSize: 18 }}>📦</span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#ECEAE3", fontSize: 16 }}>DEPOT<span style={{ color: "#F5A623" }}>OS</span></span>
+      </div>
+      <div style={{ flex: 1 }}>
+        {visibleItems.map(it => {
+          const active = view === it.id;
+          return (
+            <button key={it.id} onClick={() => setView(it.id)} style={{ ...S.navItem, ...(active ? S.navItemActive : {}) }}>
+              <span>{it.icon}</span><span style={{ color: active ? "#ECEAE3" : "#8B93A3" }}>{it.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onLogout} style={{ ...S.navItem, borderTop: "1px solid #333A47", marginBottom: 12 }}>
+        <span>⏻</span><span style={{ color: "#8B93A3" }}>Sign out</span>
+      </button>
+    </div>
+  );
+}
+function TopBar({ profile }) {
+  return (
+    <div style={S.topbar}>
+      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B93A3" }}>
+        {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 13 }}>{profile.full_name}</span>
+        <span style={S.badge}>{profile.role}</span>
+      </div>
+    </div>
+  );
+}
+function Toast({ toast }) {
+  return <div style={{ ...S.toast, borderColor: toast.kind === "err" ? "#E5484D" : "#4CAF7D" }}>✓ {toast.msg}</div>;
+}
+
+/* ================= DASHBOARD ================= */
+function DashboardView({ token, profile, setView }) {
+  const [stats, setStats] = useState({ openGrns: 0, pendingPutaway: 0, products: 0 });
+  const [orderStats, setOrderStats] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const [grns, putaway, products, orders] = await Promise.all([
+          sb(`/rest/v1/grn?status=neq.completed&select=id`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.pending&select=id`, { token }),
+          sb(`/rest/v1/products?select=id`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=status`, { token })
+        ]);
+        setStats({ openGrns: grns?.length || 0, pendingPutaway: putaway?.length || 0, products: products?.length || 0 });
+        const STAGES = ["received", "queued", "picking", "packed", "dispatched"];
+        const counts = Object.fromEntries(STAGES.map(s => [s, (orders || []).filter(o => o.status === s).length]));
+        setOrderStats({ total: (orders || []).length, counts });
+      } catch (e) {}
+    })();
+  }, [token, profile.warehouse_id]);
+  const STAGE_META = [
+    { key: "received", label: "New", color: "#8B93A3", icon: "🧾" },
+    { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
+    { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
+    { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
+    { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
+  ];
+  return (
+    <div>
+      <SectionTitle title={`Welcome, ${profile.full_name}`} />
+      <div style={S.statGrid}>
+        <StatCard icon="⬇" label="Open GRNs" value={stats.openGrns} color="#F5A623" onClick={() => setView("receiving")} />
+        <StatCard icon="📍" label="Pending putaway" value={stats.pendingPutaway} color="#5B9EE8" onClick={() => setView("putaway")} />
+        <StatCard icon="📦" label="Products catalogued" value={stats.products} color="#4CAF7D" onClick={() => setView("products")} />
+      </div>
+      {orderStats && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Order fulfillment snapshot ({orderStats.total} total)</div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGE_META.length}, 1fr)`, gap: 10 }}>
+            {STAGE_META.map(s => (
+              <div key={s.key} onClick={() => setView("orders")} style={{ ...S.statCard, cursor: "pointer" }}>
+                <span style={{ fontSize: 15 }}>{s.icon}</span>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: s.color, marginTop: 8 }}>{orderStats.counts[s.key] || 0}</div>
+                <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Standard flow (locked)</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <FlowStep label="1. Receiving" /> <span style={{color:"#5A6070"}}>→</span>
+          <FlowStep label="2. Putaway (bin-wise)" /> <span style={{color:"#5A6070"}}>→</span>
+          <FlowStep label="3. Available for orders" />
+        </div>
+        <div style={{ marginTop: 12, fontSize: 12, color: "#8B93A3" }}>⚡ Exception: urgent stock can skip putaway → direct to packing-ready.</div>
+      </div>
+    </div>
+  );
+}
+function FlowStep({ label }) { return <div style={{ background: "#14161B", border: "1px solid #333A47", borderRadius: 20, padding: "6px 14px", fontSize: 12, color: "#ECEAE3" }}>{label}</div>; }
+function StatCard({ icon, label, value, color, onClick }) {
+  return (
+    <div style={{ ...S.statCard, cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
+      <span style={{ fontSize: 16 }}>{icon}</span>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{value}</div>
+      <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+/* ================= PRODUCTS ================= */
+function ProductsView({ token, showToast }) {
+  const [products, setProducts] = useState([]);
+  const [form, setForm] = useState({ sku: "", barcode: "", name: "", category: "", department: "Default", unit: "pcs", reorder_level: 0 });
+  const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setProducts(await sb(`/rest/v1/products?select=*&order=name.asc`, { token }) || []); }
+    catch (e) { showToast("Load failed", "err"); }
+    setLoading(false);
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+  const add = async () => {
+    if (!form.sku.trim() || !form.name.trim()) return;
+    try {
+      await sb(`/rest/v1/products`, { method: "POST", token, prefer: "return=representation", body: { ...form, reorder_level: Number(form.reorder_level) || 0 } });
+      setForm({ sku: "", barcode: "", name: "", category: "", department: "Default", unit: "pcs", reorder_level: 0 });
+      showToast("Product added"); load();
+    } catch (e) { showToast("Could not add — SKU/barcode may already exist", "err"); }
+  };
+  const handleCatalogueFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setImportSummary(null);
+    try {
+      const rows = await parseSheet(file);
+      if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
+      const map = buildColumnMap(Object.keys(rows[0]));
+      if (!map.sku && !map.barcode) { showToast("SKU ya Barcode column nahi mila file mein", "err"); setImporting(false); return; }
+      const items = [];
+      let skipped = 0;
+      for (const row of rows) {
+        const sku = cleanCode(getVal(row, map, "sku")) || cleanCode(getVal(row, map, "barcode"));
+        const barcode = cleanCode(getVal(row, map, "barcode"));
+        const name = String(getVal(row, map, "productName") || sku).trim();
+        if (!sku) { skipped++; continue; }
+        items.push({
+          sku, barcode: barcode || null, name,
+          category: String(getVal(row, map, "category") || "").trim() || null,
+          department: String(getVal(row, map, "department") || "Default").trim(),
+          unit: String(getVal(row, map, "unit") || "pcs").trim(),
+          reorder_level: Number(getVal(row, map, "reorderLevel")) || 0
+        });
+      }
+      const CHUNK = 200;
+      let inserted = 0;
+      for (let i = 0; i < items.length; i += CHUNK) {
+        const chunk = items.slice(i, i + CHUNK);
+        await sb(`/rest/v1/products?on_conflict=sku`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: chunk });
+        inserted += chunk.length;
+      }
+      setImportSummary(`${inserted} products imported/updated. ${skipped} rows skipped (no SKU).`);
+      showToast(`${inserted} products imported`);
+      load();
+    } catch (e) { showToast(`Import failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Product catalogue" action={
+        <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+          {importing ? "Importing…" : "📤 Upload catalogue (CSV/Excel)"}
+          <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleCatalogueFile} disabled={importing} />
+        </label>
+      } />
+      {importSummary && (
+        <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
+      )}
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Add product</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input style={{ ...S.input, flex: 1, minWidth: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="SKU" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 130, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode" value={form.barcode} onChange={e => setForm({ ...form, barcode: e.target.value })} />
+          <CameraScanButton onScan={(text) => setForm(f => ({ ...f, barcode: text }))} label="Scan" />
+          <input style={{ ...S.input, flex: 2, minWidth: 160 }} placeholder="Product name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 110 }} placeholder="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 110 }} placeholder="Department" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
+          <input style={{ ...S.input, width: 90 }} type="number" placeholder="Reorder" value={form.reorder_level} onChange={e => setForm({ ...form, reorder_level: e.target.value })} />
+          <button style={S.primaryBtnSm} onClick={add}>+ Add</button>
+        </div>
+      </div>
+      <div style={S.panel}>
+        <table>
+          <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Barcode</th><th style={S.th}>Name</th><th style={S.th}>Category</th><th style={S.th}>Department</th><th style={S.th}>Reorder at</th></tr></thead>
+          <tbody>
+            {products.map(p => (
+              <tr key={p.id}>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.sku}</td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>{p.barcode || "—"}</td>
+                <td style={S.td}>{p.name}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.reorder_level}</td>
+              </tr>
+            ))}
+            {!loading && products.length === 0 && <tr><td colSpan={6}><EmptyNote text="No products yet." /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= RECEIVING ================= */
+function ReceivingView({ token, profile, showToast }) {
+  const [grns, setGrns] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [openGrn, setOpenGrn] = useState(null);
+  const [lines, setLines] = useState([]);
+  const [source, setSource] = useState("");
+  const [grnNumber, setGrnNumber] = useState("");
+  const [lineProduct, setLineProduct] = useState("");
+  const [lineQty, setLineQty] = useState(1);
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+  const [grnLineStats, setGrnLineStats] = useState({});
+  const load = useCallback(async () => {
+    try {
+      const [g, p] = await Promise.all([
+        sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/products?select=*`, { token })
+      ]);
+      setGrns(g || []); setProducts(p || []);
+      const ids = (g || []).map(x => x.id);
+      if (ids.length) {
+        const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=grn_id,qty_expected`, { token });
+        const stats = {};
+        for (const l of allLines || []) {
+          if (!stats[l.grn_id]) stats[l.grn_id] = { count: 0, qty: 0 };
+          stats[l.grn_id].count += 1; stats[l.grn_id].qty += l.qty_expected;
+        }
+        setGrnLineStats(stats);
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+  const loadLines = async (grnId) => setLines(await sb(`/rest/v1/grn_lines?grn_id=eq.${grnId}&select=*`, { token }) || []);
+
+  const handleGrnFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setImportSummary(null);
+    try {
+      const rows = await parseSheet(file);
+      if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
+      const map = buildColumnMap(Object.keys(rows[0]));
+      if (!map.barcode || !map.reference) { showToast("Barcode ya Reference column nahi mila", "err"); setImporting(false); return; }
+
+      const productMap = buildProductLookup(products);
+
+      const groups = {};
+      for (const row of rows) {
+        const ref = cleanCode(getVal(row, map, "reference"));
+        if (!ref) continue;
+        if (!groups[ref]) groups[ref] = [];
+        groups[ref].push(row);
+      }
+
+      const existingGrns = await sb(`/rest/v1/grn?select=id,grn_number`, { token });
+      const grnMap = Object.fromEntries((existingGrns || []).map(g => [g.grn_number, g.id]));
+
+      let grnsCreated = 0, linesAdded = 0;
+      const missing = new Set();
+
+      for (const [ref, groupRows] of Object.entries(groups)) {
+        let grnId = grnMap[ref];
+        if (!grnId) {
+          const first = groupRows[0];
+          const created = await sb(`/rest/v1/grn`, {
+            method: "POST", token, prefer: "return=representation",
+            body: { grn_number: ref, warehouse_id: profile.warehouse_id, source: String(getVal(first, map, "contact") || getVal(first, map, "sourceDocument") || "").trim(), status: "open" }
+          });
+          grnId = created[0].id;
+          grnMap[ref] = grnId;
+          grnsCreated++;
+        }
+        for (const row of groupRows) {
+          const barcode = cleanCode(getVal(row, map, "barcode"));
+          const qty = Number(getVal(row, map, "qty")) || 0;
+          if (!barcode || qty <= 0) continue;
+          const product = productMap[barcode];
+          if (!product) { missing.add(barcode); continue; }
+          await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: grnId, product_id: product.id, qty_expected: qty } });
+          linesAdded++;
+        }
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn", entity_id: profile.id, user_id: profile.id, action: `bulk_import_${grnsCreated}_grns` } });
+      setImportSummary(`${grnsCreated} GRN(s) created, ${linesAdded} lines added.${missing.size ? ` ⚠ ${missing.size} barcode(s) not in catalogue: ${[...missing].slice(0, 10).join(", ")}${missing.size > 10 ? "…" : ""}` : ""}`);
+      showToast(`Import done — ${grnsCreated} GRNs, ${linesAdded} lines`);
+      load();
+    } catch (err) { showToast(`Import failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  const createGrn = async () => {
+    if (!grnNumber.trim()) return;
+    try {
+      const created = await sb(`/rest/v1/grn`, { method: "POST", token, prefer: "return=representation", body: { grn_number: grnNumber.trim(), warehouse_id: profile.warehouse_id, source: source.trim(), status: "open" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn", entity_id: created[0].id, user_id: profile.id, action: "created" } });
+      setGrnNumber(""); setSource(""); showToast("GRN created"); load();
+      setOpenGrn(created[0]); loadLines(created[0].id);
+    } catch (e) { showToast("GRN number may already exist", "err"); }
+  };
+  const addLine = async () => {
+    if (!lineProduct || lineQty <= 0 || !openGrn) return;
+    await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: openGrn.id, product_id: lineProduct, qty_expected: Number(lineQty) } });
+    setLineProduct(""); setLineQty(1); loadLines(openGrn.id);
+  };
+  const receiveLine = async (line, mode) => {
+    const qty = line.qty_expected - (line.qty_received || 0);
+    if (qty <= 0) return;
+    await sb(`/rest/v1/grn_lines?id=eq.${line.id}`, { method: "PATCH", token, body: { qty_received: line.qty_expected } });
+    if (mode === "putaway") {
+      await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: line.id, product_id: line.product_id, qty, status: "pending" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty } } });
+      showToast("Received — sent to putaway queue");
+    } else {
+      await upsertInventory(token, profile.warehouse_id, line.product_id, qty, null);
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "direct_to_packing", metadata: { qty } } });
+      showToast("Received — sent direct to packing (urgent)");
+    }
+    loadLines(openGrn.id);
+  };
+  const completeGrn = async () => {
+    await sb(`/rest/v1/grn?id=eq.${openGrn.id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString() } });
+    showToast("GRN marked completed"); setOpenGrn(null); load();
+  };
+  if (openGrn) {
+    const allReceived = lines.length > 0 && lines.every(l => l.qty_received >= l.qty_expected);
+    return (
+      <div>
+        <SectionTitle title={`GRN ${openGrn.grn_number}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenGrn(null)}>← Back to GRN list</button>} />
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Add line item</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
+              <option value="">Product / SKU</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+            </select>
+            <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={addLine}>+ Add line</button>
+          </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Lines</div>
+          <table>
+            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Expected</th><th style={S.th}>Received</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {lines.map(l => {
+                const p = products.find(x => x.id === l.product_id);
+                const done = l.qty_received >= l.qty_expected;
+                return (
+                  <tr key={l.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
+                    <td style={S.td}>{l.qty_expected}</td>
+                    <td style={S.td}>{l.qty_received || 0}</td>
+                    <td style={S.td}>
+                      {!done ? (
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button style={S.secondaryBtnSm} onClick={() => receiveLine(l, "putaway")}>📍 Receive → Putaway</button>
+                          <button style={{ ...S.secondaryBtnSm, borderColor: "#F5A623", color: "#F5A623" }} onClick={() => receiveLine(l, "direct")}>⚡ Direct (urgent)</button>
+                        </div>
+                      ) : <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Received</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {lines.length === 0 && <tr><td colSpan={4}><EmptyNote text="No lines yet — add one above." /></td></tr>}
+            </tbody>
+          </table>
+          {allReceived && <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={completeGrn}>✓ Mark GRN completed</button>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <SectionTitle title="Receiving (GRN)" action={
+        <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+          {importing ? "Importing…" : "📤 Upload GRN file"}
+          <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleGrnFile} disabled={importing} />
+        </label>
+      } />
+      {importSummary && (
+        <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
+      )}
+      <div style={S.panel}>
+        <div style={S.panelTitle}>New GRN</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="GRN number" value={grnNumber} onChange={e => setGrnNumber(e.target.value)} />
+          <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Source (supplier etc.)" value={source} onChange={e => setSource(e.target.value)} />
+          <button style={S.primaryBtnSm} onClick={createGrn}>+ Create GRN</button>
+        </div>
+      </div>
+      <div style={S.panel}>
+        <table>
+          <thead>
+            <tr><th style={S.th}>GRN #</th><th style={S.th}>Source</th><th style={S.th}>Status</th><th style={S.th}>Lines</th><th style={S.th}>Total Qty</th><th style={S.th}>Created</th></tr>
+          </thead>
+          <tbody>
+            {grns.map(g => {
+              const stat = grnLineStats[g.id] || { count: 0, qty: 0 };
+              return (
+                <tr key={g.id} style={{ cursor: "pointer" }} onClick={() => { setOpenGrn(g); loadLines(g.id); }}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{g.grn_number}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{g.source || "No source"}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: g.status === "completed" ? "#4CAF7D" : "#8B93A3", borderColor: g.status === "completed" ? "#4CAF7D" : "#333A47" }}>{g.status}</span></td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
+                  <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(g.created_at)}</td>
+                </tr>
+              );
+            })}
+            {grns.length === 0 && <tr><td colSpan={6}><EmptyNote text="No GRNs yet — create one above." /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= PUTAWAY ================= */
+function PutawayView({ token, profile, showToast }) {
+  const [tasks, setTasks] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [grnLines, setGrnLines] = useState({});
+  const [grns, setGrns] = useState({});
+  const [binChoice, setBinChoice] = useState({});
+  const [verified, setVerified] = useState({});
+  const [scanInput, setScanInput] = useState({});
+  const canAssign = ["admin", "warehouse_lead"].includes(profile.role);
+
+  const load = useCallback(async () => {
+    try {
+      const [t, p, b, s] = await Promise.all([
+        sb(`/rest/v1/putaway_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setTasks(t || []); setProducts(p || []); setBins(b || []); setStaff(s || []);
+      const glIds = [...new Set((t || []).map(x => x.grn_line_id).filter(Boolean))];
+      if (glIds.length) {
+        const gls = await sb(`/rest/v1/grn_lines?id=in.(${glIds.join(",")})&select=*`, { token });
+        setGrnLines(Object.fromEntries((gls || []).map(x => [x.id, x])));
+        const grnIds = [...new Set((gls || []).map(x => x.grn_id))];
+        if (grnIds.length) {
+          const gs = await sb(`/rest/v1/grn?id=in.(${grnIds.join(",")})&select=*`, { token });
+          setGrns(Object.fromEntries((gs || []).map(x => [x.id, x])));
+        }
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const grnNumberFor = (task) => {
+    const gl = grnLines[task.grn_line_id];
+    if (!gl) return "—";
+    const g = grns[gl.grn_id];
+    return g?.grn_number || "—";
+  };
+
+  const assignTask = async (task, userId) => {
+    await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { assigned_to: userId } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "assigned", metadata: { assigned_to: userId } } });
+    showToast("Assigned"); load();
+  };
+
+  const putAway = async (task) => {
+    const binId = binChoice[task.id];
+    if (!binId) { showToast("Bin location select karein (list mein nahi hai to admin se Bin Master mein add karwayein)", "err"); return; }
+    try {
+      await upsertInventory(token, profile.warehouse_id, task.product_id, task.qty, binId);
+      await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: binId, completed_at: new Date().toISOString(), assigned_to: task.assigned_to || profile.id } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "completed", metadata: { bin_id: binId, qty: task.qty } } });
+      showToast("Putaway complete — stock now available"); load();
+    } catch (e) { showToast("Putaway failed", "err"); }
+  };
+
+  const myTasks = tasks.filter(t => t.assigned_to === profile.id);
+  const unassignedTasks = tasks.filter(t => !t.assigned_to);
+
+  const verifyProduct = (task, codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : (scanInput[task.id] || "")).trim();
+    setScanInput({ ...scanInput, [task.id]: "" });
+    if (!code) return;
+    const p = products.find(x => x.id === task.product_id);
+    if (p && (p.barcode === code || p.sku === code)) {
+      setVerified({ ...verified, [task.id]: true });
+      showToast("Product verified ✓");
+    } else {
+      showToast("WRONG ITEM — is task ka product nahi hai", "err");
+    }
+  };
+
+  const TaskCard = ({ t, showAssign }) => {
+    const p = products.find(x => x.id === t.product_id);
+    return (
+      <div style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{grnNumberFor(t)}</span>
+          <span style={{ ...S.badgeSm, color: "#8B93A3", borderColor: "#333A47" }}>Pending</span>
+        </div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 14, marginTop: 10 }}>{p?.sku || "—"}</div>
+        <div style={{ color: "#ECEAE3", fontSize: 13 }}>{p?.name}</div>
+        <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>Qty: {t.qty}</div>
+        {showAssign ? (
+          <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onChange={e => e.target.value && assignTask(t, e.target.value)} defaultValue="">
+            <option value="">Assign to staff…</option>
+            {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+          </select>
+        ) : !verified[t.id] ? (
+          <>
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              <input style={{ ...S.input, fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan product to verify"
+                value={scanInput[t.id] || ""} onChange={e => setScanInput({ ...scanInput, [t.id]: e.target.value })}
+                onKeyDown={e => e.key === "Enter" && verifyProduct(t)} />
+              <CameraScanButton onScan={(text) => verifyProduct(t, text)} />
+            </div>
+            <button style={{ ...S.secondaryBtnSm, marginTop: 8, width: "100%", justifyContent: "center" }} onClick={() => verifyProduct(t)}>Verify</button>
+          </>
+        ) : (
+          <>
+            <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} value={binChoice[t.id] || ""} onChange={e => setBinChoice({ ...binChoice, [t.id]: e.target.value })}>
+              <option value="">Select bin location</option>
+              {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+            </select>
+            <button style={{ ...S.primaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => putAway(t)}>✓ Confirm putaway</button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <SectionTitle title="My putaway jobs" />
+      <div style={S.cardGrid}>
+        {myTasks.map(t => <TaskCard key={t.id} t={t} showAssign={false} />)}
+        {myTasks.length === 0 && <EmptyNote text="Koi job aapko assign nahi hui." />}
+      </div>
+      {canAssign && (
+        <>
+          <SectionTitle title="Unassigned putaway queue (assign to staff)" />
+          <div style={S.cardGrid}>
+            {unassignedTasks.map(t => <TaskCard key={t.id} t={t} showAssign={true} />)}
+            {unassignedTasks.length === 0 && <EmptyNote text="Sab tasks assign ho chuke hain." />}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ================= INVENTORY ================= */
+function InventoryView({ token, profile }) {
+  const [rows, setRows] = useState([]);
+  const [products, setProducts] = useState({});
+  const [bins, setBins] = useState({});
+  useEffect(() => {
+    (async () => {
+      const [inv, prods, binList] = await Promise.all([
+        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setRows(inv || []);
+      setProducts(Object.fromEntries((prods || []).map(p => [p.id, p])));
+      setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
+    })();
+  }, [token, profile.warehouse_id]);
+  return (
+    <div>
+      <SectionTitle title="Inventory on hand" />
+      <div style={S.panel}>
+        <table>
+          <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On hand</th><th style={S.th}>Reserved</th><th style={S.th}>Available</th></tr></thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const p = products[r.product_id]; const bin = bins[r.bin_id];
+              return (
+                <tr key={i}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
+                  <td style={S.td}>{p?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "Unassigned (direct)"}</td>
+                  <td style={S.td}>{r.on_hand}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.reserved}</td>
+                  <td style={{ ...S.td, color: "#4CAF7D" }}>{r.on_hand - r.reserved}</td>
+                </tr>
+              );
+            })}
+            {rows.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= SALES ORDERS ================= */
+function OrdersView({ token, profile, showToast }) {
+  const [orders, setOrders] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [extId, setExtId] = useState("");
+  const [courier, setCourier] = useState("Postex");
+  const [items, setItems] = useState([]);
+  const [lineProduct, setLineProduct] = useState("");
+  const [lineQty, setLineQty] = useState(1);
+  const [openOrder, setOpenOrder] = useState(null);
+  const [openLines, setOpenLines] = useState([]);
+  const [openEvents, setOpenEvents] = useState([]);
+  const [statusFilter, setStatusFilter] = useState(null);
+  const [lineStats, setLineStats] = useState({});
+  const [profiles, setProfiles] = useState({});
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [o, p] = await Promise.all([
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token }),
+        sb(`/rest/v1/products?select=*`, { token })
+      ]);
+      setOrders(o || []); setProducts(p || []);
+      setProfiles(Object.fromEntries((await sb(`/rest/v1/profiles?select=*`, { token }) || []).map(u => [u.id, u])));
+      const ids = (o || []).map(x => x.id);
+      if (ids.length) {
+        const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
+        const stats = {};
+        for (const l of allLines || []) {
+          if (!stats[l.order_id]) stats[l.order_id] = { count: 0, qty: 0 };
+          stats[l.order_id].count += 1; stats[l.order_id].qty += l.qty;
+        }
+        setLineStats(stats);
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const addLine = () => {
+    if (!lineProduct) { showToast("Product select karein", "err"); return; }
+    if (lineQty <= 0) return;
+    const p = products.find(x => x.id === lineProduct);
+    setItems([...items, { product_id: lineProduct, sku: p.sku, name: p.name, qty: Number(lineQty) }]);
+    setLineProduct(""); setLineQty(1);
+  };
+
+  const createOrder = async () => {
+    if (!extId.trim()) { showToast("Order ID likhein", "err"); return; }
+    if (items.length === 0) { showToast("Pehle '+ Add line' se product add karein", "err"); return; }
+    try {
+      const created = await sb(`/rest/v1/sales_orders`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { external_order_id: extId.trim(), courier, warehouse_id: profile.warehouse_id, status: "received" }
+      });
+      const order = created[0];
+      for (const it of items) {
+        await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: order.id, product_id: it.product_id, qty: it.qty } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "created" } });
+      setExtId(""); setItems([]); setShowForm(false);
+      showToast("Order created"); load();
+    } catch (e) {
+      let detail = e.message || "";
+      try { const parsed = JSON.parse(detail); detail = parsed.message || parsed.hint || detail; } catch {}
+      showToast(`Order create failed: ${detail.slice(0, 120)}`, "err");
+    }
+  };
+
+  const handleOrdersFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setImportSummary(null);
+    try {
+      const rows = await parseSheet(file);
+      if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
+      const map = buildColumnMap(Object.keys(rows[0]));
+      if (!map.barcode || !map.orderRef) { showToast("Barcode ya Order/Tracking column nahi mila", "err"); setImporting(false); return; }
+
+      const productMap = buildProductLookup(products);
+
+      const groups = {};
+      for (const row of rows) {
+        const ref = cleanCode(getVal(row, map, "orderRef"));
+        if (!ref) continue;
+        if (!groups[ref]) groups[ref] = [];
+        groups[ref].push(row);
+      }
+
+      const existing = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=external_order_id`, { token });
+      const existingSet = new Set((existing || []).map(o => o.external_order_id));
+
+      let ordersCreated = 0, linesAdded = 0, ordersSkipped = 0;
+      const missing = new Set();
+
+      for (const [ref, groupRows] of Object.entries(groups)) {
+        if (existingSet.has(ref)) { ordersSkipped++; continue; }
+        const first = groupRows[0];
+        const created = await sb(`/rest/v1/sales_orders`, {
+          method: "POST", token, prefer: "return=representation",
+          body: { external_order_id: ref, courier: String(getVal(first, map, "courier") || "Other").trim(), warehouse_id: profile.warehouse_id, status: "received", raw_data: { customer: getVal(first, map, "customer") || null } }
+        });
+        const orderId = created[0].id;
+        ordersCreated++;
+        for (const row of groupRows) {
+          const barcode = cleanCode(getVal(row, map, "barcode"));
+          const qty = Number(getVal(row, map, "qty")) || 0;
+          if (!barcode || qty <= 0) continue;
+          const product = productMap[barcode];
+          if (!product) { missing.add(barcode); continue; }
+          await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: orderId, product_id: product.id, qty } });
+          linesAdded++;
+        }
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "created_bulk_import" } });
+      }
+      setImportSummary(`${ordersCreated} order(s) created, ${linesAdded} lines added, ${ordersSkipped} skipped (already exist).${missing.size ? ` ⚠ ${missing.size} barcode(s) not in catalogue: ${[...missing].slice(0, 10).join(", ")}${missing.size > 10 ? "…" : ""}` : ""}`);
+      showToast(`Import done — ${ordersCreated} orders, ${linesAdded} lines`);
+      load();
+    } catch (err) { showToast(`Import failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  const reserveAndQueue = async (order) => {
+    try {
+      const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token });
+      let shortage = false;
+      const lineBins = {};
+      for (const l of lines) {
+        const inv = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&select=*`, { token });
+        const row = inv && inv[0];
+        const available = row ? row.on_hand - row.reserved : 0;
+        if (available < l.qty) shortage = true;
+        if (row) {
+          lineBins[l.product_id] = row.bin_id;
+          await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}`, { method: "PATCH", token, body: { reserved: row.reserved + l.qty } });
+        }
+      }
+      const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: order.id, status: "queued" } });
+      for (const l of lines) {
+        await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: l.product_id, qty_required: l.qty, bin_id: lineBins[l.product_id] || null } });
+      }
+      await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "queued" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "reserved_and_queued" } });
+      showToast(shortage ? "Queued — but stock is short for some lines" : "Reserved & queued for picking");
+      load();
+    } catch (e) { showToast("Reserve failed", "err"); }
+  };
+
+  const openOrderDetail = async (order) => {
+    const [lines, events] = await Promise.all([
+      sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token }),
+      sb(`/rest/v1/event_log?entity_id=eq.${order.id}&select=*&order=created_at.asc`, { token })
+    ]);
+    setOpenLines(lines || []);
+    setOpenEvents(events || []);
+    setOpenOrder(order);
+  };
+
+  if (openOrder) {
+    return (
+      <div>
+        <SectionTitle title={`Order ${openOrder.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenOrder(null)}>← Back to orders</button>} />
+        <div style={S.panel}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <div><div style={S.label}>COURIER</div><div style={{ color: "#ECEAE3", fontSize: 14 }}>{openOrder.courier}</div></div>
+            <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{openOrder.status}</span></div>
+            <div><div style={S.label}>RECEIVED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
+            {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
+          </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Line items (SKU level)</div>
+          <table>
+            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
+            <tbody>
+              {openLines.map(l => {
+                const p = products.find(x => x.id === l.product_id);
+                return (
+                  <tr key={l.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>{p?.barcode || "— not set —"}</td>
+                    <td style={S.td}>{p?.name || "—"}</td>
+                    <td style={S.td}>{l.qty}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Timeline</div>
+          {openEvents.length === 0 ? <EmptyNote text="No events logged yet." /> : openEvents.map(ev => (
+            <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
+              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{ev.action} <span style={{ color: "#8B93A3" }}>— {profiles[ev.user_id]?.full_name || "System"}</span></span>
+              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.created_at)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Sales Orders" action={
+        <div style={{ display: "flex", gap: 8 }}>
+          <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+            {importing ? "Importing…" : "📤 Upload orders file"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleOrdersFile} disabled={importing} />
+          </label>
+          <button style={S.primaryBtnSm} onClick={() => setShowForm(s => !s)}>+ New order</button>
+        </div>
+      } />
+      {importSummary && (
+        <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
+      )}
+      {showForm && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Create order (manual entry — courier integration comes later)</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Order ID (from M&P/Postex)" value={extId} onChange={e => setExtId(e.target.value)} />
+            <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
+              <option value="Postex">Postex</option>
+              <option value="M&P">M&P</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
+              <option value="">Product / SKU</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+            </select>
+            <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
+            <button style={S.secondaryBtnSm} onClick={addLine}>+ Add line</button>
+          </div>
+          {items.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              {items.map((it, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", background: "#14161B", border: "1px solid #333A47", borderRadius: 6, padding: "8px 10px", marginBottom: 6, fontSize: 13 }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{it.sku}</span>
+                  <span style={{ color: "#ECEAE3", flex: 1, marginLeft: 8 }}>{it.name}</span>
+                  <span style={{ color: "#8B93A3" }}>× {it.qty}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button style={S.primaryBtnSm} onClick={createOrder}>Create order</button>
+        </div>
+      )}
+
+      {(() => {
+        const STAGES = [
+          { key: "received", label: "New / Received", color: "#8B93A3", icon: "🧾" },
+          { key: "queued", label: "Queued for Pick", color: "#5B9EE8", icon: "🛒" },
+          { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
+          { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
+          { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
+        ];
+        const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => o.status === s.key).length]));
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length + 1}, 1fr)`, gap: 10, marginBottom: 18 }}>
+            <div onClick={() => setStatusFilter(null)}
+              style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === null ? { borderColor: "#F5A623" } : {}) }}>
+              <span style={{ fontSize: 16 }}>📋</span>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#ECEAE3", marginTop: 8 }}>{orders.length}</div>
+              <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>All orders</div>
+            </div>
+            {STAGES.map(s => (
+              <div key={s.key} onClick={() => setStatusFilter(s.key)}
+                style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === s.key ? { borderColor: s.color } : {}) }}>
+                <span style={{ fontSize: 16 }}>{s.icon}</span>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: s.color, marginTop: 8 }}>{counts[s.key] || 0}</div>
+                <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      <div style={S.panel}>
+        <table>
+          <thead>
+            <tr>
+              <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
+              <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Received</th><th style={S.th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.filter(o => !statusFilter || o.status === statusFilter).map(o => {
+              const stat = lineStats[o.id] || { count: 0, qty: 0 };
+              return (
+                <tr key={o.id} style={{ cursor: "pointer" }} onClick={() => openOrderDetail(o)}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
+                  <td style={S.td}>{o.courier}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{o.status}</span></td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
+                  <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
+                  <td style={S.td}>
+                    {o.status === "received" && (
+                      <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve & Queue</button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {orders.filter(o => !statusFilter || o.status === statusFilter).length === 0 && (
+              <tr><td colSpan={7}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= PICKING ================= */
+function PickingView({ token, profile, showToast }) {
+  const [tasks, setTasks] = useState([]);
+  const [orders, setOrders] = useState({});
+  const [products, setProducts] = useState([]);
+  const [pickers, setPickers] = useState([]);
+  const [bins, setBins] = useState({});
+  const [taskLines, setTaskLines] = useState({});
+  const [openTask, setOpenTask] = useState(null);
+  const [openLines, setOpenLines] = useState([]);
+  const [scans, setScans] = useState({});
+  const [barcodeInput, setBarcodeInput] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [t, o, p, pk, b] = await Promise.all([
+        sb(`/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/profiles?role=eq.picker&warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setTasks(t || []);
+      setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
+      setProducts(p || []); setPickers(pk || []);
+      setBins(Object.fromEntries((b || []).map(x => [x.id, x])));
+      const taskIds = (t || []).map(x => x.id);
+      if (taskIds.length) {
+        const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token });
+        const grouped = {};
+        for (const l of lines || []) { (grouped[l.pick_task_id] = grouped[l.pick_task_id] || []).push(l); }
+        setTaskLines(grouped);
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const assign = async (task, pickerId) => {
+    await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { assigned_to: pickerId, status: "assigned", assigned_at: new Date().toISOString() } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "assigned", metadata: { assigned_to: pickerId } } });
+    showToast("Assigned"); load();
+  };
+
+  const openPickTask = (task) => {
+    setOpenLines(taskLines[task.id] || []);
+    setScans({});
+    setOpenTask(task);
+  };
+
+  const scanBarcode = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
+    setBarcodeInput("");
+    if (!code) return;
+    const p = products.find(x => x.barcode === code || x.sku === code);
+    if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+    const line = openLines.find(l => l.product_id === p.id);
+    if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
+    const current = scans[p.id] || 0;
+    if (current >= line.qty_required) { showToast("Required qty already scan ho chuki", "err"); return; }
+    setScans({ ...scans, [p.id]: current + 1 });
+    showToast(`Picked: ${p.sku}`);
+  };
+
+  const allScanned = openLines.length > 0 && openLines.every(l => (scans[l.product_id] || 0) >= l.qty_required);
+
+  const completePick = async () => {
+    try {
+      for (const l of openLines) {
+        await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: scans[l.product_id] || 0 } });
+      }
+      await sb(`/rest/v1/pick_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: openTask.order_id, status: "pending" } });
+      await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "picking" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: openTask.id, user_id: profile.id, action: "completed" } });
+      showToast("Picked — sent to packing");
+      setOpenTask(null); load();
+    } catch (e) { showToast("Failed to complete", "err"); }
+  };
+
+  if (openTask) {
+    const o = orders[openTask.order_id];
+    return (
+      <div>
+        <SectionTitle title={`Picking — ${o?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back</button>} />
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Scan each item from its location</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+              value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && scanBarcode()} />
+            <CameraScanButton onScan={(text) => scanBarcode(text)} />
+            <button style={S.primaryBtnSm} onClick={() => scanBarcode()}>Scan</button>
+          </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Progress</div>
+          {openLines.map(l => {
+            const p = products.find(x => x.id === l.product_id);
+            const bin = bins[l.bin_id];
+            const got = scans[l.product_id] || 0;
+            const done = got >= l.qty_required;
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.sku}</span>
+                <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
+                <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
+                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {l.qty_required}</span>
+              </div>
+            );
+          })}
+          {allScanned && (
+            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completePick}>✓ Mark picked — send to packing</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Picking queue" />
+      {pickers.length === 0 && (
+        <div style={{ ...S.panel, borderColor: "#7A551A" }}>
+          <div style={{ color: "#F5A623", fontSize: 12 }}>⚠ Is warehouse mein koi picker profile nahi mila. Admin ko chahiye Users tab se picker account banana.</div>
+        </div>
+      )}
+      <div style={S.cardGrid}>
+        {tasks.map(t => {
+          const o = orders[t.order_id];
+          return (
+            <div key={t.id} style={S.card} onClick={() => t.status === "assigned" && openPickTask(t)}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id || "—"}</span>
+                <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{t.status}</span>
+              </div>
+              <div style={{ color: "#ECEAE3", fontSize: 13, marginTop: 8 }}>{o?.courier}</div>
+              <div style={{ marginTop: 8 }}>
+                {(taskLines[t.id] || []).map(l => {
+                  const p = products.find(x => x.id === l.product_id);
+                  const bin = bins[l.bin_id];
+                  return (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
+                      <span style={{ color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{p?.sku} × {l.qty_required}</span>
+                      <span style={{ color: bin ? "#5B9EE8" : "#E5484D", fontFamily: "'IBM Plex Mono', monospace" }}>📍 {bin?.code || "no bin!"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {t.status === "queued" ? (
+                <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onClick={e => e.stopPropagation()} onChange={e => e.target.value && assign(t, e.target.value)} defaultValue="">
+                  <option value="">Assign to picker…</option>
+                  {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                </select>
+              ) : (
+                <>
+                  <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>Assigned: {pickers.find(p => p.id === t.assigned_to)?.full_name || "—"}</div>
+                  <div style={{ color: "#F5A623", fontSize: 11, marginTop: 4 }}>Tap to scan & pick →</div>
+                </>
+              )}
+            </div>
+          );
+        })}
+        {tasks.length === 0 && <EmptyNote text="Picking queue is empty." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= PACKING ================= */
+function PackingView({ token, profile, showToast }) {
+  const [tasks, setTasks] = useState([]);
+  const [orders, setOrders] = useState({});
+  const [products, setProducts] = useState([]);
+  const [openTask, setOpenTask] = useState(null);
+  const [requiredLines, setRequiredLines] = useState([]);
+  const [scans, setScans] = useState({});
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [orderScanInput, setOrderScanInput] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [t, o, p] = await Promise.all([
+        sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/products?select=*`, { token })
+      ]);
+      setTasks(t || []);
+      setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
+      setProducts(p || []);
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const openPack = async (task) => {
+    const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${task.order_id}&select=*`, { token });
+    setRequiredLines(lines || []);
+    setScans({});
+    setOpenTask(task);
+  };
+
+  const openByOrderNumber = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : orderScanInput).trim();
+    setOrderScanInput("");
+    if (!code) return;
+    const order = Object.values(orders).find(o => o.external_order_id === code);
+    if (!order) { showToast("Order number nahi mila", "err"); return; }
+    const task = tasks.find(t => t.order_id === order.id);
+    if (!task) { showToast("Yeh order abhi packing ke liye ready nahi hai", "err"); return; }
+    openPack(task);
+  };
+
+  const scanBarcode = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
+    setBarcodeInput("");
+    if (!code) return;
+    const p = products.find(x => x.barcode === code || x.sku === code);
+    if (!p) { showToast("Barcode/SKU match nahi hua — is order ka nahi hai", "err"); return; }
+    const line = requiredLines.find(l => l.product_id === p.id);
+    if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
+    const current = scans[p.id] || 0;
+    if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
+    setScans({ ...scans, [p.id]: current + 1 });
+    showToast(`Scanned: ${p.sku}`);
+  };
+
+  const allScanned = requiredLines.length > 0 && requiredLines.every(l => (scans[l.product_id] || 0) >= l.qty);
+
+  const completePacking = async () => {
+    const order = orders[openTask.order_id];
+    const labelNumber = `LBL-${order.external_order_id}-${Date.now().toString().slice(-5)}`;
+    await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, {
+      method: "PATCH", token,
+      body: { status: "labeled", scans: JSON.stringify(scans), label_number: labelNumber, assigned_to: profile.id, completed_at: new Date().toISOString() }
+    });
+    await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "packed" } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pack_task", entity_id: openTask.id, user_id: profile.id, action: "labeled", metadata: { label_number: labelNumber } } });
+    showToast(`Packed & labeled: ${labelNumber}`);
+    setOpenTask(null); load();
+  };
+
+  if (openTask) {
+    const order = orders[openTask.order_id];
+    return (
+      <div>
+        <SectionTitle title={`Packing — ${order?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back</button>} />
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Scan each item to verify</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+              value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && scanBarcode()} />
+            <CameraScanButton onScan={(text) => scanBarcode(text)} />
+            <button style={S.primaryBtnSm} onClick={() => scanBarcode()}>Scan</button>
+          </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Progress</div>
+          {requiredLines.map(l => {
+            const p = products.find(x => x.id === l.product_id);
+            const got = scans[l.product_id] || 0;
+            const done = got >= l.qty;
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 110 }}>{p?.sku}</span>
+                <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
+                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {l.qty}</span>
+              </div>
+            );
+          })}
+          {allScanned && (
+            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completePacking}>🏷 Complete packing & generate label</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Packing queue" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Scan/type order number to open directly</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Order number, then Enter"
+            value={orderScanInput} onChange={e => setOrderScanInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && openByOrderNumber()} />
+          <CameraScanButton onScan={(text) => openByOrderNumber(text)} />
+          <button style={S.primaryBtnSm} onClick={() => openByOrderNumber()}>Open</button>
+        </div>
+      </div>
+      <div style={S.cardGrid}>
+        {tasks.map(t => {
+          const o = orders[t.order_id];
+          return (
+            <div key={t.id} style={S.card} onClick={() => openPack(t)}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
+                <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
+              </div>
+              <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{o?.courier}</div>
+            </div>
+          );
+        })}
+        {tasks.length === 0 && <EmptyNote text="No orders waiting to be packed." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= DISPATCH / LOAD SHEET ================= */
+function DispatchView({ token, profile, showToast }) {
+  const [orders, setOrders] = useState([]);
+  const [selected, setSelected] = useState({});
+  const [courier, setCourier] = useState("Postex");
+  const [loadSheets, setLoadSheets] = useState([]);
+  const [scanTrackingInput, setScanTrackingInput] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [o, ls] = await Promise.all([
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.packed&select=*`, { token }),
+        sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
+      ]);
+      setOrders(o || []); setLoadSheets(ls || []);
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const toggle = (id) => setSelected({ ...selected, [id]: !selected[id] });
+
+  const scanTracking = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : scanTrackingInput).trim();
+    setScanTrackingInput("");
+    if (!code) return;
+    const order = orders.find(o => o.external_order_id === code);
+    if (!order) { showToast("Tracking number is packed-orders list mein nahi mila", "err"); return; }
+    if (selected[order.id]) { showToast("Already selected"); return; }
+    setSelected(prev => ({ ...prev, [order.id]: true }));
+    showToast(`Added: ${order.external_order_id}`);
+  };
+
+  const createLoadSheet = async () => {
+    const ids = Object.keys(selected).filter(k => selected[k]);
+    if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
+    try {
+      const lsNumber = `LS-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-4)}`;
+      await sb(`/rest/v1/load_sheets`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, courier, load_sheet_number: lsNumber, order_ids: ids } });
+      for (const orderId of ids) {
+        const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
+        for (const l of lines) {
+          const inv = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&select=*`, { token });
+          if (inv && inv[0]) {
+            await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}`, {
+              method: "PATCH", token,
+              body: { on_hand: inv[0].on_hand - l.qty, reserved: Math.max(0, inv[0].reserved - l.qty) }
+            });
+          }
+        }
+        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "dispatched", metadata: { load_sheet: lsNumber } } });
+      }
+      showToast(`Load sheet ${lsNumber} created`);
+      setSelected({}); load();
+    } catch (e) { showToast("Load sheet creation failed", "err"); }
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Dispatch / Load Sheet" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Scan tracking numbers to add to load sheet</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan/type tracking number, then Enter"
+            value={scanTrackingInput} onChange={e => setScanTrackingInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && scanTracking()} />
+          <CameraScanButton onScan={(text) => scanTracking(text)} />
+          <button style={S.primaryBtnSm} onClick={() => scanTracking()}>Add</button>
+        </div>
+      </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Packed orders — select for load sheet</div>
+        {orders.length === 0 ? <EmptyNote text="No packed orders waiting." /> : (
+          <div>
+            {orders.map(o => (
+              <label key={o.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35", cursor: "pointer" }}>
+                <input type="checkbox" checked={!!selected[o.id]} onChange={() => toggle(o.id)} />
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</span>
+                <span style={{ color: "#8B93A3", fontSize: 12 }}>{o.courier}</span>
+              </label>
+            ))}
+            <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
+              <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
+                <option value="Postex">Postex</option>
+                <option value="M&P">M&P</option>
+              </select>
+              <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet</button>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Recent load sheets</div>
+        {loadSheets.map(ls => (
+          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#ECEAE3" }}>{ls.load_sheet_number}</span>
+            <span style={{ color: "#8B93A3", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
+          </div>
+        ))}
+        {loadSheets.length === 0 && <EmptyNote text="No load sheets yet." />}
+        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+          ⚠ Email auto-send abhi nahi hai (real backend chahiye) — load sheet yahan record ho jata hai, aap manually forward kar sakte hain jab tak hum email automation set up karein.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= USERS ================= */
+function UsersView({ token, profile, showToast }) {
+  const [users, setUsers] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
+  const [form, setForm] = useState({ full_name: "", email: "", password: "", role: "picker", warehouse_id: profile.warehouse_id || "" });
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [u, w] = await Promise.all([
+        sb(`/rest/v1/profiles?select=*&order=full_name.asc`, { token }),
+        sb(`/rest/v1/warehouses?select=*`, { token })
+      ]);
+      setUsers(u || []); setWarehouses(w || []);
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+
+  const addUser = async () => {
+    if (!form.full_name.trim() || !form.email.trim() || form.password.length < 6) {
+      showToast("Name, email, aur kam se kam 6-character password chahiye", "err");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+        method: "POST",
+        headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: form.email.trim(), password: form.password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.msg || data.error_description || data.error || "Signup failed");
+      const newUserId = data.user?.id || data.id;
+      if (!newUserId) throw new Error("User ID nahi mila — response check karein");
+
+      await sb(`/rest/v1/profiles`, {
+        method: "POST", token,
+        body: { id: newUserId, full_name: form.full_name.trim(), role: form.role, warehouse_id: form.role === "admin" ? null : form.warehouse_id || null }
+      });
+      showToast(`${form.full_name} add ho gaye — email: ${form.email}`);
+      setForm({ full_name: "", email: "", password: "", role: "picker", warehouse_id: profile.warehouse_id || "" });
+      load();
+    } catch (e) {
+      showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err");
+    }
+    setBusy(false);
+  };
+
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", picker: "Picker", packer: "Packer", returns_agent: "Returns Agent" };
+
+  return (
+    <div>
+      <SectionTitle title="Users & roles" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Add staff member</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Full name" value={form.full_name} onChange={e => setForm({ ...form, full_name: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 140 }} type="password" placeholder="Password (min 6 chars)" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          <select style={{ ...S.input, minWidth: 140 }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+            <option value="picker">Picker</option>
+            <option value="packer">Packer</option>
+            <option value="warehouse_lead">Warehouse Lead</option>
+            <option value="returns_agent">Returns Agent</option>
+            <option value="admin">Admin</option>
+          </select>
+          {form.role !== "admin" && (
+            <select style={{ ...S.input, minWidth: 160 }} value={form.warehouse_id} onChange={e => setForm({ ...form, warehouse_id: e.target.value })}>
+              <option value="">Select warehouse</option>
+              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          )}
+          <button style={S.primaryBtnSm} onClick={addUser} disabled={busy}>{busy ? "Adding…" : "+ Add staff"}</button>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+          ⚠ Naya staff member is email/password se seedha login kar sakega. Real email inbox zaroori nahi (jab tak "Confirm email" Supabase mein off hai).
+        </div>
+      </div>
+      <div style={S.cardGrid}>
+        {users.map(u => (
+          <div key={u.id} style={S.card}>
+            <div style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{u.full_name}</div>
+            <div style={{ marginTop: 6 }}>
+              <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{ROLE_LABEL[u.role] || u.role}</span>
+            </div>
+            <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>
+              {warehouses.find(w => w.id === u.warehouse_id)?.name || (u.role === "admin" ? "All warehouses" : "No warehouse set")}
+            </div>
+          </div>
+        ))}
+        {users.length === 0 && <EmptyNote text="No staff yet." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= RETURNS ================= */
+function ReturnsView({ token, profile, showToast }) {
+  const [returns, setReturns] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [orderRef, setOrderRef] = useState("");
+  const [courier, setCourier] = useState("Postex");
+  const [reason, setReason] = useState("");
+  const [openReturn, setOpenReturn] = useState(null);
+  const [openLines, setOpenLines] = useState([]);
+  const [lineProduct, setLineProduct] = useState("");
+  const [lineQty, setLineQty] = useState(1);
+  const [lineCondition, setLineCondition] = useState("good");
+  const [bins, setBins] = useState([]);
+  const [lineBin, setLineBin] = useState("");
+  const [newBinCode, setNewBinCode] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const [r, p, o] = await Promise.all([
+        sb(`/rest/v1/returns?select=*&order=received_at.desc`, { token }),
+        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setReturns(r || []); setProducts(p || []); setOrders(o || []);
+      setBins(await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || []);
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const createReturn = async () => {
+    try {
+      const matched = orders.find(o => o.external_order_id === orderRef.trim());
+      const created = await sb(`/rest/v1/returns`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { order_id: matched ? matched.id : null, courier, reason: reason.trim(), status: "pending" }
+      });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created" } });
+      setOrderRef(""); setReason(""); setShowForm(false);
+      showToast("Return record created"); load();
+      openReturnDetail(created[0]);
+    } catch (e) { showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+  };
+
+  const openReturnDetail = async (ret) => {
+    const lines = await sb(`/rest/v1/return_lines?return_id=eq.${ret.id}&select=*`, { token });
+    setOpenLines(lines || []);
+    setOpenReturn(ret);
+  };
+
+  const addReturnLine = async () => {
+    if (!lineProduct || lineQty <= 0) { showToast("Product select karein", "err"); return; }
+    if (lineCondition === "damaged" && !lineBin) {
+      showToast("Damaged item ke liye bin location select karein (Bin Master mein nahi hai to Admin se add karwayein)", "err");
+      return;
+    }
+    try {
+      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: lineProduct, qty: Number(lineQty), condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
+      setLineProduct(""); setLineQty(1); setLineCondition("good"); setLineBin("");
+      openReturnDetail(openReturn);
+      load();
+    } catch (e) { showToast("Add failed", "err"); }
+  };
+
+  const processReturn = async () => {
+    try {
+      let anyGood = false, anyDamaged = false;
+      let strNumber = null;
+      for (const l of openLines) {
+        if (l.condition === "good") {
+          anyGood = true;
+          await upsertInventory(token, profile.warehouse_id, l.product_id, l.qty, null);
+        } else if (l.condition === "damaged") {
+          anyDamaged = true;
+          const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&bin_id=eq.${l.bin_id}&select=*`, { token });
+          if (existing && existing.length > 0) {
+            await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&bin_id=eq.${l.bin_id}`, { method: "PATCH", token, body: { qty: existing[0].qty + l.qty } });
+          } else {
+            await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: l.product_id, bin_id: l.bin_id, qty: l.qty } });
+          }
+        }
+      }
+      if (anyDamaged) {
+        strNumber = `STR-${(openReturn.courier || "GEN").replace(/\s/g, "")}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
+      }
+      const finalStatus = anyDamaged && !anyGood ? "damaged_writeoff" : "restocked";
+      await sb(`/rest/v1/returns?id=eq.${openReturn.id}`, { method: "PATCH", token, body: { status: finalStatus, processed_by: profile.id, processed_at: new Date().toISOString(), ...(strNumber ? { str_number: strNumber } : {}) } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: openReturn.id, user_id: profile.id, action: finalStatus, metadata: { str_number: strNumber } } });
+      showToast(strNumber ? `Processed — STR: ${strNumber}` : "Good items restocked");
+      setOpenReturn(null); load();
+    } catch (e) { showToast("Processing failed", "err"); }
+  };
+
+  if (openReturn) {
+    return (
+      <div>
+        <SectionTitle title={`Return — ${openReturn.courier || "—"}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenReturn(null)}>← Back</button>} />
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Add item</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
+              <option value="">Product / SKU</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
+            </select>
+            <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
+            <div style={{ display: "flex", gap: 8 }}>
+              {["good", "damaged"].map(c => (
+                <button key={c} onClick={() => setLineCondition(c)} style={{ ...S.secondaryBtnSm, ...(lineCondition === c ? { background: c === "good" ? "#4CAF7D" : "#E5484D", color: "#14161B", borderColor: c === "good" ? "#4CAF7D" : "#E5484D" } : {}) }}>
+                  {c === "good" ? "✓ Good" : "✕ Damaged"}
+                </button>
+              ))}
+            </div>
+            {lineCondition === "damaged" && (
+              <select style={{ ...S.input, minWidth: 160 }} value={lineBin} onChange={e => setLineBin(e.target.value)}>
+                <option value="">Damage bin location</option>
+                {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+              </select>
+            )}
+            <button style={S.primaryBtnSm} onClick={addReturnLine}>+ Add item</button>
+          </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Items in this return</div>
+          <table>
+            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Condition</th><th style={S.th}>Bin</th></tr></thead>
+            <tbody>
+              {openLines.map(l => {
+                const p = products.find(x => x.id === l.product_id);
+                const bin = bins.find(b => b.id === l.bin_id);
+                return (
+                  <tr key={l.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku}</td>
+                    <td style={S.td}>{p?.name}</td>
+                    <td style={S.td}>{l.qty}</td>
+                    <td style={S.td}><span style={{ ...S.badgeSm, color: l.condition === "good" ? "#4CAF7D" : "#E5484D", borderColor: l.condition === "good" ? "#4CAF7D" : "#E5484D" }}>{l.condition}</span></td>
+                    <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace" }}>{bin?.code || "—"}</td>
+                  </tr>
+                );
+              })}
+              {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="No items added yet." /></td></tr>}
+            </tbody>
+          </table>
+          {openLines.length > 0 && (
+            <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={processReturn}>✓ Process return (restock good items)</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionTitle title="Returns" action={<button style={S.primaryBtnSm} onClick={() => setShowForm(s => !s)}>+ New return</button>} />
+      {showForm && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Log incoming return</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Original order ID (optional)" value={orderRef} onChange={e => setOrderRef(e.target.value)} />
+            <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
+              <option value="Postex">Postex</option>
+              <option value="M&P">M&P</option>
+            </select>
+            <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Reason (customer refused, damaged, etc.)" value={reason} onChange={e => setReason(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={createReturn}>Create & add items</button>
+          </div>
+        </div>
+      )}
+      <div style={S.cardGrid}>
+        {returns.map(r => {
+          const order = orders.find(o => o.id === r.order_id);
+          return (
+            <div key={r.id} style={S.card} onClick={() => openReturnDetail(r)}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>↩</span>
+                <span style={{ ...S.badgeSm, color: r.status === "pending" ? "#8B93A3" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#333A47" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span>
+              </div>
+              <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{order?.external_order_id || "No order link"}</div>
+              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{r.reason || "No reason noted"}</div>
+              {r.str_number && <div style={{ color: "#F5A623", fontSize: 11, marginTop: 6, fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number}</div>}
+              <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.received_at)}</div>
+            </div>
+          );
+        })}
+        {returns.length === 0 && <EmptyNote text="No returns logged yet." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= REPORTS ================= */
+function ReportsView({ token, profile, showToast }) {
+  const [loading, setLoading] = useState(true);
+  const [staffCounts, setStaffCounts] = useState([]);
+  const [leadTime, setLeadTime] = useState({ avgHours: null, samples: 0 });
+  const [profiles, setProfiles] = useState({});
+  const [pickDurations, setPickDurations] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [events, profs, orders, pickTasks] = await Promise.all([
+          sb(`/rest/v1/event_log?select=*&order=created_at.desc&limit=1000`, { token }),
+          sb(`/rest/v1/profiles?select=*`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.dispatched&select=*`, { token }),
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+        setProfiles(profMap);
+
+        const pickDurByUser = {};
+        for (const pt of pickTasks || []) {
+          if (!pt.assigned_at || !pt.completed_at || !pt.assigned_to) continue;
+          const mins = (new Date(pt.completed_at) - new Date(pt.assigned_at)) / 60000;
+          if (!pickDurByUser[pt.assigned_to]) pickDurByUser[pt.assigned_to] = [];
+          pickDurByUser[pt.assigned_to].push(mins);
+        }
+        const pickAvg = Object.entries(pickDurByUser).map(([userId, arr]) => ({
+          userId, name: profMap[userId]?.full_name || "Unknown",
+          avgMins: arr.reduce((a, b) => a + b, 0) / arr.length, count: arr.length
+        })).sort((a, b) => a.avgMins - b.avgMins);
+        setPickDurations(pickAvg);
+
+        const counts = {};
+        for (const ev of events || []) {
+          if (!ev.user_id) continue;
+          if (!counts[ev.user_id]) counts[ev.user_id] = {};
+          counts[ev.user_id][ev.action] = (counts[ev.user_id][ev.action] || 0) + 1;
+        }
+        const rows = Object.entries(counts).map(([userId, actions]) => ({
+          userId, name: profMap[userId]?.full_name || "Unknown", role: profMap[userId]?.role,
+          total: Object.values(actions).reduce((a, b) => a + b, 0), actions
+        })).sort((a, b) => b.total - a.total);
+        setStaffCounts(rows);
+
+        const durations = (orders || [])
+          .filter(o => o.received_at && o.dispatched_at)
+          .map(o => (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000);
+        const avgHours = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+        setLeadTime({ avgHours, samples: durations.length });
+      } catch (e) { showToast("Load failed", "err"); }
+      setLoading(false);
+    })();
+  }, [token, profile.warehouse_id]);
+
+  const maxTotal = Math.max(1, ...staffCounts.map(r => r.total));
+
+  return (
+    <div>
+      <SectionTitle title="Reports" />
+      <div style={S.statGrid}>
+        <div style={S.statCard}>
+          <span style={{ fontSize: 16 }}>⏱</span>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>
+            {leadTime.avgHours !== null ? leadTime.avgHours.toFixed(1) + "h" : "—"}
+          </div>
+          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Avg warehouse lead-time (receive → dispatch)</div>
+        </div>
+        <div style={S.statCard}>
+          <span style={{ fontSize: 16 }}>📦</span>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{leadTime.samples}</div>
+          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Dispatched orders measured</div>
+        </div>
+        <div style={S.statCard}>
+          <span style={{ fontSize: 16 }}>👥</span>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{staffCounts.length}</div>
+          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Active staff (logged actions)</div>
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Avg picking time per staff (assign → complete)</div>
+        {pickDurations.length === 0 ? <EmptyNote text="Abhi koi completed pick task nahi hai time-tracking ke liye." /> : (
+          <table>
+            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Orders picked</th><th style={S.th}>Avg time</th></tr></thead>
+            <tbody>
+              {pickDurations.map(r => (
+                <tr key={r.userId}>
+                  <td style={S.td}>{r.name}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.count}</td>
+                  <td style={{ ...S.td, color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{r.avgMins.toFixed(1)} min</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Staff productivity (actions logged)</div>
+        {loading ? <EmptyNote text="Loading…" /> : staffCounts.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
+          <div>
+            {staffCounts.map(r => (
+              <div key={r.userId} style={{ padding: "10px 0", borderBottom: "1px solid #262B35" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ color: "#ECEAE3", fontSize: 13 }}>{r.name} <span style={{ color: "#5A6070", fontSize: 11 }}>({r.role})</span></span>
+                  <span style={{ color: "#F5A623", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{r.total} actions</span>
+                </div>
+                <div style={{ background: "#14161B", borderRadius: 4, height: 6, overflow: "hidden" }}>
+                  <div style={{ width: `${(r.total / maxTotal) * 100}%`, background: "#F5A623", height: "100%" }} />
+                </div>
+                <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {Object.entries(r.actions).map(([action, count]) => (
+                    <span key={action} style={{ fontSize: 10, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace" }}>{action}: {count}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, color: "#5A6070" }}>
+        ⚠ Last-mile lead-time (dispatch ke baad courier ke paas) abhi track nahi ho sakta — yeh sirf M&P/Postex ke apne system mein hota hai. Unka API integrate hone ke baad yeh add hoga.
+      </div>
+    </div>
+  );
+}
+
+/* ================= BULK IMPORT UTILITIES ================= */
+async function parseSheet(file) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws, { defval: "", raw: true });
+}
+function normHeader(h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
+// Cleans a code-like value (barcode / SKU / reference / order no). Numbers are
+// converted to exact integer strings so large barcodes never turn into
+// scientific notation (e.g. 7.35E+12) — a common Excel/SheetJS pitfall.
+function cleanCode(v) {
+  if (v === null || v === undefined || v === "") return "";
+  if (typeof v === "number") return String(Math.trunc(v));
+  return String(v).trim().replace(/\.0$/, "");
+}
+const FIELD_ALIASES = {
+  barcode: ["stockmoveproductinternalbarcode", "internalbarcode", "barcode"],
+  sku: ["productsku", "internalreference", "sku"],
+  productName: ["stockmoveproduct", "productname", "product", "description"],
+  qty: ["stockmovequantity", "requiredquantity", "qtyordered", "quantity", "qty"],
+  reference: ["reference"],
+  sourceDocument: ["sourcedocument"],
+  contact: ["contact", "supplier", "vendor"],
+  orderRef: ["trackingno", "tracking", "orderno", "invoicenumber", "order"],
+  courier: ["courier"],
+  customer: ["customer"],
+  category: ["category"],
+  department: ["department"],
+  unit: ["unit", "uom"],
+  reorderLevel: ["reorderlevel", "reorder"]
+};
+function buildColumnMap(headers) {
+  const used = new Set();
+  const map = {};
+  const fields = Object.keys(FIELD_ALIASES);
+  for (const field of fields) {
+    const aliases = FIELD_ALIASES[field];
+    let found = null;
+    for (const h of headers) { if (used.has(h)) continue; if (aliases.includes(normHeader(h))) { found = h; break; } }
+    if (!found) for (const h of headers) { if (used.has(h)) continue; const nh = normHeader(h); if (aliases.some(a => nh.includes(a))) { found = h; break; } }
+    if (found) { map[field] = found; used.add(found); }
+  }
+  return map;
+}
+function getVal(row, map, field) { return map[field] ? row[map[field]] : undefined; }
+// Builds a product lookup keyed by cleaned barcode AND cleaned SKU, so a match
+// succeeds whichever identifier the uploaded file actually contains.
+function buildProductLookup(products) {
+  const byCode = {};
+  for (const p of products) {
+    if (p.barcode) byCode[cleanCode(p.barcode)] = p;
+    if (p.sku) byCode[cleanCode(p.sku)] = p;
+  }
+  return byCode;
+}
+
+
+/* ================= BIN MASTER (ADMIN ONLY) ================= */
+function BinsView({ token, profile, showToast }) {
+  const [bins, setBins] = useState([]);
+  const [newCode, setNewCode] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importSummary, setImportSummary] = useState(null);
+
+  const load = useCallback(async () => {
+    setBins(await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*&order=code.asc`, { token }) || []);
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const addBin = async () => {
+    if (!newCode.trim()) return;
+    try {
+      await sb(`/rest/v1/bins`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, code: newCode.trim() } });
+      setNewCode(""); showToast("Bin added"); load();
+    } catch (e) { showToast("Bin already exists", "err"); }
+  };
+
+  const handleBinFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setImportSummary(null);
+    try {
+      const rows = await parseSheet(file);
+      const headers = Object.keys(rows[0] || {});
+      const codeHeader = headers.find(h => ["location", "bin", "bincode", "locationcode", "code"].includes(normHeader(h))) || headers[0];
+      const items = rows.map(r => ({ warehouse_id: profile.warehouse_id, code: String(r[codeHeader] || "").trim() })).filter(x => x.code);
+      const CHUNK = 300;
+      let count = 0;
+      for (let i = 0; i < items.length; i += CHUNK) {
+        await sb(`/rest/v1/bins?on_conflict=warehouse_id,code`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: items.slice(i, i + CHUNK) });
+        count += items.slice(i, i + CHUNK).length;
+      }
+      setImportSummary(`${count} bin locations imported.`);
+      showToast(`${count} bins imported`); load();
+    } catch (err) { showToast(`Import failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Bin Master (locations)" action={
+        <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+          {importing ? "Importing…" : "📤 Upload bin list"}
+          <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleBinFile} disabled={importing} />
+        </label>
+      } />
+      {importSummary && <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>}
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Add single location</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input style={{ ...S.input, maxWidth: 220 }} placeholder="e.g. A-01-03" value={newCode} onChange={e => setNewCode(e.target.value)} />
+          <button style={S.primaryBtnSm} onClick={addBin}>+ Add</button>
+        </div>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+          ⚠ Sirf yahan se bin locations bante hain — staff Putaway ya Returns screen se koi nayi location nahi khol sakte, sirf yahan uploaded list mein se select karenge.
+        </div>
+      </div>
+      <div style={S.cardGrid}>
+        {bins.map(b => (
+          <div key={b.id} style={{ ...S.card, cursor: "default" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
+          </div>
+        ))}
+        {bins.length === 0 && <EmptyNote text="Koi bin location nahi hai — upload karein ya manually add karein." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= CAMERA BARCODE SCANNER ================= */
+function CameraScanModal({ onScan, onClose }) {
+  const regionId = useRef("scan-region-" + Math.random().toString(36).slice(2, 9)).current;
+  useEffect(() => {
+    let scanner = null;
+    let stopped = false;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      scanner = new Html5Qrcode(regionId);
+      scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 160 } },
+        (decodedText) => {
+          if (stopped) return;
+          stopped = true;
+          scanner.stop().then(() => scanner.clear()).catch(() => {}).finally(() => onScan(decodedText));
+        },
+        () => {}
+      ).catch(() => { onClose(); });
+    }, 50);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      if (scanner && !stopped) { stopped = true; scanner.stop().then(() => scanner.clear()).catch(() => {}); }
+    };
+  }, []);
+  return (
+    <div style={S.scanOverlay}>
+      <div style={S.scanModal}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <span style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 14 }}>📷 Scan barcode</span>
+          <button style={S.iconBtnCircle} onClick={onClose}>✕</button>
+        </div>
+        <div id={regionId} style={{ width: "100%", borderRadius: 8, overflow: "hidden" }}></div>
+        <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 10, textAlign: "center" }}>Camera ko barcode ke upar point karein</div>
+      </div>
+    </div>
+  );
+}
+function CameraScanButton({ onScan, label }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" style={S.secondaryBtnSm} onClick={() => setOpen(true)}>📷 {label || "Scan"}</button>
+      {open && <CameraScanModal onScan={(text) => { setOpen(false); onScan(text); }} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/* ================= helpers ================= */
+async function upsertInventory(token, warehouseId, productId, qtyDelta, binId) {
+  const existing = await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token });
+  if (existing && existing.length > 0) {
+    const row = existing[0];
+    await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}`, { method: "PATCH", token, body: { on_hand: row.on_hand + qtyDelta, bin_id: binId !== null ? binId : row.bin_id } });
+  } else {
+    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, on_hand: qtyDelta, reserved: 0, bin_id: binId } });
+  }
+}
+
+/* ================= SHARED UI ================= */
+function SectionTitle({ title, action }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ width: 4, height: 18, background: "#F5A623" }} />
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 19, fontWeight: 600, color: "#ECEAE3" }}>{title}</span>
+      </div>
+      {action}
+    </div>
+  );
+}
+function EmptyNote({ text }) { return <div style={{ color: "#5A6070", fontSize: 13, padding: "20px 4px", fontFamily: "'IBM Plex Mono', monospace" }}>— {text}</div>; }
+
+const S = {
+  scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
+  scanModal: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 12, padding: 16, width: "100%", maxWidth: 420 },
+  iconBtnCircle: { background: "#14161B", border: "1px solid #333A47", color: "#8B93A3", borderRadius: "50%", width: 26, height: 26, cursor: "pointer" },
+  app: { display: "flex", height: "100vh", background: "#14161B", fontFamily: "'Space Grotesk', sans-serif", overflow: "hidden" },
+  sidebar: { width: 210, background: "#1D2129", borderRight: "1px solid #333A47", display: "flex", flexDirection: "column", flexShrink: 0 },
+  main: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0 },
+  topbar: { height: 56, borderBottom: "1px solid #333A47", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", flexShrink: 0 },
+  content: { flex: 1, overflowY: "auto", padding: "22px 24px 60px" },
+  navItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", background: "none", border: "none", cursor: "pointer", fontSize: 13, width: "100%", textAlign: "left", fontFamily: "'Space Grotesk', sans-serif" },
+  navItemActive: { background: "#262B35", borderLeft: "2px solid #F5A623" },
+  statGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 },
+  statCard: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: "16px 18px" },
+  panel: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 18, marginBottom: 14 },
+  panelTitle: { color: "#ECEAE3", fontSize: 13, fontWeight: 600, marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.5 },
+  cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 },
+  card: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 16, cursor: "pointer" },
+  input: { background: "#14161B", border: "1px solid #333A47", borderRadius: 6, color: "#ECEAE3", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" },
+  label: { color: "#5A6070", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" },
+  primaryBtn: { width: "100%", background: "#F5A623", color: "#14161B", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" },
+  primaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "#F5A623", color: "#14161B", border: "none", borderRadius: 6, padding: "9px 14px", fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
+  secondaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "transparent", color: "#ECEAE3", border: "1px solid #333A47", borderRadius: 6, padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
+  badge: { fontSize: 11, color: "#8B93A3", border: "1px solid #333A47", borderRadius: 20, padding: "3px 10px", fontFamily: "'IBM Plex Mono', monospace" },
+  badgeSm: { fontSize: 10, border: "1px solid", borderRadius: 20, padding: "2px 8px", fontFamily: "'IBM Plex Mono', monospace" },
+  hazardBar: { height: 4, width: "100%", background: "repeating-linear-gradient(45deg, #F5A623 0 10px, #14161B 10px 20px)", position: "absolute", top: 0, left: 0, borderRadius: "10px 10px 0 0" },
+  disclaimer: { marginTop: 22, fontSize: 11, color: "#5A6070", lineHeight: 1.4 },
+  loginWrap: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#14161B", backgroundImage: "radial-gradient(circle at 20% 20%, #1D2129 0%, #14161B 60%)" },
+  loginCard: { position: "relative", width: 380, background: "#1D2129", border: "1px solid #333A47", borderRadius: 12, padding: "28px 26px", overflow: "hidden" },
+  th: { textAlign: "left", color: "#5A6070", fontSize: 10.5, letterSpacing: 0.5, padding: "6px 8px", borderBottom: "1px solid #333A47", fontFamily: "'IBM Plex Mono', monospace" },
+  td: { padding: "9px 8px", fontSize: 13, color: "#ECEAE3", borderBottom: "1px solid #262B35" },
+  toast: { position: "fixed", bottom: 24, right: 24, background: "#1D2129", border: "1px solid", borderRadius: 8, padding: "12px 16px", color: "#ECEAE3", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
