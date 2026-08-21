@@ -271,7 +271,6 @@ function StatCard({ icon, label, value, color, onClick }) {
 /* ================= PRODUCTS ================= */
 function ProductsView({ token, profile, showToast }) {
   const [products, setProducts] = useState([]);
-  const [inventory, setInventory] = useState({});
   const [form, setForm] = useState({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -281,21 +280,10 @@ function ProductsView({ token, profile, showToast }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, inv] = await Promise.all([
-        sb(`/rest/v1/products?select=*&order=name.asc`, { token }),
-        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
-      ]);
-      setProducts(p || []);
-      const map = {};
-      for (const row of inv || []) {
-        if (!map[row.product_id]) map[row.product_id] = { on_hand: 0, reserved: 0 };
-        map[row.product_id].on_hand += row.on_hand;
-        map[row.product_id].reserved += row.reserved;
-      }
-      setInventory(map);
+      setProducts(await sb(`/rest/v1/products?select=*&order=name.asc`, { token }) || []);
     } catch (e) { showToast("Load failed", "err"); }
     setLoading(false);
-  }, [token, profile.warehouse_id]);
+  }, [token]);
   useEffect(() => { load(); }, [load]);
 
   const add = async () => {
@@ -390,26 +378,19 @@ function ProductsView({ token, profile, showToast }) {
             <tr>
               <th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
               <th style={S.th}>Category</th><th style={S.th}>Sales Price</th>
-              <th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Available</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map(p => {
-              const inv = inventory[p.id] || { on_hand: 0, reserved: 0 };
-              return (
-                <tr key={p.id}>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
-                  <td style={S.td}>{p.name}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
-                  <td style={S.td}>{inv.on_hand}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{inv.reserved}</td>
-                  <td style={{ ...S.td, color: "#4CAF7D" }}>{inv.on_hand - inv.reserved}</td>
-                </tr>
-              );
-            })}
-            {!loading && filtered.length === 0 && <tr><td colSpan={8}><EmptyNote text="No products found." /></td></tr>}
+            {filtered.map(p => (
+              <tr key={p.id}>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
+                <td style={S.td}>{p.name}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
+                <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
+              </tr>
+            ))}
+            {!loading && filtered.length === 0 && <tr><td colSpan={5}><EmptyNote text="No products found." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -532,7 +513,7 @@ function ReceivingView({ token, profile, showToast }) {
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty } } });
       showToast("Received — sent to putaway queue");
     } else {
-      await upsertInventory(token, profile.warehouse_id, line.product_id, qty, null);
+      await addOnHand(token, profile.warehouse_id, line.product_id, null, qty);
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "direct_to_packing", metadata: { qty } } });
       showToast("Received — sent direct to packing (urgent)");
     }
@@ -689,7 +670,7 @@ function PutawayView({ token, profile, showToast }) {
     const binId = binChoice[task.id];
     if (!binId) { showToast("Bin location select karein (list mein nahi hai to admin se Bin Master mein add karwayein)", "err"); return; }
     try {
-      await upsertInventory(token, profile.warehouse_id, task.product_id, task.qty, binId);
+      await addOnHand(token, profile.warehouse_id, task.product_id, binId, task.qty);
       await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: binId, completed_at: new Date().toISOString(), assigned_to: task.assigned_to || profile.id } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "completed", metadata: { bin_id: binId, qty: task.qty } } });
       showToast("Putaway complete — stock now available"); load();
@@ -773,45 +754,116 @@ function PutawayView({ token, profile, showToast }) {
 
 /* ================= INVENTORY ================= */
 function InventoryView({ token, profile }) {
+  const [tab, setTab] = useState("ledger");
   const [rows, setRows] = useState([]);
+  const [reserved, setReserved] = useState({});
   const [products, setProducts] = useState({});
   const [bins, setBins] = useState({});
+  const [query, setQuery] = useState("");
+
   useEffect(() => {
     (async () => {
-      const [inv, prods, binList] = await Promise.all([
+      const [inv, res, prods, binList] = await Promise.all([
         sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/products?select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
       setRows(inv || []);
+      setReserved(Object.fromEntries((res || []).map(r => [r.product_id, r.reserved])));
       setProducts(Object.fromEntries((prods || []).map(p => [p.id, p])));
       setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
     })();
   }, [token, profile.warehouse_id]);
+
+  const q = query.trim().toLowerCase();
+
+  // Ledger: aggregate on_hand per product across all bins, minus reserved = net available
+  const ledger = (() => {
+    const byProduct = {};
+    for (const r of rows) {
+      if (!byProduct[r.product_id]) byProduct[r.product_id] = 0;
+      byProduct[r.product_id] += r.on_hand;
+    }
+    return Object.entries(byProduct).map(([productId, onHand]) => {
+      const res = reserved[productId] || 0;
+      return { productId, onHand, reserved: res, available: onHand - res };
+    }).filter(r => {
+      const p = products[r.productId];
+      if (!q) return true;
+      return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
+    }).sort((a, b) => (products[b.productId]?.name || "").localeCompare(products[a.productId]?.name || ""));
+  })();
+
+  const binRows = rows.filter(r => {
+    const p = products[r.product_id];
+    if (!q) return true;
+    return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
+  });
+
   return (
     <div>
-      <SectionTitle title="Inventory on hand" />
-      <div style={S.panel}>
-        <table>
-          <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On hand</th><th style={S.th}>Reserved</th><th style={S.th}>Available</th></tr></thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const p = products[r.product_id]; const bin = bins[r.bin_id];
-              return (
-                <tr key={i}>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
-                  <td style={S.td}>{p?.name || "—"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "Unassigned (direct)"}</td>
-                  <td style={S.td}>{r.on_hand}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.reserved}</td>
-                  <td style={{ ...S.td, color: "#4CAF7D" }}>{r.on_hand - r.reserved}</td>
-                </tr>
-              );
-            })}
-            {rows.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
-          </tbody>
-        </table>
+      <SectionTitle title="Inventory" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button onClick={() => setTab("ledger")} style={{ ...S.pill, ...(tab === "ledger" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>📒 Inventory Ledger</button>
+        <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
       </div>
+      <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
+
+      {tab === "ledger" && (
+        <div style={S.panel}>
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th></tr></thead>
+            <tbody>
+              {ledger.map(r => {
+                const p = products[r.productId];
+                return (
+                  <tr key={r.productId}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                    <td style={S.td}>{p?.name || "—"}</td>
+                    <td style={{ ...S.td, color: "#8B93A3" }}>{r.onHand}</td>
+                    <td style={{ ...S.td, color: r.reserved > 0 ? "#E5484D" : "#8B93A3" }}>{r.reserved}</td>
+                    <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{r.available}</td>
+                  </tr>
+                );
+              })}
+              {ledger.length === 0 && <tr><td colSpan={5}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "bins" && (
+        <div style={S.panel}>
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Reserved against order?</th></tr></thead>
+            <tbody>
+              {binRows.map((r, i) => {
+                const p = products[r.product_id];
+                const bin = bins[r.bin_id];
+                const productReserved = reserved[r.product_id] || 0;
+                return (
+                  <tr key={i}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                    <td style={S.td}>{p?.name || "—"}</td>
+                    <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
+                    <td style={S.td}>{r.on_hand}</td>
+                    <td style={S.td}>
+                      {productReserved > 0
+                        ? <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Yes · {productReserved} reserved (product-wide)</span>
+                        : <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>No</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {binRows.length === 0 && <tr><td colSpan={5}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#5A6070" }}>
+            ⚠ Reservation abhi product-level track hoti hai (jis bin se picking suggest hui hai wahi highlight ho sakti hai, exact bin-split system abhi nahi hai).
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -947,14 +999,11 @@ function OrdersView({ token, profile, showToast }) {
       let shortage = false;
       const lineBins = {};
       for (const l of lines) {
-        const inv = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&select=*`, { token });
-        const row = inv && inv[0];
-        const available = row ? row.on_hand - row.reserved : 0;
-        if (available < l.qty) shortage = true;
-        if (row) {
-          lineBins[l.product_id] = row.bin_id;
-          await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}`, { method: "PATCH", token, body: { reserved: row.reserved + l.qty } });
-        }
+        const summary = await getStockSummary(token, profile.warehouse_id, l.product_id);
+        if (summary.available < l.qty) shortage = true;
+        const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
+        lineBins[l.product_id] = bestBin ? bestBin.bin_id : null;
+        await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
       }
       const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: order.id, status: "queued" } });
       for (const l of lines) {
@@ -1623,13 +1672,8 @@ function DispatchView({ token, profile, showToast }) {
       for (const orderId of ids) {
         const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
         for (const l of lines) {
-          const inv = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&select=*`, { token });
-          if (inv && inv[0]) {
-            await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}`, {
-              method: "PATCH", token,
-              body: { on_hand: inv[0].on_hand - l.qty, reserved: Math.max(0, inv[0].reserved - l.qty) }
-            });
-          }
+          await deductStock(token, profile.warehouse_id, l.product_id, l.qty);
+          await adjustReserved(token, profile.warehouse_id, l.product_id, -l.qty);
         }
         await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "dispatched", metadata: { load_sheet: lsNumber } } });
@@ -1867,7 +1911,7 @@ function ReturnsView({ token, profile, showToast }) {
       for (const l of openLines) {
         if (l.condition === "good") {
           anyGood = true;
-          await upsertInventory(token, profile.warehouse_id, l.product_id, l.qty, null);
+          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty);
         } else if (l.condition === "damaged") {
           anyDamaged = true;
           const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&bin_id=eq.${l.bin_id}&select=*`, { token });
@@ -2298,13 +2342,55 @@ function CameraScanButton({ onScan, label }) {
 }
 
 /* ================= helpers ================= */
-async function upsertInventory(token, warehouseId, productId, qtyDelta, binId) {
-  const existing = await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token });
+// Add/subtract on-hand qty at a SPECIFIC bin (or the "unassigned" row when binId is null).
+async function addOnHand(token, warehouseId, productId, binId, qtyDelta) {
+  const filter = binId
+    ? `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=eq.${binId}`
+    : `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=is.null`;
+  const existing = await sb(`/rest/v1/inventory?${filter}&select=*`, { token });
   if (existing && existing.length > 0) {
     const row = existing[0];
-    await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}`, { method: "PATCH", token, body: { on_hand: row.on_hand + qtyDelta, bin_id: binId !== null ? binId : row.bin_id } });
-  } else {
-    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, on_hand: qtyDelta, reserved: 0, bin_id: binId } });
+    const newQty = row.on_hand + qtyDelta;
+    if (newQty <= 0) {
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: 0 } });
+    } else {
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: newQty } });
+    }
+  } else if (qtyDelta > 0) {
+    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, bin_id: binId, on_hand: qtyDelta } });
+  }
+}
+// Adjust the reservation counter for a product (independent of any specific bin).
+async function adjustReserved(token, warehouseId, productId, delta) {
+  const existing = await sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token });
+  if (existing && existing.length > 0) {
+    const newQty = Math.max(0, existing[0].reserved + delta);
+    await sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}`, { method: "PATCH", token, body: { reserved: newQty } });
+  } else if (delta > 0) {
+    await sb(`/rest/v1/inventory_reserved`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, reserved: delta } });
+  }
+}
+// Total on-hand across all bins for a product, and current reservation.
+async function getStockSummary(token, warehouseId, productId) {
+  const [rows, res] = await Promise.all([
+    sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token }),
+    sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token })
+  ]);
+  const onHand = (rows || []).reduce((s, r) => s + r.on_hand, 0);
+  const reserved = (res && res[0]) ? res[0].reserved : 0;
+  return { rows: rows || [], onHand, reserved, available: onHand - reserved };
+}
+// Deducts qty from bins (largest bin first) when goods actually leave the warehouse (dispatch).
+async function deductStock(token, warehouseId, productId, qty) {
+  const rows = (await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*&order=on_hand.desc`, { token })) || [];
+  let remaining = qty;
+  for (const row of rows) {
+    if (remaining <= 0) break;
+    const take = Math.min(row.on_hand, remaining);
+    if (take > 0) {
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: row.on_hand - take } });
+      remaining -= take;
+    }
   }
 }
 
