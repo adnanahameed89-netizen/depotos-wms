@@ -92,7 +92,7 @@ function App() {
         <TopBar profile={profile} />
         <div style={S.content}>
           {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} />}
-          {view === "products" && <ProductsView token={session.token} showToast={showToast} />}
+          {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
           {view === "inventory" && <InventoryView token={session.token} profile={profile} />}
@@ -269,27 +269,48 @@ function StatCard({ icon, label, value, color, onClick }) {
 }
 
 /* ================= PRODUCTS ================= */
-function ProductsView({ token, showToast }) {
+function ProductsView({ token, profile, showToast }) {
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ sku: "", barcode: "", name: "", category: "", department: "Default", unit: "pcs", reorder_level: 0 });
+  const [inventory, setInventory] = useState({});
+  const [form, setForm] = useState({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
+  const [query, setQuery] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
-    try { setProducts(await sb(`/rest/v1/products?select=*&order=name.asc`, { token }) || []); }
-    catch (e) { showToast("Load failed", "err"); }
-    setLoading(false);
-  }, [token]);
-  useEffect(() => { load(); }, [load]);
-  const add = async () => {
-    if (!form.sku.trim() || !form.name.trim()) return;
     try {
-      await sb(`/rest/v1/products`, { method: "POST", token, prefer: "return=representation", body: { ...form, reorder_level: Number(form.reorder_level) || 0 } });
-      setForm({ sku: "", barcode: "", name: "", category: "", department: "Default", unit: "pcs", reorder_level: 0 });
+      const [p, inv] = await Promise.all([
+        sb(`/rest/v1/products?select=*&order=name.asc`, { token }),
+        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setProducts(p || []);
+      const map = {};
+      for (const row of inv || []) {
+        if (!map[row.product_id]) map[row.product_id] = { on_hand: 0, reserved: 0 };
+        map[row.product_id].on_hand += row.on_hand;
+        map[row.product_id].reserved += row.reserved;
+      }
+      setInventory(map);
+    } catch (e) { showToast("Load failed", "err"); }
+    setLoading(false);
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const add = async () => {
+    if (!form.barcode.trim() || !form.name.trim()) { showToast("Barcode aur Product name zaroori hain", "err"); return; }
+    try {
+      const barcode = cleanCode(form.barcode);
+      await sb(`/rest/v1/products`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { sku: barcode, barcode, name: form.name.trim(), category: form.category.trim() || null, department: form.department.trim() || "Default", sales_price: form.sales_price ? Number(form.sales_price) : null }
+      });
+      setForm({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
       showToast("Product added"); load();
-    } catch (e) { showToast("Could not add — SKU/barcode may already exist", "err"); }
+    } catch (e) { showToast("Could not add — barcode may already exist", "err"); }
   };
+
   const handleCatalogueFile = async (e) => {
     const file = e.target.files[0];
     e.target.value = "";
@@ -299,20 +320,18 @@ function ProductsView({ token, showToast }) {
       const rows = await parseSheet(file);
       if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
       const map = buildColumnMap(Object.keys(rows[0]));
-      if (!map.sku && !map.barcode) { showToast("SKU ya Barcode column nahi mila file mein", "err"); setImporting(false); return; }
+      if (!map.barcode) { showToast("Barcode column nahi mila file mein", "err"); setImporting(false); return; }
       const items = [];
       let skipped = 0;
       for (const row of rows) {
-        const sku = cleanCode(getVal(row, map, "sku")) || cleanCode(getVal(row, map, "barcode"));
         const barcode = cleanCode(getVal(row, map, "barcode"));
-        const name = String(getVal(row, map, "productName") || sku).trim();
-        if (!sku) { skipped++; continue; }
+        const name = String(getVal(row, map, "productName") || "").trim();
+        if (!barcode) { skipped++; continue; }
         items.push({
-          sku, barcode: barcode || null, name,
+          sku: barcode, barcode, name: name || barcode,
           category: String(getVal(row, map, "category") || "").trim() || null,
           department: String(getVal(row, map, "department") || "Default").trim(),
-          unit: String(getVal(row, map, "unit") || "pcs").trim(),
-          reorder_level: Number(getVal(row, map, "reorderLevel")) || 0
+          sales_price: (() => { const v = Number(getVal(row, map, "salesPrice")); return isNaN(v) ? null : v; })()
         });
       }
       const CHUNK = 200;
@@ -322,16 +341,21 @@ function ProductsView({ token, showToast }) {
         await sb(`/rest/v1/products?on_conflict=sku`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: chunk });
         inserted += chunk.length;
       }
-      setImportSummary(`${inserted} products imported/updated. ${skipped} rows skipped (no SKU).`);
+      setImportSummary(`${inserted} products imported/updated. ${skipped} rows skipped (no barcode).`);
       showToast(`${inserted} products imported`);
       load();
     } catch (e) { showToast(`Import failed: ${(e.message || "").slice(0, 100)}`, "err"); }
     setImporting(false);
   };
 
+  const q = query.trim().toLowerCase();
+  const filtered = !q ? products : products.filter(p =>
+    (p.barcode || "").toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q)
+  );
+
   return (
     <div>
-      <SectionTitle title="Product catalogue" action={
+      <SectionTitle title="Product Master" action={
         <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
           {importing ? "Importing…" : "📤 Upload catalogue (CSV/Excel)"}
           <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleCatalogueFile} disabled={importing} />
@@ -340,34 +364,52 @@ function ProductsView({ token, showToast }) {
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
+      <div style={{ marginBottom: 10, fontSize: 11, color: "#5A6070" }}>
+        CSV columns expected: <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>department, product_category, barcode, product_name, sales_price</span>
+      </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Add product</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <input style={{ ...S.input, flex: 1, minWidth: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="SKU" value={form.sku} onChange={e => setForm({ ...form, sku: e.target.value })} />
-          <input style={{ ...S.input, flex: 1, minWidth: 130, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode" value={form.barcode} onChange={e => setForm({ ...form, barcode: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode" value={form.barcode} onChange={e => setForm({ ...form, barcode: e.target.value })} />
           <CameraScanButton onScan={(text) => setForm(f => ({ ...f, barcode: text }))} label="Scan" />
           <input style={{ ...S.input, flex: 2, minWidth: 160 }} placeholder="Product name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <input style={{ ...S.input, flex: 1, minWidth: 110 }} placeholder="Category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 130 }} placeholder="Product category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} />
           <input style={{ ...S.input, flex: 1, minWidth: 110 }} placeholder="Department" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
-          <input style={{ ...S.input, width: 90 }} type="number" placeholder="Reorder" value={form.reorder_level} onChange={e => setForm({ ...form, reorder_level: e.target.value })} />
+          <input style={{ ...S.input, width: 110 }} type="number" placeholder="Sales price" value={form.sales_price} onChange={e => setForm({ ...form, sales_price: e.target.value })} />
           <button style={S.primaryBtnSm} onClick={add}>+ Add</button>
         </div>
       </div>
+
+      <div style={{ position: "relative", margin: "0 0 12px" }}>
+        <input style={{ ...S.input, paddingLeft: 34 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
+      </div>
+
       <div style={S.panel}>
         <table>
-          <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Barcode</th><th style={S.th}>Name</th><th style={S.th}>Category</th><th style={S.th}>Department</th><th style={S.th}>Reorder at</th></tr></thead>
+          <thead>
+            <tr>
+              <th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
+              <th style={S.th}>Category</th><th style={S.th}>Sales Price</th>
+              <th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Available</th>
+            </tr>
+          </thead>
           <tbody>
-            {products.map(p => (
-              <tr key={p.id}>
-                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.sku}</td>
-                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>{p.barcode || "—"}</td>
-                <td style={S.td}>{p.name}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.reorder_level}</td>
-              </tr>
-            ))}
-            {!loading && products.length === 0 && <tr><td colSpan={6}><EmptyNote text="No products yet." /></td></tr>}
+            {filtered.map(p => {
+              const inv = inventory[p.id] || { on_hand: 0, reserved: 0 };
+              return (
+                <tr key={p.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
+                  <td style={S.td}>{p.name}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
+                  <td style={S.td}>{inv.on_hand}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{inv.reserved}</td>
+                  <td style={{ ...S.td, color: "#4CAF7D" }}>{inv.on_hand - inv.reserved}</td>
+                </tr>
+              );
+            })}
+            {!loading && filtered.length === 0 && <tr><td colSpan={8}><EmptyNote text="No products found." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -2091,8 +2133,11 @@ function cleanCode(v) {
 }
 const FIELD_ALIASES = {
   barcode: ["stockmoveproductinternalbarcode", "internalbarcode", "barcode"],
+  category: ["productcategory", "category"],
+  department: ["department"],
+  salesPrice: ["salesprice", "price"],
   sku: ["productsku", "internalreference", "sku"],
-  productName: ["stockmoveproduct", "productname", "product", "description"],
+  productName: ["productname", "stockmoveproduct", "product", "description"],
   qty: ["stockmovequantity", "requiredquantity", "qtyordered", "quantity", "qty"],
   reference: ["reference"],
   sourceDocument: ["sourcedocument"],
@@ -2100,8 +2145,6 @@ const FIELD_ALIASES = {
   orderRef: ["trackingno", "tracking", "orderno", "invoicenumber", "order"],
   courier: ["courier"],
   customer: ["customer"],
-  category: ["category"],
-  department: ["department"],
   unit: ["unit", "uom"],
   reorderLevel: ["reorderlevel", "reorder"]
 };
