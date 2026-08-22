@@ -271,20 +271,39 @@ function StatCard({ icon, label, value, color, onClick }) {
 /* ================= PRODUCTS ================= */
 function ProductsView({ token, profile, showToast }) {
   const [products, setProducts] = useState([]);
+  const [totalCount, setTotalCount] = useState(null);
   const [form, setForm] = useState({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
   const [query, setQuery] = useState("");
+  const searchTimer = useRef(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setProducts(await sb(`/rest/v1/products?select=*&order=name.asc`, { token }) || []);
-    } catch (e) { showToast("Load failed", "err"); }
-    setLoading(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/products?select=id`, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact", Range: "0-0" } });
+        const range = res.headers.get("content-range"); // e.g. "0-0/54392"
+        if (range) setTotalCount(Number(range.split("/")[1]));
+      } catch (e) {}
+    })();
   }, [token]);
-  useEffect(() => { load(); }, [load]);
+
+  const runSearch = useCallback((q) => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (!q.trim()) { setProducts([]); return; }
+    setLoading(true);
+    searchTimer.current = setTimeout(async () => {
+      try {
+        setProducts(await searchProducts(token, q, 100));
+      } catch (e) { showToast("Search failed", "err"); }
+      setLoading(false);
+    }, 300);
+  }, [token]);
+
+  const onQueryChange = (v) => { setQuery(v); runSearch(v); };
+
+  const load = async () => { if (query.trim()) runSearch(query); };
 
   const add = async () => {
     if (!form.barcode.trim() || !form.name.trim()) { showToast("Barcode aur Product name zaroori hain", "err"); return; }
@@ -336,11 +355,6 @@ function ProductsView({ token, profile, showToast }) {
     setImporting(false);
   };
 
-  const q = query.trim().toLowerCase();
-  const filtered = !q ? products : products.filter(p =>
-    (p.barcode || "").toLowerCase().includes(q) || (p.name || "").toLowerCase().includes(q)
-  );
-
   return (
     <div>
       <SectionTitle title="Product Master" action={
@@ -354,6 +368,7 @@ function ProductsView({ token, profile, showToast }) {
       )}
       <div style={{ marginBottom: 10, fontSize: 11, color: "#5A6070" }}>
         CSV columns expected: <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>department, product_category, barcode, product_name, sales_price</span>
+        {totalCount !== null && <span> · Catalogue mein {totalCount.toLocaleString()} products hain</span>}
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Add product</div>
@@ -369,30 +384,34 @@ function ProductsView({ token, profile, showToast }) {
       </div>
 
       <div style={{ position: "relative", margin: "0 0 12px" }}>
-        <input style={{ ...S.input, paddingLeft: 34 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
+        <input style={{ ...S.input, paddingLeft: 34 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => onQueryChange(e.target.value)} />
       </div>
 
       <div style={S.panel}>
-        <table>
-          <thead>
-            <tr>
-              <th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
-              <th style={S.th}>Category</th><th style={S.th}>Sales Price</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(p => (
-              <tr key={p.id}>
-                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
-                <td style={S.td}>{p.name}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
-                <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
+        {!query.trim() ? (
+          <EmptyNote text="Search karein — catalogue bohot bada hai isliye poori list yahan load nahi hoti." />
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
+                <th style={S.th}>Category</th><th style={S.th}>Sales Price</th>
               </tr>
-            ))}
-            {!loading && filtered.length === 0 && <tr><td colSpan={5}><EmptyNote text="No products found." /></td></tr>}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {products.map(p => (
+                <tr key={p.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
+                  <td style={S.td}>{p.name}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
+                </tr>
+              ))}
+              {!loading && products.length === 0 && <tr><td colSpan={5}><EmptyNote text="No products found." /></td></tr>}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -401,23 +420,20 @@ function ProductsView({ token, profile, showToast }) {
 /* ================= RECEIVING ================= */
 function ReceivingView({ token, profile, showToast }) {
   const [grns, setGrns] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [productCache, setProductCache] = useState({});
   const [openGrn, setOpenGrn] = useState(null);
   const [lines, setLines] = useState([]);
   const [source, setSource] = useState("");
   const [grnNumber, setGrnNumber] = useState("");
-  const [lineProduct, setLineProduct] = useState("");
   const [lineQty, setLineQty] = useState(1);
+  const [pendingProduct, setPendingProduct] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
   const [grnLineStats, setGrnLineStats] = useState({});
   const load = useCallback(async () => {
     try {
-      const [g, p] = await Promise.all([
-        sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token }),
-        sb(`/rest/v1/products?select=*`, { token })
-      ]);
-      setGrns(g || []); setProducts(p || []);
+      const g = await sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token });
+      setGrns(g || []);
       const ids = (g || []).map(x => x.id);
       if (ids.length) {
         const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=grn_id,qty_expected`, { token });
@@ -431,7 +447,12 @@ function ReceivingView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token]);
   useEffect(() => { load(); }, [load]);
-  const loadLines = async (grnId) => setLines(await sb(`/rest/v1/grn_lines?grn_id=eq.${grnId}&select=*`, { token }) || []);
+  const loadLines = async (grnId) => {
+    const ls = await sb(`/rest/v1/grn_lines?grn_id=eq.${grnId}&select=*`, { token }) || [];
+    setLines(ls);
+    const cache = await fetchProductsByIds(token, ls.map(l => l.product_id));
+    setProductCache(prev => ({ ...prev, ...cache }));
+  };
 
   const handleGrnFile = async (e) => {
     const file = e.target.files[0];
@@ -444,7 +465,8 @@ function ReceivingView({ token, profile, showToast }) {
       const map = buildColumnMap(Object.keys(rows[0]));
       if (!map.barcode || !map.reference) { showToast("Barcode ya Reference column nahi mila", "err"); setImporting(false); return; }
 
-      const productMap = buildProductLookup(products);
+      const fileBarcodes = rows.map(r => getVal(r, map, "barcode"));
+      const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
 
       const groups = {};
       for (const row of rows) {
@@ -499,10 +521,11 @@ function ReceivingView({ token, profile, showToast }) {
       setOpenGrn(created[0]); loadLines(created[0].id);
     } catch (e) { showToast("GRN number may already exist", "err"); }
   };
-  const addLine = async () => {
-    if (!lineProduct || lineQty <= 0 || !openGrn) return;
-    await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: openGrn.id, product_id: lineProduct, qty_expected: Number(lineQty) } });
-    setLineProduct(""); setLineQty(1); loadLines(openGrn.id);
+  const addLine = async (product) => {
+    if (!product || lineQty <= 0 || !openGrn) return;
+    await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: openGrn.id, product_id: product.id, qty_expected: Number(lineQty) } });
+    setProductCache(prev => ({ ...prev, [product.id]: product }));
+    setLineQty(1); loadLines(openGrn.id);
   };
   const receiveLine = async (line, mode) => {
     const qty = line.qty_expected - (line.qty_received || 0);
@@ -530,13 +553,13 @@ function ReceivingView({ token, profile, showToast }) {
         <SectionTitle title={`GRN ${openGrn.grn_number}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenGrn(null)}>← Back to GRN list</button>} />
         <div style={S.panel}>
           <div style={S.panelTitle}>Add line item</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
-              <option value="">Product / SKU</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-            </select>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <ProductPicker token={token} onSelect={(p) => setPendingProduct(p)} />
+            {pendingProduct && (
+              <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{pendingProduct.barcode} — {pendingProduct.name} <span style={{ cursor: "pointer", marginLeft: 6 }} onClick={() => setPendingProduct(null)}>✕</span></span>
+            )}
             <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
-            <button style={S.primaryBtnSm} onClick={addLine}>+ Add line</button>
+            <button style={S.primaryBtnSm} onClick={() => { addLine(pendingProduct); setPendingProduct(null); }}>+ Add line</button>
           </div>
         </div>
         <div style={S.panel}>
@@ -545,11 +568,11 @@ function ReceivingView({ token, profile, showToast }) {
             <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Expected</th><th style={S.th}>Received</th><th style={S.th}></th></tr></thead>
             <tbody>
               {lines.map(l => {
-                const p = products.find(x => x.id === l.product_id);
+                const p = productCache[l.product_id];
                 const done = l.qty_received >= l.qty_expected;
                 return (
                   <tr key={l.id}>
-                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{l.qty_expected}</td>
                     <td style={S.td}>{l.qty_received || 0}</td>
                     <td style={S.td}>
@@ -620,7 +643,7 @@ function ReceivingView({ token, profile, showToast }) {
 /* ================= PUTAWAY ================= */
 function PutawayView({ token, profile, showToast }) {
   const [tasks, setTasks] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState({});
   const [bins, setBins] = useState([]);
   const [staff, setStaff] = useState([]);
   const [grnLines, setGrnLines] = useState({});
@@ -632,13 +655,13 @@ function PutawayView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [t, p, b, s] = await Promise.all([
+      const [t, b, s] = await Promise.all([
         sb(`/rest/v1/putaway_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/products?select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
-      setTasks(t || []); setProducts(p || []); setBins(b || []); setStaff(s || []);
+      setTasks(t || []); setBins(b || []); setStaff(s || []);
+      setProducts(await fetchProductsByIds(token, (t || []).map(x => x.product_id)));
       const glIds = [...new Set((t || []).map(x => x.grn_line_id).filter(Boolean))];
       if (glIds.length) {
         const gls = await sb(`/rest/v1/grn_lines?id=in.(${glIds.join(",")})&select=*`, { token });
@@ -684,7 +707,7 @@ function PutawayView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : (scanInput[task.id] || "")).trim();
     setScanInput({ ...scanInput, [task.id]: "" });
     if (!code) return;
-    const p = products.find(x => x.id === task.product_id);
+    const p = products[task.product_id];
     if (p && (p.barcode === code || p.sku === code)) {
       setVerified({ ...verified, [task.id]: true });
       showToast("Product verified ✓");
@@ -694,7 +717,7 @@ function PutawayView({ token, profile, showToast }) {
   };
 
   const TaskCard = ({ t, showAssign }) => {
-    const p = products.find(x => x.id === t.product_id);
+    const p = products[t.product_id];
     return (
       <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -871,12 +894,12 @@ function InventoryView({ token, profile }) {
 /* ================= SALES ORDERS ================= */
 function OrdersView({ token, profile, showToast }) {
   const [orders, setOrders] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [productCache, setProductCache] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [extId, setExtId] = useState("");
   const [courier, setCourier] = useState("Postex");
   const [items, setItems] = useState([]);
-  const [lineProduct, setLineProduct] = useState("");
+  const [pendingProduct, setPendingProduct] = useState(null);
   const [lineQty, setLineQty] = useState(1);
   const [openOrder, setOpenOrder] = useState(null);
   const [openLines, setOpenLines] = useState([]);
@@ -889,11 +912,8 @@ function OrdersView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [o, p] = await Promise.all([
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token }),
-        sb(`/rest/v1/products?select=*`, { token })
-      ]);
-      setOrders(o || []); setProducts(p || []);
+      const o = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
+      setOrders(o || []);
       setProfiles(Object.fromEntries((await sb(`/rest/v1/profiles?select=*`, { token }) || []).map(u => [u.id, u])));
       const ids = (o || []).map(x => x.id);
       if (ids.length) {
@@ -910,11 +930,10 @@ function OrdersView({ token, profile, showToast }) {
   useEffect(() => { load(); }, [load]);
 
   const addLine = () => {
-    if (!lineProduct) { showToast("Product select karein", "err"); return; }
+    if (!pendingProduct) { showToast("Product select karein", "err"); return; }
     if (lineQty <= 0) return;
-    const p = products.find(x => x.id === lineProduct);
-    setItems([...items, { product_id: lineProduct, sku: p.sku, name: p.name, qty: Number(lineQty) }]);
-    setLineProduct(""); setLineQty(1);
+    setItems([...items, { product_id: pendingProduct.id, barcode: pendingProduct.barcode, name: pendingProduct.name, qty: Number(lineQty) }]);
+    setPendingProduct(null); setLineQty(1);
   };
 
   const createOrder = async () => {
@@ -950,7 +969,8 @@ function OrdersView({ token, profile, showToast }) {
       const map = buildColumnMap(Object.keys(rows[0]));
       if (!map.barcode || !map.orderRef) { showToast("Barcode ya Order/Tracking column nahi mila", "err"); setImporting(false); return; }
 
-      const productMap = buildProductLookup(products);
+      const fileBarcodes = rows.map(r => getVal(r, map, "barcode"));
+      const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
 
       const groups = {};
       for (const row of rows) {
@@ -1023,6 +1043,7 @@ function OrdersView({ token, profile, showToast }) {
     ]);
     setOpenLines(lines || []);
     setOpenEvents(events || []);
+    setProductCache(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
     setOpenOrder(order);
   };
 
@@ -1039,16 +1060,15 @@ function OrdersView({ token, profile, showToast }) {
           </div>
         </div>
         <div style={S.panel}>
-          <div style={S.panelTitle}>Line items (SKU level)</div>
+          <div style={S.panelTitle}>Line items</div>
           <table>
-            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
             <tbody>
               {openLines.map(l => {
-                const p = products.find(x => x.id === l.product_id);
+                const p = productCache[l.product_id];
                 return (
                   <tr key={l.id}>
-                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku || "—"}</td>
-                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>{p?.barcode || "— not set —"}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
                     <td style={S.td}>{l.qty}</td>
                   </tr>
@@ -1095,11 +1115,11 @@ function OrdersView({ token, profile, showToast }) {
               <option value="Other">Other</option>
             </select>
           </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
-              <option value="">Product / SKU</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-            </select>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+            <ProductPicker token={token} onSelect={(p) => setPendingProduct(p)} />
+            {pendingProduct && (
+              <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{pendingProduct.barcode} — {pendingProduct.name} <span style={{ cursor: "pointer", marginLeft: 6 }} onClick={() => setPendingProduct(null)}>✕</span></span>
+            )}
             <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
             <button style={S.secondaryBtnSm} onClick={addLine}>+ Add line</button>
           </div>
@@ -1107,7 +1127,7 @@ function OrdersView({ token, profile, showToast }) {
             <div style={{ marginBottom: 12 }}>
               {items.map((it, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", background: "#14161B", border: "1px solid #333A47", borderRadius: 6, padding: "8px 10px", marginBottom: 6, fontSize: 13 }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{it.sku}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{it.barcode}</span>
                   <span style={{ color: "#ECEAE3", flex: 1, marginLeft: 8 }}>{it.name}</span>
                   <span style={{ color: "#8B93A3" }}>× {it.qty}</span>
                 </div>
@@ -1189,7 +1209,7 @@ function OrdersView({ token, profile, showToast }) {
 function PickingView({ token, profile, showToast }) {
   const [tasks, setTasks] = useState([]);
   const [orders, setOrders] = useState({});
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState({});
   const [pickers, setPickers] = useState([]);
   const [bins, setBins] = useState({});
   const [taskLines, setTaskLines] = useState({});
@@ -1205,23 +1225,22 @@ function PickingView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [t, o, p, pk, b, tt] = await Promise.all([
+      const [t, o, pk, b, tt] = await Promise.all([
         sb(`/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=neq.completed&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
-      setProducts(p || []);
       setPickers((pk || []).filter(u => ["picker", "packer"].includes(u.role)));
       setBins(Object.fromEntries((b || []).map(x => [x.id, x])));
       setTotes(tt || []);
       const taskIds = (t || []).map(x => x.id);
       if (taskIds.length) {
         const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token });
+        setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, lines.map(l => l.product_id))) }));
         const grouped = {};
         for (const l of lines || []) { (grouped[l.pick_task_id] = grouped[l.pick_task_id] || []).push(l); }
         setTaskLines(grouped);
@@ -1263,14 +1282,15 @@ function PickingView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
-    const p = products.find(x => x.barcode === code || x.sku === code);
+    const c = cleanCode(code);
+    const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
     if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
     const line = openLines.find(l => l.product_id === p.id);
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty_required) { showToast("Required qty already scan ho chuki", "err"); return; }
     setScans({ ...scans, [p.id]: current + 1 });
-    showToast(`Picked: ${p.sku}`);
+    showToast(`Picked: ${p.barcode}`);
   };
 
   const allScanned = openLines.length > 0 && openLines.every(l => (scans[l.product_id] || 0) >= l.qty_required);
@@ -1314,7 +1334,7 @@ function PickingView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Progress</div>
           {openLines.map(l => {
-            const p = products.find(x => x.id === l.product_id);
+            const p = products[l.product_id];
             const bin = bins[l.bin_id];
             const got = scans[l.product_id] || 0;
             const done = got >= l.qty_required;
@@ -1352,7 +1372,7 @@ function PickingView({ token, profile, showToast }) {
                 </div>
                 <div style={{ marginTop: 8 }}>
                   {(taskLines[t.id] || []).map(l => {
-                    const p = products.find(x => x.id === l.product_id);
+                    const p = products[l.product_id];
                     const bin = bins[l.bin_id];
                     return (
                       <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
@@ -1438,7 +1458,7 @@ function PickingView({ token, profile, showToast }) {
 function PackingView({ token, profile, showToast }) {
   const [tasks, setTasks] = useState([]);
   const [orders, setOrders] = useState({});
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState({});
   const [totes, setTotes] = useState([]);
   const [openTote, setOpenTote] = useState(null);
   const [openTask, setOpenTask] = useState(null);
@@ -1450,15 +1470,13 @@ function PackingView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [t, o, p, tt] = await Promise.all([
+      const [t, o, tt] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=*`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
-      setProducts(p || []);
       setTotes(tt || []);
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
@@ -1467,6 +1485,7 @@ function PackingView({ token, profile, showToast }) {
   const openPack = async (task) => {
     const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${task.order_id}&select=*`, { token });
     setRequiredLines(lines || []);
+    setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
     setScans({});
     setOpenTask(task);
   };
@@ -1495,14 +1514,15 @@ function PackingView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
-    const p = products.find(x => x.barcode === code || x.sku === code);
+    const c = cleanCode(code);
+    const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
     if (!p) { showToast("Barcode/SKU match nahi hua — is order ka nahi hai", "err"); return; }
     const line = requiredLines.find(l => l.product_id === p.id);
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
     setScans({ ...scans, [p.id]: current + 1 });
-    showToast(`Scanned: ${p.sku}`);
+    showToast(`Scanned: ${p.barcode}`);
   };
 
   const allScanned = requiredLines.length > 0 && requiredLines.every(l => (scans[l.product_id] || 0) >= l.qty);
@@ -1547,7 +1567,7 @@ function PackingView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Progress</div>
           {requiredLines.map(l => {
-            const p = products.find(x => x.id === l.product_id);
+            const p = products[l.product_id];
             const got = scans[l.product_id] || 0;
             const done = got >= l.qty;
             return (
@@ -1842,7 +1862,7 @@ function UsersView({ token, profile, showToast }) {
 /* ================= RETURNS ================= */
 function ReturnsView({ token, profile, showToast }) {
   const [returns, setReturns] = useState([]);
-  const [products, setProducts] = useState([]);
+  const [products, setProducts] = useState({});
   const [orders, setOrders] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [orderRef, setOrderRef] = useState("");
@@ -1850,21 +1870,19 @@ function ReturnsView({ token, profile, showToast }) {
   const [reason, setReason] = useState("");
   const [openReturn, setOpenReturn] = useState(null);
   const [openLines, setOpenLines] = useState([]);
-  const [lineProduct, setLineProduct] = useState("");
+  const [pendingProduct, setPendingProduct] = useState(null);
   const [lineQty, setLineQty] = useState(1);
   const [lineCondition, setLineCondition] = useState("good");
   const [bins, setBins] = useState([]);
   const [lineBin, setLineBin] = useState("");
-  const [newBinCode, setNewBinCode] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [r, p, o] = await Promise.all([
+      const [r, o] = await Promise.all([
         sb(`/rest/v1/returns?select=*&order=received_at.desc`, { token }),
-        sb(`/rest/v1/products?select=*`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
-      setReturns(r || []); setProducts(p || []); setOrders(o || []);
+      setReturns(r || []); setOrders(o || []);
       setBins(await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || []);
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
@@ -1887,18 +1905,20 @@ function ReturnsView({ token, profile, showToast }) {
   const openReturnDetail = async (ret) => {
     const lines = await sb(`/rest/v1/return_lines?return_id=eq.${ret.id}&select=*`, { token });
     setOpenLines(lines || []);
+    setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
     setOpenReturn(ret);
   };
 
   const addReturnLine = async () => {
-    if (!lineProduct || lineQty <= 0) { showToast("Product select karein", "err"); return; }
+    if (!pendingProduct || lineQty <= 0) { showToast("Product select karein", "err"); return; }
     if (lineCondition === "damaged" && !lineBin) {
       showToast("Damaged item ke liye bin location select karein (Bin Master mein nahi hai to Admin se add karwayein)", "err");
       return;
     }
     try {
-      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: lineProduct, qty: Number(lineQty), condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
-      setLineProduct(""); setLineQty(1); setLineCondition("good"); setLineBin("");
+      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: pendingProduct.id, qty: Number(lineQty), condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
+      setProducts(prev => ({ ...prev, [pendingProduct.id]: pendingProduct }));
+      setPendingProduct(null); setLineQty(1); setLineCondition("good"); setLineBin("");
       openReturnDetail(openReturn);
       load();
     } catch (e) { showToast("Add failed", "err"); }
@@ -1940,10 +1960,10 @@ function ReturnsView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Add item</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <select style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} value={lineProduct} onChange={e => setLineProduct(e.target.value)}>
-              <option value="">Product / SKU</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>)}
-            </select>
+            <ProductPicker token={token} onSelect={(p) => setPendingProduct(p)} />
+            {pendingProduct && (
+              <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{pendingProduct.barcode} — {pendingProduct.name} <span style={{ cursor: "pointer", marginLeft: 6 }} onClick={() => setPendingProduct(null)}>✕</span></span>
+            )}
             <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
             <div style={{ display: "flex", gap: 8 }}>
               {["good", "damaged"].map(c => (
@@ -1964,14 +1984,14 @@ function ReturnsView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Items in this return</div>
           <table>
-            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Condition</th><th style={S.th}>Bin</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Condition</th><th style={S.th}>Bin</th></tr></thead>
             <tbody>
               {openLines.map(l => {
-                const p = products.find(x => x.id === l.product_id);
+                const p = products[l.product_id];
                 const bin = bins.find(b => b.id === l.bin_id);
                 return (
                   <tr key={l.id}>
-                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.sku}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode}</td>
                     <td style={S.td}>{p?.name}</td>
                     <td style={S.td}>{l.qty}</td>
                     <td style={S.td}><span style={{ ...S.badgeSm, color: l.condition === "good" ? "#4CAF7D" : "#E5484D", borderColor: l.condition === "good" ? "#4CAF7D" : "#E5484D" }}>{l.condition}</span></td>
@@ -2206,13 +2226,51 @@ function buildColumnMap(headers) {
   return map;
 }
 function getVal(row, map, field) { return map[field] ? row[map[field]] : undefined; }
-// Builds a product lookup keyed by cleaned barcode AND cleaned SKU, so a match
-// succeeds whichever identifier the uploaded file actually contains.
-function buildProductLookup(products) {
+
+/* ---- Scalable product lookups (never load the full 50k+ catalogue) ---- */
+// Live search for typeahead pickers — server-side, limited results.
+async function searchProducts(token, query, limit = 25) {
+  const q = query.trim();
+  if (!q) return [];
+  const enc = encodeURIComponent(q);
+  return (await sb(`/rest/v1/products?or=(barcode.ilike.*${enc}*,name.ilike.*${enc}*)&select=*&limit=${limit}`, { token })) || [];
+}
+// Exact lookup for a single scanned barcode/SKU.
+async function lookupProductByCode(token, code) {
+  const c = cleanCode(code);
+  if (!c) return null;
+  const enc = encodeURIComponent(c);
+  const rows = await sb(`/rest/v1/products?or=(barcode.eq.${enc},sku.eq.${enc})&select=*&limit=1`, { token });
+  return rows && rows[0] ? rows[0] : null;
+}
+// Fetch only the specific products referenced by a set of ids (for displaying
+// task/line cards) — never the whole catalogue.
+async function fetchProductsByIds(token, ids) {
+  const unique = [...new Set(ids)].filter(Boolean);
+  if (unique.length === 0) return {};
+  const map = {};
+  const CHUNK = 150;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const rows = await sb(`/rest/v1/products?id=in.(${chunk.join(",")})&select=*`, { token });
+    for (const p of rows || []) map[p.id] = p;
+  }
+  return map;
+}
+// Fetch only products matching a set of barcodes (for bulk CSV import matching)
+// — only the barcodes present in the uploaded file, not the whole catalogue.
+async function fetchProductsByBarcodes(token, codes) {
+  const unique = [...new Set(codes.map(cleanCode))].filter(Boolean);
+  if (unique.length === 0) return {};
   const byCode = {};
-  for (const p of products) {
-    if (p.barcode) byCode[cleanCode(p.barcode)] = p;
-    if (p.sku) byCode[cleanCode(p.sku)] = p;
+  const CHUNK = 150;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const rows = await sb(`/rest/v1/products?or=(barcode.in.(${chunk.join(",")}),sku.in.(${chunk.join(",")}))&select=*`, { token });
+    for (const p of rows || []) {
+      if (p.barcode) byCode[cleanCode(p.barcode)] = p;
+      if (p.sku) byCode[cleanCode(p.sku)] = p;
+    }
   }
   return byCode;
 }
@@ -2341,6 +2399,50 @@ function CameraScanButton({ onScan, label }) {
   );
 }
 
+/* ---- Product search typeahead (replaces full-catalogue <select> dropdowns) ---- */
+function ProductPicker({ token, onSelect, placeholder }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const timerRef = useRef(null);
+
+  const doSearch = (val) => {
+    setQ(val);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!val.trim()) { setResults([]); setOpen(false); return; }
+    timerRef.current = setTimeout(async () => {
+      const r = await searchProducts(token, val);
+      setResults(r);
+      setOpen(true);
+    }, 300);
+  };
+
+  const pick = (p) => {
+    onSelect(p);
+    setQ(""); setResults([]); setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative", flex: 2, minWidth: 220 }}>
+      <input style={S.input} placeholder={placeholder || "🔍 Search barcode or product name…"} value={q}
+        onChange={e => doSearch(e.target.value)} onFocus={() => q && results.length && setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)} />
+      {open && (
+        <div style={S.pickerDropdown}>
+          {results.length === 0 ? (
+            <div style={{ padding: "10px 12px", color: "#5A6070", fontSize: 12 }}>No matches</div>
+          ) : results.map(p => (
+            <div key={p.id} style={S.pickerItem} onMouseDown={() => pick(p)}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 12 }}>{p.barcode}</span>
+              <span style={{ color: "#ECEAE3", marginLeft: 8, fontSize: 13 }}>{p.name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================= helpers ================= */
 // Add/subtract on-hand qty at a SPECIFIC bin (or the "unassigned" row when binId is null).
 async function addOnHand(token, warehouseId, productId, binId, qtyDelta) {
@@ -2412,6 +2514,8 @@ const S = {
   scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
   scanModal: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 12, padding: 16, width: "100%", maxWidth: 420 },
   iconBtnCircle: { background: "#14161B", border: "1px solid #333A47", color: "#8B93A3", borderRadius: "50%", width: 26, height: 26, cursor: "pointer" },
+  pickerDropdown: { position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#1D2129", border: "1px solid #333A47", borderRadius: 6, maxHeight: 220, overflowY: "auto", zIndex: 50, boxShadow: "0 8px 20px rgba(0,0,0,0.4)" },
+  pickerItem: { padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #262B35" },
   app: { display: "flex", height: "100vh", background: "#14161B", fontFamily: "'Space Grotesk', sans-serif", overflow: "hidden" },
   sidebar: { width: 210, background: "#1D2129", borderRight: "1px solid #333A47", display: "flex", flexDirection: "column", flexShrink: 0 },
   main: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0 },
