@@ -429,6 +429,7 @@ function ReceivingView({ token, profile, showToast }) {
   const [pendingProduct, setPendingProduct] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
+  const [grnReport, setGrnReport] = useState(null);
   const [grnLineStats, setGrnLineStats] = useState({});
   const load = useCallback(async () => {
     try {
@@ -458,7 +459,7 @@ function ReceivingView({ token, profile, showToast }) {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
-    setImporting(true); setImportSummary(null);
+    setImporting(true); setImportSummary(null); setGrnReport(null);
     try {
       const rows = await parseSheet(file);
       if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
@@ -468,45 +469,63 @@ function ReceivingView({ token, profile, showToast }) {
       const fileBarcodes = rows.map(r => getVal(r, map, "barcode"));
       const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
 
-      const groups = {};
-      for (const row of rows) {
-        const ref = cleanCode(getVal(row, map, "reference"));
-        if (!ref) continue;
-        if (!groups[ref]) groups[ref] = [];
-        groups[ref].push(row);
+      // check for lines already imported against the same GRN reference (avoid duplicate processing)
+      const fileRefs = [...new Set(rows.map(r => cleanCode(getVal(r, map, "reference"))).filter(Boolean))];
+      const existingGrns = fileRefs.length ? await sb(`/rest/v1/grn?grn_number=in.(${fileRefs.join(",")})&select=id,grn_number`, { token }) : [];
+      const existingGroupLines = {};
+      if (existingGrns && existingGrns.length) {
+        const grnIds = existingGrns.map(g => g.id);
+        const existLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${grnIds.join(",")})&select=grn_id,product_id`, { token });
+        const idToRef = Object.fromEntries(existingGrns.map(g => [g.id, g.grn_number]));
+        const prodBarcode = {}; // product_id -> barcode, from productMap values
+        for (const p of Object.values(productMap)) prodBarcode[p.id] = cleanCode(p.barcode || p.sku);
+        for (const l of existLines || []) {
+          const ref = idToRef[l.grn_id];
+          const bc = prodBarcode[l.product_id];
+          if (ref && bc) existingGroupLines[`${ref}|${bc}`] = true;
+        }
       }
 
+      const report = validateImportRows(rows, map, productMap, "reference", existingGroupLines);
+      setGrnReport({ report, map });
+      showToast(`Validated: ${report.validRows.length} valid, ${report.invalidRows.length} invalid`);
+    } catch (err) { showToast(`Validation failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  const confirmGrnImport = async () => {
+    if (!grnReport) return;
+    setImporting(true);
+    try {
+      const groups = {};
+      for (const r of grnReport.report.validRows) {
+        if (!groups[r.groupVal]) groups[r.groupVal] = [];
+        groups[r.groupVal].push(r);
+      }
       const existingGrns = await sb(`/rest/v1/grn?select=id,grn_number`, { token });
       const grnMap = Object.fromEntries((existingGrns || []).map(g => [g.grn_number, g.id]));
 
       let grnsCreated = 0, linesAdded = 0;
-      const missing = new Set();
-
       for (const [ref, groupRows] of Object.entries(groups)) {
         let grnId = grnMap[ref];
         if (!grnId) {
-          const first = groupRows[0];
           const created = await sb(`/rest/v1/grn`, {
             method: "POST", token, prefer: "return=representation",
-            body: { grn_number: ref, warehouse_id: profile.warehouse_id, source: String(getVal(first, map, "contact") || getVal(first, map, "sourceDocument") || "").trim(), status: "open" }
+            body: { grn_number: ref, warehouse_id: profile.warehouse_id, source: "", status: "open" }
           });
           grnId = created[0].id;
           grnMap[ref] = grnId;
           grnsCreated++;
         }
-        for (const row of groupRows) {
-          const barcode = cleanCode(getVal(row, map, "barcode"));
-          const qty = Number(getVal(row, map, "qty")) || 0;
-          if (!barcode || qty <= 0) continue;
-          const product = productMap[barcode];
-          if (!product) { missing.add(barcode); continue; }
-          await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: grnId, product_id: product.id, qty_expected: qty } });
+        for (const r of groupRows) {
+          await sb(`/rest/v1/grn_lines`, { method: "POST", token, body: { grn_id: grnId, product_id: r.product.id, qty_expected: r.qty } });
           linesAdded++;
         }
       }
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn", entity_id: profile.id, user_id: profile.id, action: `bulk_import_${grnsCreated}_grns` } });
-      setImportSummary(`${grnsCreated} GRN(s) created, ${linesAdded} lines added.${missing.size ? ` ⚠ ${missing.size} barcode(s) not in catalogue: ${[...missing].slice(0, 10).join(", ")}${missing.size > 10 ? "…" : ""}` : ""}`);
+      setImportSummary(`${grnsCreated} GRN(s) created, ${linesAdded} lines added.`);
       showToast(`Import done — ${grnsCreated} GRNs, ${linesAdded} lines`);
+      setGrnReport(null);
       load();
     } catch (err) { showToast(`Import failed: ${(err.message || "").slice(0, 100)}`, "err"); }
     setImporting(false);
@@ -605,6 +624,11 @@ function ReceivingView({ token, profile, showToast }) {
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
+      {grnReport && (
+        <ImportReportPanel report={grnReport.report} importing={importing}
+          onConfirm={confirmGrnImport} onCancel={() => setGrnReport(null)} confirmLabel="Confirm & import GRNs" />
+      )}
+      {!grnReport && (
       <div style={S.panel}>
         <div style={S.panelTitle}>New GRN</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -613,6 +637,7 @@ function ReceivingView({ token, profile, showToast }) {
           <button style={S.primaryBtnSm} onClick={createGrn}>+ Create GRN</button>
         </div>
       </div>
+      )}
       <div style={S.panel}>
         <table>
           <thead>
@@ -909,6 +934,7 @@ function OrdersView({ token, profile, showToast }) {
   const [profiles, setProfiles] = useState({});
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
+  const [ordersReport, setOrdersReport] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -962,7 +988,7 @@ function OrdersView({ token, profile, showToast }) {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
-    setImporting(true); setImportSummary(null);
+    setImporting(true); setImportSummary(null); setOrdersReport(null);
     try {
       const rows = await parseSheet(file);
       if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
@@ -972,42 +998,58 @@ function OrdersView({ token, profile, showToast }) {
       const fileBarcodes = rows.map(r => getVal(r, map, "barcode"));
       const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
 
-      const groups = {};
+      // orders already imported (whole order, not per-line) count as duplicates
+      const fileRefs = [...new Set(rows.map(r => cleanCode(getVal(r, map, "orderRef"))).filter(Boolean))];
+      const existing = fileRefs.length ? await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&external_order_id=in.(${fileRefs.join(",")})&select=external_order_id`, { token }) : [];
+      const existingOrderSet = new Set((existing || []).map(o => o.external_order_id));
+      const existingGroupLines = {};
       for (const row of rows) {
         const ref = cleanCode(getVal(row, map, "orderRef"));
-        if (!ref) continue;
-        if (!groups[ref]) groups[ref] = [];
-        groups[ref].push(row);
+        const bc = cleanCode(getVal(row, map, "barcode"));
+        if (ref && existingOrderSet.has(ref)) existingGroupLines[`${ref}|${bc}`] = true;
       }
 
-      const existing = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=external_order_id`, { token });
-      const existingSet = new Set((existing || []).map(o => o.external_order_id));
+      const report = validateImportRows(rows, map, productMap, "orderRef", existingGroupLines);
+      const extra = {}; // per-order courier/customer captured from first valid row of each group
+      for (const r of report.validRows) {
+        if (!extra[r.groupVal]) {
+          const srcRow = rows.find(row => cleanCode(getVal(row, map, "orderRef")) === r.groupVal);
+          extra[r.groupVal] = { courier: String(getVal(srcRow, map, "courier") || "Other").trim(), customer: getVal(srcRow, map, "customer") || null };
+        }
+      }
+      setOrdersReport({ report, extra });
+      showToast(`Validated: ${report.validRows.length} valid, ${report.invalidRows.length} invalid`);
+    } catch (err) { showToast(`Validation failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
 
-      let ordersCreated = 0, linesAdded = 0, ordersSkipped = 0;
-      const missing = new Set();
-
+  const confirmOrdersImport = async () => {
+    if (!ordersReport) return;
+    setImporting(true);
+    try {
+      const groups = {};
+      for (const r of ordersReport.report.validRows) {
+        if (!groups[r.groupVal]) groups[r.groupVal] = [];
+        groups[r.groupVal].push(r);
+      }
+      let ordersCreated = 0, linesAdded = 0;
       for (const [ref, groupRows] of Object.entries(groups)) {
-        if (existingSet.has(ref)) { ordersSkipped++; continue; }
-        const first = groupRows[0];
+        const meta = ordersReport.extra[ref] || {};
         const created = await sb(`/rest/v1/sales_orders`, {
           method: "POST", token, prefer: "return=representation",
-          body: { external_order_id: ref, courier: String(getVal(first, map, "courier") || "Other").trim(), warehouse_id: profile.warehouse_id, status: "received", raw_data: { customer: getVal(first, map, "customer") || null } }
+          body: { external_order_id: ref, courier: meta.courier || "Other", warehouse_id: profile.warehouse_id, status: "received", raw_data: { customer: meta.customer || null } }
         });
         const orderId = created[0].id;
         ordersCreated++;
-        for (const row of groupRows) {
-          const barcode = cleanCode(getVal(row, map, "barcode"));
-          const qty = Number(getVal(row, map, "qty")) || 0;
-          if (!barcode || qty <= 0) continue;
-          const product = productMap[barcode];
-          if (!product) { missing.add(barcode); continue; }
-          await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: orderId, product_id: product.id, qty } });
+        for (const r of groupRows) {
+          await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: orderId, product_id: r.product.id, qty: r.qty } });
           linesAdded++;
         }
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "created_bulk_import" } });
       }
-      setImportSummary(`${ordersCreated} order(s) created, ${linesAdded} lines added, ${ordersSkipped} skipped (already exist).${missing.size ? ` ⚠ ${missing.size} barcode(s) not in catalogue: ${[...missing].slice(0, 10).join(", ")}${missing.size > 10 ? "…" : ""}` : ""}`);
+      setImportSummary(`${ordersCreated} order(s) created, ${linesAdded} lines added.`);
       showToast(`Import done — ${ordersCreated} orders, ${linesAdded} lines`);
+      setOrdersReport(null);
       load();
     } catch (err) { showToast(`Import failed: ${(err.message || "").slice(0, 100)}`, "err"); }
     setImporting(false);
@@ -1105,7 +1147,11 @@ function OrdersView({ token, profile, showToast }) {
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
-      {showForm && (
+      {ordersReport && (
+        <ImportReportPanel report={ordersReport.report} importing={importing}
+          onConfirm={confirmOrdersImport} onCancel={() => setOrdersReport(null)} confirmLabel="Confirm & import orders" />
+      )}
+      {!ordersReport && showForm && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Create order (manual entry — courier integration comes later)</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
@@ -2279,6 +2325,50 @@ async function fetchProductsByBarcodes(token, codes) {
   return byCode;
 }
 
+// Validates every row of an uploaded file WITHOUT writing anything to the
+// database. Returns a report the user must review/confirm before import.
+function validateImportRows(rows, map, productLookup, groupField, existingGroupLines) {
+  const results = [];
+  const seenInFile = new Set();
+  rows.forEach((row, i) => {
+    const errors = [];
+    const groupVal = cleanCode(getVal(row, map, groupField));
+    const barcode = cleanCode(getVal(row, map, "barcode"));
+    const qtyRaw = getVal(row, map, "qty");
+    const qty = Number(qtyRaw);
+    const product = barcode ? productLookup[barcode] : null;
+
+    if (!groupVal) errors.push("Missing reference/tracking number");
+    if (!barcode) errors.push("Missing barcode");
+    else if (!product) errors.push("Barcode not found in Product Master");
+    if (qtyRaw === undefined || qtyRaw === "" || isNaN(qty) || qty <= 0) errors.push("Invalid quantity");
+
+    const lineKey = `${groupVal}|${barcode}`;
+    if (groupVal && barcode) {
+      if (seenInFile.has(lineKey)) errors.push("Duplicate line in this file");
+      else seenInFile.add(lineKey);
+      if (existingGroupLines && existingGroupLines[lineKey]) errors.push("Already exists (previously imported)");
+    }
+
+    results.push({
+      rowNum: i + 2, // +2 = header row + 1-indexing, matches what user sees in Excel
+      groupVal, barcode, qty: isNaN(qty) ? 0 : qty, product,
+      errors, valid: errors.length === 0
+    });
+  });
+
+  const validRows = results.filter(r => r.valid);
+  const invalidRows = results.filter(r => !r.valid);
+  return {
+    total: results.length,
+    validRows, invalidRows,
+    invalidBarcodeCount: results.filter(r => r.errors.includes("Barcode not found in Product Master")).length,
+    invalidQtyCount: results.filter(r => r.errors.includes("Invalid quantity")).length,
+    duplicateCount: results.filter(r => r.errors.some(e => e.startsWith("Duplicate") || e.startsWith("Already exists"))).length,
+    missingRefCount: results.filter(r => r.errors.includes("Missing reference/tracking number")).length
+  };
+}
+
 
 /* ================= BIN MASTER (ADMIN ONLY) ================= */
 function BinsView({ token, profile, showToast }) {
@@ -2443,6 +2533,50 @@ function ProductPicker({ token, onSelect, placeholder }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---- Bulk import validation report UI (reused by GRN + Sales Order uploads) ---- */
+function ImportReportPanel({ report, onConfirm, onCancel, importing, confirmLabel }) {
+  return (
+    <div style={S.panel}>
+      <div style={S.panelTitle}>Upload validation report</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 }}>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#ECEAE3" }}>{report.total}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Total rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#4CAF7D" }}>{report.validRows.length}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Valid rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#E5484D" }}>{report.invalidRows.length}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Invalid rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.invalidBarcodeCount}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Barcode not found</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.duplicateCount}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Duplicates</div></div>
+      </div>
+
+      {report.invalidRows.length > 0 && (
+        <>
+          <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 8 }}>⚠ Invalid rows will NOT be imported — inhe file mein fix kar ke dobara upload karein.</div>
+          <table>
+            <thead><tr><th style={S.th}>Row #</th><th style={S.th}>Reference</th><th style={S.th}>Barcode</th><th style={S.th}>Qty</th><th style={S.th}>Error</th></tr></thead>
+            <tbody>
+              {report.invalidRows.slice(0, 100).map((r, i) => (
+                <tr key={i}>
+                  <td style={S.td}>{r.rowNum}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{r.groupVal || "—"}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{r.barcode || "—"}</td>
+                  <td style={S.td}>{r.qty || "—"}</td>
+                  <td style={{ ...S.td, color: "#E5484D" }}>{r.errors.join(", ")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {report.invalidRows.length > 100 && <div style={{ color: "#5A6070", fontSize: 11, marginTop: 6 }}>+{report.invalidRows.length - 100} more invalid rows not shown</div>}
+        </>
+      )}
+
+      <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+        <button style={S.primaryBtnSm} onClick={onConfirm} disabled={importing || report.validRows.length === 0}>
+          {importing ? "Importing…" : `✓ ${confirmLabel || "Confirm & import valid rows"} (${report.validRows.length})`}
+        </button>
+        <button style={S.secondaryBtnSm} onClick={onCancel} disabled={importing}>Cancel</button>
+      </div>
     </div>
   );
 }
