@@ -1043,7 +1043,8 @@ function OrdersView({ token, profile, showToast }) {
     ]);
     setOpenLines(lines || []);
     setOpenEvents(events || []);
-    setProductCache(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
+    const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
+    setProductCache(prev => ({ ...prev, ...newProducts }));
     setOpenOrder(order);
   };
 
@@ -1240,7 +1241,8 @@ function PickingView({ token, profile, showToast }) {
       const taskIds = (t || []).map(x => x.id);
       if (taskIds.length) {
         const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token });
-        setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, lines.map(l => l.product_id))) }));
+        const newProducts = await fetchProductsByIds(token, lines.map(l => l.product_id));
+        setProducts(prev => ({ ...prev, ...newProducts }));
         const grouped = {};
         for (const l of lines || []) { (grouped[l.pick_task_id] = grouped[l.pick_task_id] || []).push(l); }
         setTaskLines(grouped);
@@ -1485,7 +1487,8 @@ function PackingView({ token, profile, showToast }) {
   const openPack = async (task) => {
     const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${task.order_id}&select=*`, { token });
     setRequiredLines(lines || []);
-    setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
+    const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
+    setProducts(prev => ({ ...prev, ...newProducts }));
     setScans({});
     setOpenTask(task);
   };
@@ -1905,7 +1908,8 @@ function ReturnsView({ token, profile, showToast }) {
   const openReturnDetail = async (ret) => {
     const lines = await sb(`/rest/v1/return_lines?return_id=eq.${ret.id}&select=*`, { token });
     setOpenLines(lines || []);
-    setProducts(prev => ({ ...prev, ...(await fetchProductsByIds(token, (lines || []).map(l => l.product_id))) }));
+    const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
+    setProducts(prev => ({ ...prev, ...newProducts }));
     setOpenReturn(ret);
   };
 
