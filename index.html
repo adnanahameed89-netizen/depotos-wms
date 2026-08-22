@@ -471,7 +471,7 @@ function ReceivingView({ token, profile, showToast }) {
 
       // check for lines already imported against the same GRN reference (avoid duplicate processing)
       const fileRefs = [...new Set(rows.map(r => cleanCode(getVal(r, map, "reference"))).filter(Boolean))];
-      const existingGrns = fileRefs.length ? await sb(`/rest/v1/grn?grn_number=in.(${fileRefs.join(",")})&select=id,grn_number`, { token }) : [];
+      const existingGrns = fileRefs.length ? await sb(`/rest/v1/grn?grn_number=in.(${fileRefs.map(encodeURIComponent).join(",")})&select=id,grn_number`, { token }) : [];
       const existingGroupLines = {};
       if (existingGrns && existingGrns.length) {
         const grnIds = existingGrns.map(g => g.id);
@@ -1000,7 +1000,7 @@ function OrdersView({ token, profile, showToast }) {
 
       // orders already imported (whole order, not per-line) count as duplicates
       const fileRefs = [...new Set(rows.map(r => cleanCode(getVal(r, map, "orderRef"))).filter(Boolean))];
-      const existing = fileRefs.length ? await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&external_order_id=in.(${fileRefs.join(",")})&select=external_order_id`, { token }) : [];
+      const existing = fileRefs.length ? await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&external_order_id=in.(${fileRefs.map(encodeURIComponent).join(",")})&select=external_order_id`, { token }) : [];
       const existingOrderSet = new Set((existing || []).map(o => o.external_order_id));
       const existingGroupLines = {};
       for (const row of rows) {
@@ -2302,7 +2302,7 @@ async function fetchProductsByIds(token, ids) {
   const CHUNK = 150;
   for (let i = 0; i < unique.length; i += CHUNK) {
     const chunk = unique.slice(i, i + CHUNK);
-    const rows = await sb(`/rest/v1/products?id=in.(${chunk.join(",")})&select=*`, { token });
+    const rows = await sb(`/rest/v1/products?id=in.(${chunk.map(encodeURIComponent).join(",")})&select=*`, { token });
     for (const p of rows || []) map[p.id] = p;
   }
   return map;
@@ -2316,7 +2316,7 @@ async function fetchProductsByBarcodes(token, codes) {
   const CHUNK = 150;
   for (let i = 0; i < unique.length; i += CHUNK) {
     const chunk = unique.slice(i, i + CHUNK);
-    const rows = await sb(`/rest/v1/products?or=(barcode.in.(${chunk.join(",")}),sku.in.(${chunk.join(",")}))&select=*`, { token });
+    const rows = await sb(`/rest/v1/products?or=(barcode.in.(${chunk.map(encodeURIComponent).join(",")}),sku.in.(${chunk.map(encodeURIComponent).join(",")}))&select=*`, { token });
     for (const p of rows || []) {
       if (p.barcode) byCode[cleanCode(p.barcode)] = p;
       if (p.sku) byCode[cleanCode(p.sku)] = p;
