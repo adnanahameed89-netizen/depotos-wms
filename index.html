@@ -1263,6 +1263,7 @@ function PickingView({ token, profile, showToast }) {
   const [totes, setTotes] = useState([]);
   const [selectedForTote, setSelectedForTote] = useState({});
   const [toteAssignPicker, setToteAssignPicker] = useState("");
+  const [selectedToteId, setSelectedToteId] = useState("");
   const [openTote, setOpenTote] = useState(null);
   const [openTask, setOpenTask] = useState(null);
   const [openLines, setOpenLines] = useState([]);
@@ -1277,7 +1278,7 @@ function PickingView({ token, profile, showToast }) {
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=neq.completed&select=*`, { token })
+        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
@@ -1299,25 +1300,23 @@ function PickingView({ token, profile, showToast }) {
 
   const queuedTasks = tasks.filter(t => t.status === "queued" && !t.tote_id);
   const selectedCount = Object.values(selectedForTote).filter(Boolean).length;
+  const availableTotes = totes.filter(t => t.status === "open");
 
   const createTote = async () => {
     const ids = Object.keys(selectedForTote).filter(k => selectedForTote[k]);
     if (ids.length === 0 || ids.length > 15) { showToast("1 se 15 orders select karein", "err"); return; }
     if (!toteAssignPicker) { showToast("Picker select karein", "err"); return; }
+    if (!selectedToteId) { showToast("Tote select karein — koi available nahi hai to admin se check karwayein", "err"); return; }
     try {
-      const toteNumber = `TOTE-${Date.now().toString().slice(-6)}`;
-      const created = await sb(`/rest/v1/totes`, {
-        method: "POST", token, prefer: "return=representation",
-        body: { tote_number: toteNumber, warehouse_id: profile.warehouse_id, assigned_to: toteAssignPicker, status: "picking" }
-      });
-      const toteId = created[0].id;
+      await sb(`/rest/v1/totes?id=eq.${selectedToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: toteAssignPicker } });
       for (const id of ids) {
-        await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: toteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString() } });
+        await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: selectedToteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString() } });
       }
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: toteId, user_id: profile.id, action: "created", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
-      showToast(`${toteNumber} created with ${ids.length} orders`);
-      setSelectedForTote({}); setToteAssignPicker(""); load();
-    } catch (e) { showToast("Tote creation failed", "err"); }
+      const toteNumber = totes.find(t => t.id === selectedToteId)?.tote_number;
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: selectedToteId, user_id: profile.id, action: "assigned", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
+      showToast(`${toteNumber} assigned with ${ids.length} orders`);
+      setSelectedForTote({}); setToteAssignPicker(""); setSelectedToteId(""); load();
+    } catch (e) { showToast("Tote assignment failed", "err"); }
   };
 
   const openPickTask = (task) => {
@@ -1471,12 +1470,19 @@ function PickingView({ token, profile, showToast }) {
             </div>
           )}
           <div style={S.panel}>
+            {availableTotes.length === 0 && (
+              <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ Koi available tote nahi hai — sab totes use mein hain, ya Admin ne abhi tote master seed nahi ki.</div>
+            )}
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
+              <select style={{ ...S.input, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} value={selectedToteId} onChange={e => setSelectedToteId(e.target.value)}>
+                <option value="">🧺 Select tote…</option>
+                {availableTotes.map(t => <option key={t.id} value={t.id}>{t.tote_number}</option>)}
+              </select>
               <select style={{ ...S.input, minWidth: 180 }} value={toteAssignPicker} onChange={e => setToteAssignPicker(e.target.value)}>
-                <option value="">Assign tote to…</option>
+                <option value="">Assign to…</option>
                 {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
               </select>
-              <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0 || selectedCount > 15}>🧺 Create tote & assign</button>
+              <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0 || selectedCount > 15}>Assign tote</button>
             </div>
             <table>
               <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th></tr></thead>
@@ -1589,8 +1595,8 @@ function PackingView({ token, profile, showToast }) {
     if (openTask.tote_id) {
       const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=id`, { token });
       if (!remaining || remaining.length === 0) {
-        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString() } });
-        showToast("Tote fully packed — all orders RTD");
+        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, completed_at: new Date().toISOString() } });
+        showToast("Tote fully packed — all orders RTD, trolley ab dobara available hai");
         setOpenTote(null);
       }
     }
