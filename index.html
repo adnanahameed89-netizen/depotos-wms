@@ -104,6 +104,7 @@ function App() {
           {view === "returns" && <ReturnsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
         </div>
       </div>
       {toast && <Toast toast={toast} />}
@@ -153,7 +154,7 @@ function Sidebar({ view, setView, profile, onLogout }) {
     { id: "packing", label: "Packing", icon: "🏷" },
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
-  const visibleItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "users", label: "Users", icon: "👥" }]
+  const visibleItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
     : ["warehouse_lead", "supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
   return (
@@ -2498,6 +2499,69 @@ function BinsView({ token, profile, showToast }) {
           </div>
         ))}
         {bins.length === 0 && <EmptyNote text="Koi bin location nahi hai — upload karein ya manually add karein." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= TOTE MASTER (ADMIN ONLY) ================= */
+function ToteMasterView({ token, profile, showToast }) {
+  const [totes, setTotes] = useState([]);
+  const [profiles, setProfiles] = useState({});
+  const [newCode, setNewCode] = useState("");
+
+  const load = useCallback(async () => {
+    const [tt, pf] = await Promise.all([
+      sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&select=*&order=tote_number.asc`, { token }),
+      sb(`/rest/v1/profiles?select=*`, { token })
+    ]);
+    setTotes(tt || []);
+    setProfiles(Object.fromEntries((pf || []).map(p => [p.id, p])));
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const addTote = async () => {
+    if (!newCode.trim()) return;
+    try {
+      await sb(`/rest/v1/totes`, { method: "POST", token, body: { tote_number: newCode.trim(), warehouse_id: profile.warehouse_id, status: "open" } });
+      setNewCode(""); showToast("Tote added"); load();
+    } catch (e) { showToast("Tote already exists", "err"); }
+  };
+
+  const forceRelease = async (tote) => {
+    try {
+      await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "force_released" } });
+      showToast(`${tote.tote_number} force-released`); load();
+    } catch (e) { showToast("Release failed", "err"); }
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Tote Master (physical trolleys)" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Add tote</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input style={{ ...S.input, maxWidth: 200 }} placeholder="e.g. TOT-9" value={newCode} onChange={e => setNewCode(e.target.value)} />
+          <button style={S.primaryBtnSm} onClick={addTote}>+ Add</button>
+        </div>
+      </div>
+      <div style={S.cardGrid}>
+        {totes.map(t => (
+          <div key={t.id} style={S.card}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{t.tote_number}</span>
+              <span style={{ ...S.badgeSm, color: t.status === "open" ? "#4CAF7D" : "#5B9EE8", borderColor: t.status === "open" ? "#4CAF7D" : "#5B9EE8" }}>{t.status}</span>
+            </div>
+            <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>
+              {t.assigned_to ? `With: ${profiles[t.assigned_to]?.full_name || "—"}` : "Unassigned"}
+            </div>
+            {t.status !== "open" && (
+              <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => forceRelease(t)}>🔓 Force release</button>
+            )}
+          </div>
+        ))}
+        {totes.length === 0 && <EmptyNote text="Koi tote nahi hai — upar se add karein." />}
       </div>
     </div>
   );
