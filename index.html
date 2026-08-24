@@ -935,12 +935,21 @@ function OrdersView({ token, profile, showToast }) {
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
   const [ordersReport, setOrdersReport] = useState(null);
+  const [selectedOrders, setSelectedOrders] = useState({});
+  const [totes, setTotes] = useState([]);
+  const [pickers, setPickers] = useState([]);
+  const [bulkToteId, setBulkToteId] = useState("");
+  const [bulkPickerId, setBulkPickerId] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const o = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
       setOrders(o || []);
-      setProfiles(Object.fromEntries((await sb(`/rest/v1/profiles?select=*`, { token }) || []).map(u => [u.id, u])));
+      const profs = await sb(`/rest/v1/profiles?select=*`, { token }) || [];
+      setProfiles(Object.fromEntries(profs.map(u => [u.id, u])));
+      setPickers(profs.filter(u => ["picker", "packer"].includes(u.role) && u.warehouse_id === profile.warehouse_id));
+      setTotes(await sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.open&select=*`, { token }) || []);
       const ids = (o || []).map(x => x.id);
       if (ids.length) {
         const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
@@ -954,6 +963,45 @@ function OrdersView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+
+  const receivedOrders = orders.filter(o => o.status === "received");
+  const selectedCount = Object.values(selectedOrders).filter(Boolean).length;
+  const toggleAll = (checked) => setSelectedOrders(Object.fromEntries(receivedOrders.map(o => [o.id, checked])));
+
+  const bulkReserveAndAssign = async () => {
+    const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k]);
+    if (ids.length === 0 || ids.length > 15) { showToast("1 se 15 orders select karein", "err"); return; }
+    if (!bulkToteId || !bulkPickerId) { showToast("Tote aur Picker select karein", "err"); return; }
+    setBulkBusy(true);
+    try {
+      await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
+      let shortageAny = false;
+      for (const orderId of ids) {
+        const order = orders.find(o => o.id === orderId);
+        const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
+        let shortage = false;
+        const lineBins = {};
+        for (const l of lines) {
+          const summary = await getStockSummary(token, profile.warehouse_id, l.product_id);
+          if (summary.available < l.qty) shortage = true;
+          const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
+          lineBins[l.product_id] = bestBin ? bestBin.bin_id : null;
+          await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
+        }
+        if (shortage) shortageAny = true;
+        const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString() } });
+        for (const l of lines) {
+          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: l.product_id, qty_required: l.qty, bin_id: lineBins[l.product_id] || null } });
+        }
+        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "queued" } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "reserved_and_assigned_to_tote" } });
+      }
+      showToast(shortageAny ? "Assigned — kuch lines mein stock kam hai" : `${ids.length} orders picker ko assign ho gaye`);
+      setSelectedOrders({}); setBulkToteId(""); setBulkPickerId("");
+      load();
+    } catch (e) { showToast(`Assign failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+    setBulkBusy(false);
+  };
 
   const addLine = () => {
     if (!pendingProduct) { showToast("Product select karein", "err"); return; }
@@ -1215,10 +1263,33 @@ function OrdersView({ token, profile, showToast }) {
         );
       })()}
 
+      {receivedOrders.length > 0 && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Bulk assign to picker ({selectedCount}/15 selected)</div>
+          {totes.length === 0 && (
+            <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ Koi available tote nahi hai — Admin se Tote Master check karwayein.</div>
+          )}
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <select style={{ ...S.input, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} value={bulkToteId} onChange={e => setBulkToteId(e.target.value)}>
+              <option value="">🧺 Select tote…</option>
+              {totes.map(t => <option key={t.id} value={t.id}>{t.tote_number}</option>)}
+            </select>
+            <select style={{ ...S.input, minWidth: 180 }} value={bulkPickerId} onChange={e => setBulkPickerId(e.target.value)}>
+              <option value="">Assign to…</option>
+              {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+            </select>
+            <button style={S.primaryBtnSm} onClick={bulkReserveAndAssign} disabled={bulkBusy || selectedCount === 0 || selectedCount > 15}>
+              {bulkBusy ? "Assigning…" : `Reserve & Assign (${selectedCount})`}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div style={S.panel}>
         <table>
           <thead>
             <tr>
+              <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === receivedOrders.length} /></th>
               <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
               <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Received</th><th style={S.th}></th>
             </tr>
@@ -1228,6 +1299,11 @@ function OrdersView({ token, profile, showToast }) {
               const stat = lineStats[o.id] || { count: 0, qty: 0 };
               return (
                 <tr key={o.id} style={{ cursor: "pointer" }} onClick={() => openOrderDetail(o)}>
+                  <td style={S.td} onClick={e => e.stopPropagation()}>
+                    {o.status === "received" && (
+                      <input type="checkbox" checked={!!selectedOrders[o.id]} onChange={e => setSelectedOrders({ ...selectedOrders, [o.id]: e.target.checked })} />
+                    )}
+                  </td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
                   <td style={S.td}>{o.courier}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{o.status}</span></td>
@@ -1236,14 +1312,14 @@ function OrdersView({ token, profile, showToast }) {
                   <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
                   <td style={S.td}>
                     {o.status === "received" && (
-                      <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve & Queue</button>
+                      <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve only</button>
                     )}
                   </td>
                 </tr>
               );
             })}
             {orders.filter(o => !statusFilter || o.status === statusFilter).length === 0 && (
-              <tr><td colSpan={7}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
+              <tr><td colSpan={8}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
             )}
           </tbody>
         </table>
@@ -1265,9 +1341,8 @@ function PickingView({ token, profile, showToast }) {
   const [toteAssignPicker, setToteAssignPicker] = useState("");
   const [selectedToteId, setSelectedToteId] = useState("");
   const [openTote, setOpenTote] = useState(null);
-  const [openTask, setOpenTask] = useState(null);
-  const [openLines, setOpenLines] = useState([]);
-  const [scans, setScans] = useState({});
+  const [consolidated, setConsolidated] = useState([]);
+  const [toteScans, setToteScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
   const canBatch = ["admin", "supervisor", "warehouse_lead"].includes(profile.role);
 
@@ -1319,120 +1394,99 @@ function PickingView({ token, profile, showToast }) {
     } catch (e) { showToast("Tote assignment failed", "err"); }
   };
 
-  const openPickTask = (task) => {
-    setOpenLines(taskLines[task.id] || []);
-    setScans({});
-    setOpenTask(task);
+  const openToteDetail = (tote) => {
+    const toteTasks = tasks.filter(t => t.tote_id === tote.id);
+    const groups = {};
+    for (const t of toteTasks) {
+      for (const l of (taskLines[t.id] || [])) {
+        const key = `${l.bin_id || "none"}|${l.product_id}`;
+        if (!groups[key]) groups[key] = { bin_id: l.bin_id, product_id: l.product_id, required: 0, refs: [] };
+        groups[key].required += l.qty_required;
+        groups[key].refs.push({ pick_task_id: t.id, order_id: t.order_id, line_id: l.id, qty_required: l.qty_required });
+      }
+    }
+    const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
+    setConsolidated(list);
+    setToteScans({});
+    setOpenTote(tote);
   };
 
-  const scanBarcode = (codeArg) => {
+  const scanToteBarcode = (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
     const c = cleanCode(code);
     const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
     if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
-    const line = openLines.find(l => l.product_id === p.id);
-    if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
-    const current = scans[p.id] || 0;
-    if (current >= line.qty_required) { showToast("Required qty already scan ho chuki", "err"); return; }
-    setScans({ ...scans, [p.id]: current + 1 });
+    const group = consolidated.find(g => g.product_id === p.id && (toteScans[`${g.bin_id}|${g.product_id}`] || 0) < g.required);
+    if (!group) { showToast("Yeh product is tote mein nahi hai ya already complete — WRONG ITEM", "err"); return; }
+    const key = `${group.bin_id}|${group.product_id}`;
+    setToteScans({ ...toteScans, [key]: (toteScans[key] || 0) + 1 });
     showToast(`Picked: ${p.barcode}`);
   };
 
-  const allScanned = openLines.length > 0 && openLines.every(l => (scans[l.product_id] || 0) >= l.qty_required);
+  const allToteScanned = consolidated.length > 0 && consolidated.every(g => (toteScans[`${g.bin_id}|${g.product_id}`] || 0) >= g.required);
 
-  const completePick = async () => {
+  const completeTotePicking = async () => {
     try {
-      for (const l of openLines) {
-        await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: scans[l.product_id] || 0 } });
+      for (const g of consolidated) {
+        const key = `${g.bin_id}|${g.product_id}`;
+        let remaining = toteScans[key] || 0;
+        for (const ref of g.refs) {
+          const alloc = Math.min(ref.qty_required, remaining);
+          await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: alloc } });
+          remaining -= alloc;
+        }
       }
-      await sb(`/rest/v1/pick_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: openTask.order_id, status: "pending", tote_id: openTask.tote_id || null } });
-      await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "picking" } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: openTask.id, user_id: profile.id, action: "completed" } });
-
-      const remaining = await sb(`/rest/v1/pick_tasks?tote_id=eq.${openTask.tote_id}&status=neq.picked&select=id`, { token });
-      if (openTask.tote_id && (!remaining || remaining.length === 0)) {
-        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-        showToast("Tote fully picked — ready for packer");
-        setOpenTote(null);
+      const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+      for (const t of toteTasks) {
+        await sb(`/rest/v1/pick_tasks?id=eq.${t.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+        await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: t.order_id, status: "pending", tote_id: openTote.id } });
+        await sb(`/rest/v1/sales_orders?id=eq.${t.order_id}`, { method: "PATCH", token, body: { status: "picking" } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: t.id, user_id: profile.id, action: "completed" } });
       }
-      showToast("Order picked");
-      setOpenTask(null); load();
+      await sb(`/rest/v1/totes?id=eq.${openTote.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+      showToast("Tote fully picked — ready for packer");
+      setOpenTote(null); load();
     } catch (e) { showToast("Failed to complete", "err"); }
   };
 
-  if (openTask) {
-    const o = orders[openTask.order_id];
+  if (openTote) {
     return (
       <div>
-        <SectionTitle title={`Picking — ${o?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back to tote</button>} />
+        <SectionTitle title={`${openTote.tote_number} — consolidated pick list`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
         <div style={S.panel}>
-          <div style={S.panelTitle}>Scan each item from its location</div>
+          <div style={S.panelTitle}>Scan product at each location (koi bhi sequence mein)</div>
           <div style={{ display: "flex", gap: 10 }}>
             <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && scanBarcode()} />
-            <CameraScanButton onScan={(text) => scanBarcode(text)} />
-            <button style={S.primaryBtnSm} onClick={() => scanBarcode()}>Scan</button>
+              onKeyDown={e => e.key === "Enter" && scanToteBarcode()} />
+            <CameraScanButton onScan={(text) => scanToteBarcode(text)} />
+            <button style={S.primaryBtnSm} onClick={() => scanToteBarcode()}>Scan</button>
           </div>
         </div>
         <div style={S.panel}>
-          <div style={S.panelTitle}>Progress</div>
-          {openLines.map(l => {
-            const p = products[l.product_id];
-            const bin = bins[l.bin_id];
-            const got = scans[l.product_id] || 0;
-            const done = got >= l.qty_required;
+          <div style={S.panelTitle}>Pick list — location-wise (ek bin ek hi baar visit karein)</div>
+          {consolidated.map((g, i) => {
+            const p = products[g.product_id];
+            const bin = bins[g.bin_id];
+            const key = `${g.bin_id}|${g.product_id}`;
+            const got = toteScans[key] || 0;
+            const done = got >= g.required;
             return (
-              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.sku}</span>
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
                 <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
                 <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
-                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {l.qty_required}</span>
+                <span style={{ color: "#8B93A3", fontSize: 11 }}>{g.refs.length} order{g.refs.length > 1 ? "s" : ""}</span>
+                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {g.required}</span>
               </div>
             );
           })}
-          {allScanned && (
-            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completePick}>✓ Mark picked</button>
+          {consolidated.length === 0 && <EmptyNote text="Is tote mein koi item nahi hai." />}
+          {allToteScanned && consolidated.length > 0 && (
+            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completeTotePicking}>✓ Complete tote picking — send to packer</button>
           )}
-        </div>
-      </div>
-    );
-  }
-
-  if (openTote) {
-    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
-    return (
-      <div>
-        <SectionTitle title={`${openTote.tote_number} — ${toteTasks.length} orders`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
-        <div style={S.cardGrid}>
-          {toteTasks.map(t => {
-            const o = orders[t.order_id];
-            const done = t.status === "picked";
-            return (
-              <div key={t.id} style={S.card} onClick={() => !done && openPickTask(t)}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
-                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#5B9EE8", borderColor: done ? "#4CAF7D" : "#5B9EE8" }}>{done ? "Picked" : "Pending"}</span>
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  {(taskLines[t.id] || []).map(l => {
-                    const p = products[l.product_id];
-                    const bin = bins[l.bin_id];
-                    return (
-                      <div key={l.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, padding: "3px 0" }}>
-                        <span style={{ color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{p?.sku} × {l.qty_required}</span>
-                        <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace" }}>📍 {bin?.code || "—"}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                {!done && <div style={{ color: "#F5A623", fontSize: 11, marginTop: 8 }}>Tap to scan & pick →</div>}
-              </div>
-            );
-          })}
         </div>
       </div>
     );
@@ -1448,7 +1502,7 @@ function PickingView({ token, profile, showToast }) {
           const toteTasks = tasks.filter(t => t.tote_id === tt.id);
           const pickedCount = toteTasks.filter(t => t.status === "picked").length;
           return (
-            <div key={tt.id} style={S.card} onClick={() => setOpenTote(tt)}>
+            <div key={tt.id} style={S.card} onClick={() => openToteDetail(tt)}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span>🧺</span>
                 <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{tt.status}</span>
