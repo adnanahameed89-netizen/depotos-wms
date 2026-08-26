@@ -432,23 +432,90 @@ function ReceivingView({ token, profile, showToast }) {
   const [importSummary, setImportSummary] = useState(null);
   const [grnReport, setGrnReport] = useState(null);
   const [grnLineStats, setGrnLineStats] = useState({});
+  const [grnStatus, setGrnStatus] = useState({}); // grn_id -> {status, totalQty, putawayQty}
+  const [statusTab, setStatusTab] = useState("all");
+  const [selectedGrns, setSelectedGrns] = useState({});
+  const [staff, setStaff] = useState([]);
+  const [bulkOfficerId, setBulkOfficerId] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const canManageGrn = ["admin", "warehouse_lead"].includes(profile.role);
+
   const load = useCallback(async () => {
     try {
       const g = await sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token });
       setGrns(g || []);
+      setStaff(await sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || []);
       const ids = (g || []).map(x => x.id);
       if (ids.length) {
-        const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=grn_id,qty_expected`, { token });
+        const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=id,grn_id,qty_expected`, { token });
         const stats = {};
+        const lineToGrn = {};
         for (const l of allLines || []) {
           if (!stats[l.grn_id]) stats[l.grn_id] = { count: 0, qty: 0 };
           stats[l.grn_id].count += 1; stats[l.grn_id].qty += l.qty_expected;
+          lineToGrn[l.id] = l.grn_id;
         }
         setGrnLineStats(stats);
+
+        const lineIds = (allLines || []).map(l => l.id);
+        const statusMap = {};
+        for (const id of ids) statusMap[id] = { status: "open", totalQty: stats[id]?.qty || 0, putawayQty: 0, anyAssigned: false };
+        if (lineIds.length) {
+          const pw = await sb(`/rest/v1/putaway_tasks?grn_line_id=in.(${lineIds.join(",")})&select=*`, { token });
+          for (const t of pw || []) {
+            const grnId = lineToGrn[t.grn_line_id];
+            if (!grnId || !statusMap[grnId]) continue;
+            if (t.status === "completed") statusMap[grnId].putawayQty += t.qty;
+            if (t.assigned_to) statusMap[grnId].anyAssigned = true;
+          }
+        }
+        for (const id of ids) {
+          const s = statusMap[id];
+          if (s.totalQty === 0) s.status = "open";
+          else if (s.putawayQty >= s.totalQty && s.totalQty > 0) s.status = "completed";
+          else if (s.putawayQty > 0) s.status = "partial";
+          else if (s.anyAssigned) s.status = "assigned";
+          else s.status = "open";
+        }
+        setGrnStatus(statusMap);
+
+        // auto-complete GRN status in DB when fully put away
+        for (const id of ids) {
+          const s = statusMap[id];
+          const grnRow = (g || []).find(x => x.id === id);
+          if (s.status === "completed" && grnRow && grnRow.status !== "completed") {
+            sb(`/rest/v1/grn?id=eq.${id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString() } }).catch(() => {});
+          }
+        }
       }
     } catch (e) { showToast("Load failed", "err"); }
-  }, [token]);
+  }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+
+  const bulkAssignPutaway = async () => {
+    const ids = Object.keys(selectedGrns).filter(k => selectedGrns[k]);
+    if (ids.length === 0) { showToast("GRN select karein", "err"); return; }
+    if (!bulkOfficerId) { showToast("Put Away Officer select karein", "err"); return; }
+    setBulkBusy(true);
+    try {
+      let tasksCreated = 0;
+      for (const grnId of ids) {
+        const grnLines = await sb(`/rest/v1/grn_lines?grn_id=eq.${grnId}&select=*`, { token });
+        for (const l of grnLines || []) {
+          const remaining = l.qty_expected - (l.qty_received || 0);
+          if (remaining <= 0) continue;
+          await sb(`/rest/v1/grn_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_received: l.qty_expected } });
+          await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: l.id, product_id: l.product_id, qty: remaining, status: "pending", assigned_to: bulkOfficerId } });
+          tasksCreated++;
+        }
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn", entity_id: grnId, user_id: profile.id, action: "bulk_assigned_putaway", metadata: { assigned_to: bulkOfficerId } } });
+      }
+      showToast(`${ids.length} GRN(s) assigned — ${tasksCreated} lines queued`);
+      setSelectedGrns({}); setBulkOfficerId("");
+      load();
+    } catch (e) { showToast(`Assign failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+    setBulkBusy(false);
+  };
   const loadLines = async (grnId) => {
     const ls = await sb(`/rest/v1/grn_lines?grn_id=eq.${grnId}&select=*`, { token }) || [];
     setLines(ls);
@@ -617,11 +684,16 @@ function ReceivingView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Receiving (GRN)" action={
-        <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
-          {importing ? "Importing…" : "📤 Upload GRN file"}
-          <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleGrnFile} disabled={importing} />
-        </label>
+        canManageGrn ? (
+          <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+            {importing ? "Importing…" : "📤 Upload GRN file"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleGrnFile} disabled={importing} />
+          </label>
+        ) : null
       } />
+      {!canManageGrn && (
+        <div style={{ ...S.panel, fontSize: 12, color: "#8B93A3" }}>ℹ️ GRN upload/assignment sirf Admin ya Warehouse Lead kar sakte hain.</div>
+      )}
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
@@ -629,9 +701,9 @@ function ReceivingView({ token, profile, showToast }) {
         <ImportReportPanel report={grnReport.report} importing={importing}
           onConfirm={confirmGrnImport} onCancel={() => setGrnReport(null)} confirmLabel="Confirm & import GRNs" />
       )}
-      {!grnReport && (
+      {!grnReport && canManageGrn && (
       <div style={S.panel}>
-        <div style={S.panelTitle}>New GRN</div>
+        <div style={S.panelTitle}>New GRN (manual)</div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="GRN number" value={grnNumber} onChange={e => setGrnNumber(e.target.value)} />
           <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Source (supplier etc.)" value={source} onChange={e => setSource(e.target.value)} />
@@ -639,26 +711,75 @@ function ReceivingView({ token, profile, showToast }) {
         </div>
       </div>
       )}
+
+      {(() => {
+        const TABS = [
+          { key: "all", label: "All" },
+          { key: "open", label: "Open" },
+          { key: "assigned", label: "Assigned" },
+          { key: "partial", label: "Partial" },
+          { key: "completed", label: "Completed" }
+        ];
+        const counts = Object.fromEntries(TABS.map(t => [t.key, t.key === "all" ? grns.length : grns.filter(g => (grnStatus[g.id]?.status || "open") === t.key).length]));
+        return (
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            {TABS.map(t => (
+              <button key={t.key} onClick={() => setStatusTab(t.key)} style={{ ...S.pill, ...(statusTab === t.key ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>
+                {t.label} ({counts[t.key]})
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
+      {canManageGrn && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Selected GRNs ({Object.values(selectedGrns).filter(Boolean).length}) — assign Put Away Officer</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <select style={{ ...S.input, minWidth: 200 }} value={bulkOfficerId} onChange={e => setBulkOfficerId(e.target.value)}>
+              <option value="">Put Away Officer select karein…</option>
+              {staff.filter(s => s.id !== profile.id).map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+            </select>
+            <button style={S.primaryBtnSm} onClick={bulkAssignPutaway} disabled={bulkBusy}>{bulkBusy ? "Assigning…" : "✓ Assign selected"}</button>
+          </div>
+        </div>
+      )}
+
       <div style={S.panel}>
         <table>
           <thead>
-            <tr><th style={S.th}>GRN #</th><th style={S.th}>Source</th><th style={S.th}>Status</th><th style={S.th}>Lines</th><th style={S.th}>Total Qty</th><th style={S.th}>Created</th></tr>
+            <tr>
+              {canManageGrn && <th style={S.th}></th>}
+              <th style={S.th}>GRN #</th><th style={S.th}>Source</th><th style={S.th}>Status</th><th style={S.th}>Lines</th>
+              <th style={S.th}>Put Away Qty</th><th style={S.th}>Total Qty</th><th style={S.th}>Created</th>
+            </tr>
           </thead>
           <tbody>
-            {grns.map(g => {
+            {grns.filter(g => statusTab === "all" || (grnStatus[g.id]?.status || "open") === statusTab).map(g => {
               const stat = grnLineStats[g.id] || { count: 0, qty: 0 };
+              const st = grnStatus[g.id] || { status: "open", putawayQty: 0, totalQty: stat.qty };
+              const STATUS_LABELS = { open: "Open", assigned: "Assigned", partial: "Partial", completed: "Completed" };
+              const STATUS_COL = { open: "#8B93A3", assigned: "#5B9EE8", partial: "#F5A623", completed: "#4CAF7D" };
               return (
-                <tr key={g.id} style={{ cursor: "pointer" }} onClick={() => { setOpenGrn(g); loadLines(g.id); }}>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{g.grn_number}</td>
+                <tr key={g.id}>
+                  {canManageGrn && (
+                    <td style={S.td} onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" checked={!!selectedGrns[g.id]} onChange={e => setSelectedGrns({ ...selectedGrns, [g.id]: e.target.checked })} />
+                    </td>
+                  )}
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", cursor: "pointer" }} onClick={() => { setOpenGrn(g); loadLines(g.id); }}>{g.grn_number}</td>
                   <td style={{ ...S.td, color: "#8B93A3" }}>{g.source || "No source"}</td>
-                  <td style={S.td}><span style={{ ...S.badgeSm, color: g.status === "completed" ? "#4CAF7D" : "#8B93A3", borderColor: g.status === "completed" ? "#4CAF7D" : "#333A47" }}>{g.status}</span></td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COL[st.status], borderColor: STATUS_COL[st.status] }}>{STATUS_LABELS[st.status]}</span></td>
                   <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
+                  <td style={{ ...S.td, color: st.status === "completed" ? "#4CAF7D" : "#F5A623" }}>{st.putawayQty} / {st.totalQty}</td>
                   <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
                   <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(g.created_at)}</td>
                 </tr>
               );
             })}
-            {grns.length === 0 && <tr><td colSpan={6}><EmptyNote text="No GRNs yet — create one above." /></td></tr>}
+            {grns.filter(g => statusTab === "all" || (grnStatus[g.id]?.status || "open") === statusTab).length === 0 && (
+              <tr><td colSpan={canManageGrn ? 8 : 7}><EmptyNote text="Is status mein koi GRN nahi hai." /></td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -726,6 +847,23 @@ function PutawayView({ token, profile, showToast }) {
     } catch (e) { showToast("Putaway failed", "err"); }
   };
 
+  const reportShortage = async (task, shortQty) => {
+    const qty = Number(shortQty);
+    if (!qty || qty <= 0 || qty > task.qty) { showToast("Valid short qty (1 se task qty tak) enter karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: task.grn_line_id, product_id: task.product_id, expected_qty: task.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id } });
+      const newQty = task.qty - qty;
+      if (newQty > 0) {
+        await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { qty: newQty } });
+      } else {
+        await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString(), assigned_to: task.assigned_to || profile.id } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty } } });
+      showToast(`${qty} pcs RTV record ho gaya`);
+      load();
+    } catch (e) { showToast("RTV report failed", "err"); }
+  };
+
   const myTasks = tasks.filter(t => t.assigned_to === profile.id);
   const unassignedTasks = tasks.filter(t => !t.assigned_to);
 
@@ -741,6 +879,9 @@ function PutawayView({ token, profile, showToast }) {
       showToast("WRONG ITEM — is task ka product nahi hai", "err");
     }
   };
+
+  const [shortageOpen, setShortageOpen] = useState({});
+  const [shortageQty, setShortageQty] = useState({});
 
   const TaskCard = ({ t, showAssign }) => {
     const p = products[t.product_id];
@@ -767,6 +908,13 @@ function PutawayView({ token, profile, showToast }) {
               <CameraScanButton onScan={(text) => verifyProduct(t, text)} />
             </div>
             <button style={{ ...S.secondaryBtnSm, marginTop: 8, width: "100%", justifyContent: "center" }} onClick={() => verifyProduct(t)}>Verify</button>
+            <button style={{ ...S.secondaryBtnSm, marginTop: 6, width: "100%", justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen({ ...shortageOpen, [t.id]: !shortageOpen[t.id] })}>⚠ Physical item nahi mila (RTV)</button>
+            {shortageOpen[t.id] && (
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <input style={{ ...S.input, fontSize: 12 }} type="number" min={1} max={t.qty} placeholder={`Kitne short (max ${t.qty})`} value={shortageQty[t.id] || ""} onChange={e => setShortageQty({ ...shortageQty, [t.id]: e.target.value })} />
+                <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportShortage(t, shortageQty[t.id])}>Report</button>
+              </div>
+            )}
           </>
         ) : (
           <>
