@@ -1125,6 +1125,7 @@ function OrdersView({ token, profile, showToast }) {
     try {
       await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
       let shortageAny = false;
+      let binNum = 1;
       for (const orderId of ids) {
         const order = orders.find(o => o.id === orderId);
         const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
@@ -1138,7 +1139,8 @@ function OrdersView({ token, profile, showToast }) {
           await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
         }
         if (shortage) shortageAny = true;
-        const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString() } });
+        const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
+        binNum++;
         for (const l of lines) {
           await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: l.product_id, qty_required: l.qty, bin_id: lineBins[l.product_id] || null } });
         }
@@ -1533,8 +1535,10 @@ function PickingView({ token, profile, showToast }) {
     if (!selectedToteId) { showToast("Tote select karein — koi available nahi hai to admin se check karwayein", "err"); return; }
     try {
       await sb(`/rest/v1/totes?id=eq.${selectedToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: toteAssignPicker } });
+      let binNum = 1;
       for (const id of ids) {
-        await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: selectedToteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString() } });
+        await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: selectedToteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
+        binNum++;
       }
       const toteNumber = totes.find(t => t.id === selectedToteId)?.tote_number;
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: selectedToteId, user_id: profile.id, action: "assigned", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
@@ -1549,14 +1553,14 @@ function PickingView({ token, profile, showToast }) {
     for (const t of toteTasks) {
       for (const l of (taskLines[t.id] || [])) {
         const key = `${l.bin_id || "none"}|${l.product_id}`;
-        if (!groups[key]) groups[key] = { bin_id: l.bin_id, product_id: l.product_id, required: 0, refs: [] };
+        if (!groups[key]) groups[key] = { bin_id: l.bin_id, product_id: l.product_id, required: 0, scanned: 0, refs: [] };
         groups[key].required += l.qty_required;
-        groups[key].refs.push({ pick_task_id: t.id, order_id: t.order_id, line_id: l.id, qty_required: l.qty_required });
+        groups[key].refs.push({ pick_task_id: t.id, order_id: t.order_id, toteBin: t.tote_bin_number, line_id: l.id, qty_required: l.qty_required, allocated: 0 });
       }
     }
+    for (const g of Object.values(groups)) g.refs.sort((a, b) => (a.toteBin || 99) - (b.toteBin || 99));
     const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
     setConsolidated(list);
-    setToteScans({});
     setOpenTote(tote);
   };
 
@@ -1567,24 +1571,24 @@ function PickingView({ token, profile, showToast }) {
     const c = cleanCode(code);
     const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
     if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
-    const group = consolidated.find(g => g.product_id === p.id && (toteScans[`${g.bin_id}|${g.product_id}`] || 0) < g.required);
+    const group = consolidated.find(g => g.product_id === p.id && g.scanned < g.required);
     if (!group) { showToast("Yeh product is tote mein nahi hai ya already complete — WRONG ITEM", "err"); return; }
-    const key = `${group.bin_id}|${group.product_id}`;
-    setToteScans({ ...toteScans, [key]: (toteScans[key] || 0) + 1 });
-    showToast(`Picked: ${p.barcode}`);
+    const ref = group.refs.find(r => r.allocated < r.qty_required);
+    if (!ref) { showToast("Allocation error — dobara try karein", "err"); return; }
+    ref.allocated += 1;
+    group.scanned += 1;
+    setConsolidated([...consolidated]);
+    const order = orders[ref.order_id];
+    showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
   };
 
-  const allToteScanned = consolidated.length > 0 && consolidated.every(g => (toteScans[`${g.bin_id}|${g.product_id}`] || 0) >= g.required);
+  const allToteScanned = consolidated.length > 0 && consolidated.every(g => g.scanned >= g.required);
 
   const completeTotePicking = async () => {
     try {
       for (const g of consolidated) {
-        const key = `${g.bin_id}|${g.product_id}`;
-        let remaining = toteScans[key] || 0;
         for (const ref of g.refs) {
-          const alloc = Math.min(ref.qty_required, remaining);
-          await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: alloc } });
-          remaining -= alloc;
+          await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: ref.allocated } });
         }
       }
       const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
@@ -1619,16 +1623,22 @@ function PickingView({ token, profile, showToast }) {
           {consolidated.map((g, i) => {
             const p = products[g.product_id];
             const bin = bins[g.bin_id];
-            const key = `${g.bin_id}|${g.product_id}`;
-            const got = toteScans[key] || 0;
-            const done = got >= g.required;
+            const done = g.scanned >= g.required;
             return (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
-                <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
-                <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
-                <span style={{ color: "#8B93A3", fontSize: 11 }}>{g.refs.length} order{g.refs.length > 1 ? "s" : ""}</span>
-                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {g.required}</span>
+              <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
+                  <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
+                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{g.scanned} / {g.required}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 100 }}>
+                  {g.refs.map((r, j) => (
+                    <span key={j} style={{ fontSize: 10, color: r.allocated >= r.qty_required ? "#4CAF7D" : "#5A6070", fontFamily: "'IBM Plex Mono', monospace" }}>
+                      Bin#{r.toteBin || "?"}: {r.allocated}/{r.qty_required}
+                    </span>
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -1724,6 +1734,7 @@ function PackingView({ token, profile, showToast }) {
   const [barcodeInput, setBarcodeInput] = useState("");
   const [orderScanInput, setOrderScanInput] = useState("");
   const [toteScanInput, setToteScanInput] = useState("");
+  const [binNumMap, setBinNumMap] = useState({});
 
   const load = useCallback(async () => {
     try {
@@ -1759,13 +1770,27 @@ function PackingView({ token, profile, showToast }) {
     openPack(task);
   };
 
-  const scanTote = (codeArg) => {
+  const scanTote = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : toteScanInput).trim();
     setToteScanInput("");
     if (!code) return;
     const tote = totes.find(t => t.tote_number === code);
     if (!tote) { showToast("Tote nahi mila ya abhi picking complete nahi hui", "err"); return; }
-    setOpenTote(tote);
+    try {
+      const fresh = await sb(`/rest/v1/totes?id=eq.${tote.id}&select=*`, { token });
+      const row = fresh && fresh[0];
+      if (!row) { showToast("Tote nahi mila", "err"); return; }
+      if (row.locked_by && row.locked_by !== profile.id) {
+        showToast("Yeh tote pehle se kisi aur packer ke paas process ho rahi hai", "err");
+        return;
+      }
+      if (!row.locked_by) {
+        await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { locked_by: profile.id } });
+      }
+      const pickTasks = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&select=order_id,tote_bin_number`, { token });
+      setBinNumMap(Object.fromEntries((pickTasks || []).map(pt => [pt.order_id, pt.tote_bin_number])));
+      setOpenTote({ ...row, locked_by: profile.id });
+    } catch (e) { showToast("Tote open nahi ho saki", "err"); }
   };
 
   const scanBarcode = (codeArg) => {
@@ -1798,7 +1823,7 @@ function PackingView({ token, profile, showToast }) {
     if (openTask.tote_id) {
       const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=id`, { token });
       if (!remaining || remaining.length === 0) {
-        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, completed_at: new Date().toISOString() } });
+        await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, completed_at: new Date().toISOString() } });
         showToast("Tote fully packed — all orders RTD, trolley ab dobara available hai");
         setOpenTote(null);
       }
@@ -1845,7 +1870,7 @@ function PackingView({ token, profile, showToast }) {
   }
 
   if (openTote) {
-    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    const toteTasks = [...tasks.filter(t => t.tote_id === openTote.id)].sort((a, b) => (binNumMap[a.order_id] || 99) - (binNumMap[b.order_id] || 99));
     return (
       <div>
         <SectionTitle title={`${openTote.tote_number} — ${toteTasks.length} orders to pack`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
@@ -1855,10 +1880,11 @@ function PackingView({ token, profile, showToast }) {
             return (
               <div key={t.id} style={S.card} onClick={() => openPack(t)}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{o?.external_order_id}</span>
+                  <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Bin #{binNumMap[t.order_id] || "?"}</span>
                   <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
                 </div>
-                <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{o?.courier}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#8B93A3", marginTop: 8 }}>{o?.external_order_id}</div>
+                <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 4 }}>{o?.courier}</div>
               </div>
             );
           })}
@@ -1896,7 +1922,7 @@ function PackingView({ token, profile, showToast }) {
         {totes.map(tt => {
           const count = tasks.filter(t => t.tote_id === tt.id).length;
           return (
-            <div key={tt.id} style={S.card} onClick={() => setOpenTote(tt)}>
+            <div key={tt.id} style={S.card} onClick={() => scanTote(tt.tote_number)}>
               <span>🧺</span>
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
               <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
