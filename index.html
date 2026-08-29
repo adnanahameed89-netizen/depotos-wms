@@ -2158,9 +2158,21 @@ function DispatchView({ token, profile, showToast }) {
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
         {loadSheets.map(ls => (
-          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #262B35" }}>
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#ECEAE3" }}>{ls.load_sheet_number}</span>
             <span style={{ color: "#8B93A3", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
+            <button style={S.secondaryBtnSm} onClick={async () => {
+              const ids = ls.order_ids || [];
+              if (ids.length === 0) return;
+              const os = await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token });
+              const rows = [];
+              for (const o of os || []) {
+                const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
+                const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
+                rows.push([o.raw_data?.customer || "—", o.external_order_id, qty]);
+              }
+              exportCSV(`${ls.load_sheet_number}.csv`, ["Customer", "Tracking", "Qty"], rows);
+            }}>⬇ Export</button>
           </div>
         ))}
         {loadSheets.length === 0 && <EmptyNote text="No load sheets yet." />}
@@ -2469,6 +2481,7 @@ function ReportsView({ token, profile, showToast }) {
   const [leadTime, setLeadTime] = useState({ avgHours: null, samples: 0 });
   const [profiles, setProfiles] = useState({});
   const [pickDurations, setPickDurations] = useState([]);
+  const [rawEvents, setRawEvents] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -2482,6 +2495,7 @@ function ReportsView({ token, profile, showToast }) {
         ]);
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
         setProfiles(profMap);
+        setRawEvents(events || []);
 
         const pickDurByUser = {};
         for (const pt of pickTasks || []) {
@@ -2544,7 +2558,12 @@ function ReportsView({ token, profile, showToast }) {
       </div>
 
       <div style={S.panel}>
-        <div style={S.panelTitle}>Avg picking time per staff (assign → complete)</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={S.panelTitle}>Avg picking time per staff (assign → complete)</div>
+          {pickDurations.length > 0 && (
+            <button style={S.secondaryBtnSm} onClick={() => exportCSV("picking-time-report.csv", ["Staff", "Orders Picked", "Avg Time (min)"], pickDurations.map(r => [r.name, r.count, r.avgMins.toFixed(1)]))}>⬇ Export CSV</button>
+          )}
+        </div>
         {pickDurations.length === 0 ? <EmptyNote text="Abhi koi completed pick task nahi hai time-tracking ke liye." /> : (
           <table>
             <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Orders picked</th><th style={S.th}>Avg time</th></tr></thead>
@@ -2562,7 +2581,12 @@ function ReportsView({ token, profile, showToast }) {
       </div>
 
       <div style={S.panel}>
-        <div style={S.panelTitle}>Staff productivity (actions logged)</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={S.panelTitle}>Staff productivity (actions logged)</div>
+          {staffCounts.length > 0 && (
+            <button style={S.secondaryBtnSm} onClick={() => exportCSV("staff-productivity-report.csv", ["Staff", "Role", "Total Actions"], staffCounts.map(r => [r.name, r.role, r.total]))}>⬇ Export CSV</button>
+          )}
+        </div>
         {loading ? <EmptyNote text="Loading…" /> : staffCounts.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
           <div>
             {staffCounts.map(r => (
@@ -2583,6 +2607,19 @@ function ReportsView({ token, profile, showToast }) {
             ))}
           </div>
         )}
+      </div>
+
+      <div style={S.panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={S.panelTitle}>Full activity log (audit export)</div>
+          {rawEvents.length > 0 && (
+            <button style={S.secondaryBtnSm} onClick={() => exportCSV("activity-log.csv",
+              ["Date/Time", "Staff", "Role", "Action", "Entity Type", "Entity ID"],
+              rawEvents.map(ev => [fmtTime(ev.created_at), profiles[ev.user_id]?.full_name || "System", profiles[ev.user_id]?.role || "—", ev.action, ev.entity_type, ev.entity_id])
+            )}>⬇ Export CSV ({rawEvents.length} events)</button>
+          )}
+        </div>
+        <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8 }}>Last {rawEvents.length} events (GRN, Putaway, Orders, Picking, Packing, Dispatch, Returns) — user, action, timestamp ke sath.</div>
       </div>
 
       <div style={{ fontSize: 11, color: "#5A6070" }}>
@@ -3005,6 +3042,17 @@ function ImportReportPanel({ report, onConfirm, onCancel, importing, confirmLabe
       </div>
     </div>
   );
+}
+
+function exportCSV(filename, headers, rows) {
+  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [headers.map(esc).join(","), ...rows.map(r => r.map(esc).join(","))].join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /* ================= helpers ================= */
