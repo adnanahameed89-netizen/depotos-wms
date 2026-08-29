@@ -2067,17 +2067,19 @@ function PackingView({ token, profile, showToast }) {
 function DispatchView({ token, profile, showToast }) {
   const [orders, setOrders] = useState([]);
   const [selected, setSelected] = useState({});
-  const [courier, setCourier] = useState("Postex");
   const [loadSheets, setLoadSheets] = useState([]);
+  const [profiles, setProfiles] = useState({});
   const [scanTrackingInput, setScanTrackingInput] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [o, ls] = await Promise.all([
+      const [o, ls, pf] = await Promise.all([
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.rtd&select=*`, { token }),
-        sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
+        sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/profiles?select=*`, { token })
       ]);
       setOrders(o || []); setLoadSheets(ls || []);
+      setProfiles(Object.fromEntries((pf || []).map(p => [p.id, p])));
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
@@ -2092,25 +2094,47 @@ function DispatchView({ token, profile, showToast }) {
     if (!order) { showToast("Tracking number is packed-orders list mein nahi mila", "err"); return; }
     if (selected[order.id]) { showToast("Already selected"); return; }
     setSelected(prev => ({ ...prev, [order.id]: true }));
-    showToast(`Added: ${order.external_order_id}`);
+    showToast(`Added: ${order.external_order_id} (${order.courier})`);
+  };
+
+  const nextLoadSheetNumber = async (courierName) => {
+    const prefix = courierName.trim().slice(0, 3).toUpperCase();
+    const existing = await sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&courier=eq.${encodeURIComponent(courierName)}&select=load_sheet_number`, { token });
+    let maxSerial = 0;
+    for (const ls of existing || []) {
+      const m = String(ls.load_sheet_number).match(/(\d+)$/);
+      if (m) maxSerial = Math.max(maxSerial, parseInt(m[1], 10));
+    }
+    return `${prefix}${String(maxSerial + 1).padStart(5, "0")}`;
   };
 
   const createLoadSheet = async () => {
     const ids = Object.keys(selected).filter(k => selected[k]);
     if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
     try {
-      const lsNumber = `LS-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-4)}`;
-      await sb(`/rest/v1/load_sheets`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, courier, load_sheet_number: lsNumber, order_ids: ids } });
-      for (const orderId of ids) {
-        const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
-        for (const l of lines) {
-          await deductStock(token, profile.warehouse_id, l.product_id, l.qty);
-          await adjustReserved(token, profile.warehouse_id, l.product_id, -l.qty);
-        }
-        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
-        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "dispatched", metadata: { load_sheet: lsNumber } } });
+      const byCourier = {};
+      for (const id of ids) {
+        const o = orders.find(x => x.id === id);
+        const c = o?.courier || "Other";
+        if (!byCourier[c]) byCourier[c] = [];
+        byCourier[c].push(id);
       }
-      showToast(`Load sheet ${lsNumber} created`);
+      const generated = [];
+      for (const [courierName, orderIds] of Object.entries(byCourier)) {
+        const lsNumber = await nextLoadSheetNumber(courierName);
+        await sb(`/rest/v1/load_sheets`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, courier: courierName, load_sheet_number: lsNumber, order_ids: orderIds, created_by: profile.id } });
+        for (const orderId of orderIds) {
+          const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
+          for (const l of lines) {
+            await deductStock(token, profile.warehouse_id, l.product_id, l.qty);
+            await adjustReserved(token, profile.warehouse_id, l.product_id, -l.qty);
+          }
+          await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
+          await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "dispatched", metadata: { load_sheet: lsNumber } } });
+        }
+        generated.push(`${lsNumber} (${courierName}, ${orderIds.length})`);
+      }
+      showToast(`Load sheet(s) created: ${generated.join(" · ")}`);
       setSelected({}); load();
     } catch (e) { showToast("Load sheet creation failed", "err"); }
   };
@@ -2148,11 +2172,8 @@ function DispatchView({ token, profile, showToast }) {
           </div>
         )}
         <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
-          <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
-            <option value="Postex">Postex</option>
-            <option value="M&P">M&P</option>
-          </select>
-          <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet (verified orders only)</button>
+          <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet(s) — auto courier-wise</button>
+          <span style={{ color: "#5A6070", fontSize: 11 }}>Verified orders alag-alag courier ke hon to system khud alag load sheets bana dega</span>
         </div>
       </div>
       <div style={S.panel}>
@@ -2165,13 +2186,27 @@ function DispatchView({ token, profile, showToast }) {
               const ids = ls.order_ids || [];
               if (ids.length === 0) return;
               const os = await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token });
-              const rows = [];
+              const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+              const rows = [
+                [esc("Load Sheet Number"), esc(ls.load_sheet_number)],
+                [esc("Courier"), esc(ls.courier)],
+                [esc("Created Date"), esc(fmtTime(ls.created_at))],
+                [esc("Created By"), esc(profiles[ls.created_by]?.full_name || "—")],
+                [],
+                [esc("Customer"), esc("Tracking"), esc("Qty"), esc("Order Timestamp")]
+              ];
               for (const o of os || []) {
                 const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
                 const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
-                rows.push([o.raw_data?.customer || "—", o.external_order_id, qty]);
+                rows.push([esc(o.raw_data?.customer || "—"), esc(o.external_order_id), esc(qty), esc(fmtTime(o.dispatched_at))]);
               }
-              exportCSV(`${ls.load_sheet_number}.csv`, ["Customer", "Tracking", "Qty"], rows);
+              const csv = rows.map(r => r.join(",")).join("\n");
+              const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url; a.download = `${ls.load_sheet_number}.csv`;
+              document.body.appendChild(a); a.click(); document.body.removeChild(a);
+              URL.revokeObjectURL(url);
             }}>⬇ Export</button>
           </div>
         ))}
