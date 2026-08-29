@@ -47,7 +47,7 @@ async function login(email, password) {
 }
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
-const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D" };
+const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D", incomplete: "#E5484D" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -222,7 +222,8 @@ function DashboardView({ token, profile, setView }) {
     { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
     { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
     { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
-    { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
+    { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
+    { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
   ];
   return (
     <div>
@@ -1078,6 +1079,10 @@ function OrdersView({ token, profile, showToast }) {
   const [openOrder, setOpenOrder] = useState(null);
   const [openLines, setOpenLines] = useState([]);
   const [openEvents, setOpenEvents] = useState([]);
+  const [openShortages, setOpenShortages] = useState([]);
+  const [editTracking, setEditTracking] = useState("");
+  const [editCourier, setEditCourier] = useState("");
+  const [editQty, setEditQty] = useState({});
   const [statusFilter, setStatusFilter] = useState(null);
   const [lineStats, setLineStats] = useState({});
   const [profiles, setProfiles] = useState({});
@@ -1123,31 +1128,56 @@ function OrdersView({ token, profile, showToast }) {
     if (!bulkToteId || !bulkPickerId) { showToast("Tote aur Picker select karein", "err"); return; }
     setBulkBusy(true);
     try {
-      await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
-      let shortageAny = false;
-      let binNum = 1;
+      const okOrders = [];
+      const shortOrders = [];
       for (const orderId of ids) {
-        const order = orders.find(o => o.id === orderId);
         const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
-        let shortage = false;
-        const lineBins = {};
+        const summaries = [];
+        let anyShort = false;
         for (const l of lines) {
           const summary = await getStockSummary(token, profile.warehouse_id, l.product_id);
-          if (summary.available < l.qty) shortage = true;
-          const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
-          lineBins[l.product_id] = bestBin ? bestBin.bin_id : null;
-          await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
+          summaries.push({ line: l, summary });
+          if (summary.available < l.qty) anyShort = true;
         }
-        if (shortage) shortageAny = true;
+        if (anyShort) shortOrders.push({ orderId, summaries });
+        else okOrders.push({ orderId, summaries });
+      }
+
+      for (const { orderId, summaries } of shortOrders) {
+        await sb(`/rest/v1/order_shortage_lines?order_id=eq.${orderId}`, { method: "DELETE", token });
+        for (const { line, summary } of summaries) {
+          const notAvail = Math.max(0, line.qty - summary.available);
+          if (notAvail > 0) {
+            await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: orderId, product_id: line.product_id, qty_required: line.qty, qty_available: summary.available, not_available_qty: notAvail } });
+          }
+        }
+        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "incomplete" } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "marked_incomplete" } });
+      }
+
+      if (okOrders.length === 0) {
+        showToast(`Sab select kiye orders 'Incomplete' hain (stock short) — koi tote assign nahi hui`, "err");
+        setSelectedOrders({}); load(); setBulkBusy(false); return;
+      }
+
+      await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
+      let binNum = 1;
+      for (const { orderId, summaries } of okOrders) {
+        const lineBins = {};
+        for (const { line, summary } of summaries) {
+          const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
+          lineBins[line.product_id] = bestBin ? bestBin.bin_id : null;
+          await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
+        }
         const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
         binNum++;
-        for (const l of lines) {
-          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: l.product_id, qty_required: l.qty, bin_id: lineBins[l.product_id] || null } });
+        for (const { line } of summaries) {
+          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: line.qty, bin_id: lineBins[line.product_id] || null } });
         }
         await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "queued" } });
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "reserved_and_assigned_to_tote" } });
       }
-      showToast(shortageAny ? "Assigned — kuch lines mein stock kam hai" : `${ids.length} orders picker ko assign ho gaye`);
+      showToast(`${okOrders.length} orders assigned${shortOrders.length ? `, ${shortOrders.length} 'Incomplete' tab mein chale gaye (stock short)` : ""}`);
       setSelectedOrders({}); setBulkToteId(""); setBulkPickerId("");
       load();
     } catch (e) { showToast(`Assign failed: ${(e.message || "").slice(0, 100)}`, "err"); }
@@ -1257,36 +1287,84 @@ function OrdersView({ token, profile, showToast }) {
   const reserveAndQueue = async (order) => {
     try {
       const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token });
-      let shortage = false;
-      const lineBins = {};
+      const summaries = [];
+      let anyShort = false;
       for (const l of lines) {
         const summary = await getStockSummary(token, profile.warehouse_id, l.product_id);
-        if (summary.available < l.qty) shortage = true;
+        summaries.push({ line: l, summary });
+        if (summary.available < l.qty) anyShort = true;
+      }
+
+      if (anyShort) {
+        await sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}`, { method: "DELETE", token });
+        for (const { line, summary } of summaries) {
+          const notAvail = Math.max(0, line.qty - summary.available);
+          if (notAvail > 0) {
+            await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: order.id, product_id: line.product_id, qty_required: line.qty, qty_available: summary.available, not_available_qty: notAvail } });
+          }
+        }
+        await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "incomplete" } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "marked_incomplete" } });
+        showToast("Stock kam hai — order 'Incomplete' tab mein chala gaya", "err");
+        load();
+        return;
+      }
+
+      const lineBins = {};
+      for (const { line, summary } of summaries) {
         const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
-        lineBins[l.product_id] = bestBin ? bestBin.bin_id : null;
-        await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
+        lineBins[line.product_id] = bestBin ? bestBin.bin_id : null;
+        await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
       }
       const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: order.id, status: "queued" } });
-      for (const l of lines) {
-        await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: l.product_id, qty_required: l.qty, bin_id: lineBins[l.product_id] || null } });
+      for (const { line } of summaries) {
+        await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: line.qty, bin_id: lineBins[line.product_id] || null } });
       }
       await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "queued" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "reserved_and_queued" } });
-      showToast(shortage ? "Queued — but stock is short for some lines" : "Reserved & queued for picking");
+      showToast("Reserved & queued for picking");
       load();
     } catch (e) { showToast("Reserve failed", "err"); }
   };
 
   const openOrderDetail = async (order) => {
-    const [lines, events] = await Promise.all([
+    const [lines, events, shortages] = await Promise.all([
       sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token }),
-      sb(`/rest/v1/event_log?entity_id=eq.${order.id}&select=*&order=created_at.asc`, { token })
+      sb(`/rest/v1/event_log?entity_id=eq.${order.id}&select=*&order=created_at.asc`, { token }),
+      sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}&select=*`, { token })
     ]);
     setOpenLines(lines || []);
     setOpenEvents(events || []);
+    setOpenShortages(shortages || []);
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProductCache(prev => ({ ...prev, ...newProducts }));
+    setEditTracking(order.external_order_id);
+    setEditCourier(order.courier);
+    setEditQty({});
     setOpenOrder(order);
+  };
+
+  const canEditIncomplete = ["admin", "warehouse_lead"].includes(profile.role);
+
+  const saveOrderEdits = async () => {
+    try {
+      await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { external_order_id: editTracking.trim(), courier: editCourier.trim() } });
+      for (const l of openLines) {
+        const newQty = editQty[l.id] !== undefined ? Number(editQty[l.id]) : l.qty;
+        if (newQty !== l.qty && newQty > 0) {
+          await sb(`/rest/v1/sales_order_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty: newQty } });
+        }
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openOrder.id, user_id: profile.id, action: "amended", metadata: { tracking: editTracking, courier: editCourier } } });
+      showToast("Order amended");
+      openOrderDetail({ ...openOrder, external_order_id: editTracking.trim(), courier: editCourier.trim() });
+    } catch (e) { showToast("Save failed — tracking number already exist ho sakta hai", "err"); }
+  };
+
+  const retryReserve = async () => {
+    await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { status: "received" } });
+    await reserveAndQueue({ ...openOrder, status: "received" });
+    setOpenOrder(null);
   };
 
   if (openOrder) {
@@ -1294,15 +1372,60 @@ function OrdersView({ token, profile, showToast }) {
       <div>
         <SectionTitle title={`Order ${openOrder.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenOrder(null)}>← Back to orders</button>} />
         <div style={S.panel}>
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-            <div><div style={S.label}>COURIER</div><div style={{ color: "#ECEAE3", fontSize: 14 }}>{openOrder.courier}</div></div>
-            <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{openOrder.status}</span></div>
-            <div><div style={S.label}>RECEIVED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
-            {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
-          </div>
+          {openOrder.status === "incomplete" && canEditIncomplete ? (
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <div style={S.label}>TRACKING NUMBER</div>
+                <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} value={editTracking} onChange={e => setEditTracking(e.target.value)} />
+              </div>
+              <div>
+                <div style={S.label}>COURIER</div>
+                <select style={S.input} value={editCourier} onChange={e => setEditCourier(e.target.value)}>
+                  <option value="Postex">Postex</option>
+                  <option value="M&P">M&P</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <button style={S.secondaryBtnSm} onClick={saveOrderEdits}>💾 Save changes</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+              <div><div style={S.label}>COURIER</div><div style={{ color: "#ECEAE3", fontSize: 14 }}>{openOrder.courier}</div></div>
+              <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{openOrder.status}</span></div>
+              <div><div style={S.label}>RECEIVED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
+              {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
+            </div>
+          )}
         </div>
+
+        {openOrder.status === "incomplete" && (
+          <div style={{ ...S.panel, borderColor: "#E5484D" }}>
+            <div style={{ ...S.panelTitle, color: "#E5484D" }}>⚠ Shortage report — kam quantity available thi</div>
+            <table>
+              <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Required</th><th style={S.th}>Available</th><th style={S.th}>Not Available</th></tr></thead>
+              <tbody>
+                {openShortages.map(s => {
+                  const p = productCache[s.product_id];
+                  return (
+                    <tr key={s.id}>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                      <td style={S.td}>{p?.name || "—"}</td>
+                      <td style={{ ...S.td, color: "#8B93A3" }}>{s.qty_required}</td>
+                      <td style={{ ...S.td, color: "#8B93A3" }}>{s.qty_available}</td>
+                      <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{s.not_available_qty}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {canEditIncomplete && (
+              <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={retryReserve}>🔄 Retry reserve (after correction/restock)</button>
+            )}
+          </div>
+        )}
+
         <div style={S.panel}>
-          <div style={S.panelTitle}>Line items</div>
+          <div style={S.panelTitle}>Line items{openOrder.status === "incomplete" && canEditIncomplete ? " (editable)" : ""}</div>
           <table>
             <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
             <tbody>
@@ -1312,7 +1435,11 @@ function OrdersView({ token, profile, showToast }) {
                   <tr key={l.id}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
-                    <td style={S.td}>{l.qty}</td>
+                    <td style={S.td}>
+                      {openOrder.status === "incomplete" && canEditIncomplete ? (
+                        <input type="number" min={1} style={{ ...S.input, width: 80, padding: "4px 8px" }} value={editQty[l.id] !== undefined ? editQty[l.id] : l.qty} onChange={e => setEditQty({ ...editQty, [l.id]: e.target.value })} />
+                      ) : l.qty}
+                    </td>
                   </tr>
                 );
               })}
@@ -1391,7 +1518,8 @@ function OrdersView({ token, profile, showToast }) {
           { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
           { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
           { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
-          { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" }
+          { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
+          { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
         ];
         const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => o.status === s.key).length]));
         return (
