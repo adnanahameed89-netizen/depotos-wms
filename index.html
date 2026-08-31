@@ -1243,7 +1243,13 @@ function OrdersView({ token, profile, showToast }) {
       for (const r of report.validRows) {
         if (!extra[r.groupVal]) {
           const srcRow = rows.find(row => cleanCode(getVal(row, map, "orderRef")) === r.groupVal);
-          extra[r.groupVal] = { courier: String(getVal(srcRow, map, "courier") || "Other").trim(), customer: getVal(srcRow, map, "customer") || null };
+          extra[r.groupVal] = {
+            courier: String(getVal(srcRow, map, "courier") || "Other").trim(),
+            customer: getVal(srcRow, map, "customer") || null,
+            customerOrderNumber: getVal(srcRow, map, "customerOrderNumber") || null,
+            invoiceDate: getVal(srcRow, map, "invoiceDate") || null,
+            grossAmount: getVal(srcRow, map, "grossAmount") || null
+          };
         }
       }
       setOrdersReport({ report, extra });
@@ -1266,7 +1272,7 @@ function OrdersView({ token, profile, showToast }) {
         const meta = ordersReport.extra[ref] || {};
         const created = await sb(`/rest/v1/sales_orders`, {
           method: "POST", token, prefer: "return=representation",
-          body: { external_order_id: ref, courier: meta.courier || "Other", warehouse_id: profile.warehouse_id, status: "received", raw_data: { customer: meta.customer || null } }
+          body: { external_order_id: ref, courier: meta.courier || "Other", warehouse_id: profile.warehouse_id, status: "received", raw_data: { customer: meta.customer || null, customer_order_number: meta.customerOrderNumber || null, invoice_date: meta.invoiceDate || null, gross_amount: meta.grossAmount || null } }
         });
         const orderId = created[0].id;
         ordersCreated++;
@@ -1328,14 +1334,33 @@ function OrdersView({ token, profile, showToast }) {
   };
 
   const openOrderDetail = async (order) => {
-    const [lines, events, shortages] = await Promise.all([
+    const [lines, events, shortages, pickTasks, packTasks, loadSheets] = await Promise.all([
       sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token }),
       sb(`/rest/v1/event_log?entity_id=eq.${order.id}&select=*&order=created_at.asc`, { token }),
-      sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}&select=*`, { token })
+      sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}&select=*`, { token }),
+      sb(`/rest/v1/pick_tasks?order_id=eq.${order.id}&select=*`, { token }),
+      sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&select=*`, { token }),
+      sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&order_ids=cs.{${order.id}}&select=*`, { token })
     ]);
     setOpenLines(lines || []);
-    setOpenEvents(events || []);
     setOpenShortages(shortages || []);
+
+    const history = (events || []).map(ev => ({
+      ts: ev.created_at, label: ev.action, user: profiles[ev.user_id]?.full_name || "System"
+    }));
+    for (const pt of pickTasks || []) {
+      if (pt.assigned_at) history.push({ ts: pt.assigned_at, label: "Assigned to picker", user: profiles[pt.assigned_to]?.full_name || "—" });
+      if (pt.completed_at) history.push({ ts: pt.completed_at, label: "Picking completed", user: profiles[pt.assigned_to]?.full_name || "—" });
+    }
+    for (const pk of packTasks || []) {
+      if (pk.completed_at) history.push({ ts: pk.completed_at, label: `Packed & labeled (${pk.label_number || "—"})`, user: profiles[pk.assigned_to]?.full_name || "—" });
+    }
+    for (const ls of loadSheets || []) {
+      history.push({ ts: ls.created_at, label: `Dispatched — Load Sheet ${ls.load_sheet_number}`, user: profiles[ls.created_by]?.full_name || "—" });
+    }
+    history.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    setOpenEvents(history);
+
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProductCache(prev => ({ ...prev, ...newProducts }));
     setEditTracking(order.external_order_id);
@@ -1345,6 +1370,20 @@ function OrdersView({ token, profile, showToast }) {
   };
 
   const canEditIncomplete = ["admin", "warehouse_lead"].includes(profile.role);
+
+  const [orderSearch, setOrderSearch] = useState("");
+  const searchOrderHistory = async () => {
+    const code = orderSearch.trim();
+    if (!code) return;
+    let found = orders.find(o => o.external_order_id === code || o.external_order_id.includes(code));
+    if (!found) {
+      const rows = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&external_order_id=eq.${encodeURIComponent(code)}&select=*`, { token });
+      found = rows && rows[0];
+    }
+    if (!found) { showToast("Order nahi mila — number check karein", "err"); return; }
+    setOrderSearch("");
+    openOrderDetail(found);
+  };
 
   const saveOrderEdits = async () => {
     try {
@@ -1447,11 +1486,11 @@ function OrdersView({ token, profile, showToast }) {
           </table>
         </div>
         <div style={S.panel}>
-          <div style={S.panelTitle}>Timeline</div>
-          {openEvents.length === 0 ? <EmptyNote text="No events logged yet." /> : openEvents.map(ev => (
-            <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
-              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{ev.action} <span style={{ color: "#8B93A3" }}>— {profiles[ev.user_id]?.full_name || "System"}</span></span>
-              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.created_at)}</span>
+          <div style={S.panelTitle}>Order history — kisne kya kiya, kab</div>
+          {openEvents.length === 0 ? <EmptyNote text="Abhi tak koi activity nahi hui." /> : openEvents.map((ev, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
+              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{ev.label} <span style={{ color: "#8B93A3" }}>— {ev.user}</span></span>
+              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.ts)}</span>
             </div>
           ))}
         </div>
@@ -1470,6 +1509,14 @@ function OrdersView({ token, profile, showToast }) {
           <button style={S.primaryBtnSm} onClick={() => setShowForm(s => !s)}>+ New order</button>
         </div>
       } />
+      <div style={{ margin: "0 0 14px" }}>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="🔍 Order/Tracking number se seedha history dekhein…"
+            value={orderSearch} onChange={e => setOrderSearch(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && searchOrderHistory()} />
+          <button style={S.primaryBtnSm} onClick={searchOrderHistory}>Find</button>
+        </div>
+      </div>
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
@@ -2198,7 +2245,7 @@ function DispatchView({ token, profile, showToast }) {
               for (const o of os || []) {
                 const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
                 const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
-                rows.push([esc(o.raw_data?.customer || "—"), esc(o.external_order_id), esc(qty), esc(fmtTime(o.dispatched_at))]);
+                rows.push([esc(o.raw_data?.customer_order_number || o.raw_data?.customer || "—"), esc(o.external_order_id), esc(qty), esc(fmtTime(o.dispatched_at))]);
               }
               const csv = rows.map(r => r.join(",")).join("\n");
               const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -2691,9 +2738,12 @@ const FIELD_ALIASES = {
   reference: ["reference"],
   sourceDocument: ["sourcedocument"],
   contact: ["contact", "supplier", "vendor"],
+  customerOrderNumber: ["customerno", "customerorderno", "customerordernumber"],
   orderRef: ["trackingno", "tracking", "orderno", "invoicenumber", "order"],
   courier: ["courier"],
-  customer: ["customer"],
+  customer: ["customer", "customername"],
+  invoiceDate: ["invoicedate"],
+  grossAmount: ["grossamount"],
   unit: ["unit", "uom"],
   reorderLevel: ["reorderlevel", "reorder"]
 };
