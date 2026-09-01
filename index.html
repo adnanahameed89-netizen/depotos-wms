@@ -15,6 +15,29 @@
   body { margin: 0; background: #14161B; font-family: 'Space Grotesk', sans-serif; }
   input, select, button { font-family: inherit; }
   table { width: 100%; border-collapse: collapse; }
+
+  .depotos-menu-btn { display: none; }
+  .depotos-overlay { display: none; }
+
+  @media (max-width: 820px) {
+    .depotos-sidebar {
+      position: fixed !important;
+      top: 0; left: 0; height: 100vh;
+      z-index: 300;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+      box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+    }
+    .depotos-sidebar.open { transform: translateX(0); }
+    .depotos-menu-btn { display: inline-flex !important; }
+    .depotos-overlay.open {
+      display: block; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55); z-index: 250;
+    }
+    .depotos-content { padding: 14px 12px 60px !important; }
+    .depotos-topbar { padding: 0 12px !important; }
+    .depotos-statgrid { grid-template-columns: repeat(2, 1fr) !important; }
+  }
 </style>
 </head>
 <body>
@@ -57,6 +80,9 @@ function App() {
   const [loadErr, setLoadErr] = useState("");
   const [view, setView] = useState("dashboard");
   const [toast, setToast] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const changeView = (v) => { setView(v); setSidebarOpen(false); };
 
   const showToast = (msg, kind = "ok") => {
     setToast({ msg, kind, id: uid() });
@@ -87,10 +113,12 @@ function App() {
 
   return (
     <div style={S.app}>
-      <Sidebar view={view} setView={setView} profile={profile} onLogout={() => { setSession(null); setProfile(null); }} />
+      <div className={`depotos-overlay${sidebarOpen ? " open" : ""}`} onClick={() => setSidebarOpen(false)} />
+      <Sidebar view={view} setView={changeView} profile={profile} sidebarOpen={sidebarOpen}
+        onLogout={() => { setSession(null); setProfile(null); }} />
       <div style={S.main}>
-        <TopBar profile={profile} />
-        <div style={S.content}>
+        <TopBar profile={profile} onMenuClick={() => setSidebarOpen(true)} />
+        <div style={S.content} className="depotos-content">
           {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} />}
           {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
@@ -142,7 +170,7 @@ function LoginScreen({ onLogin, error }) {
 }
 
 /* ================= SIDEBAR / TOPBAR ================= */
-function Sidebar({ view, setView, profile, onLogout }) {
+function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: "🗂" },
     { id: "products", label: "Products", icon: "📦" },
@@ -154,16 +182,28 @@ function Sidebar({ view, setView, profile, onLogout }) {
     { id: "packing", label: "Packing", icon: "🏷" },
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
-  const visibleItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
     : ["warehouse_lead", "supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
+  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, returns: { label: "Returns", icon: "↩" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  let visibleItems = baseItems;
+  if (profile.nav_overrides) {
+    const baseIds = new Set(baseItems.map(i => i.id));
+    for (const id of ALL_NAV_IDS) {
+      const override = profile.nav_overrides[id];
+      if (override === false) baseIds.delete(id);
+      if (override === true) baseIds.add(id);
+    }
+    visibleItems = ALL_NAV_IDS.filter(id => baseIds.has(id)).map(id => ({ id, ...ALL_NAV_META[id] }));
+  }
   return (
-    <div style={S.sidebar}>
+    <div style={S.sidebar} className={`depotos-sidebar${sidebarOpen ? " open" : ""}`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "22px 20px 26px" }}>
         <span style={{ fontSize: 18 }}>📦</span>
         <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#ECEAE3", fontSize: 16 }}>DEPOT<span style={{ color: "#F5A623" }}>OS</span></span>
       </div>
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, overflowY: "auto" }}>
         {visibleItems.map(it => {
           const active = view === it.id;
           return (
@@ -179,11 +219,14 @@ function Sidebar({ view, setView, profile, onLogout }) {
     </div>
   );
 }
-function TopBar({ profile }) {
+function TopBar({ profile, onMenuClick }) {
   return (
-    <div style={S.topbar}>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B93A3" }}>
-        {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+    <div style={S.topbar} className="depotos-topbar">
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button className="depotos-menu-btn" onClick={onMenuClick} style={{ background: "none", border: "1px solid #333A47", borderRadius: 6, color: "#ECEAE3", width: 32, height: 32, alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 16 }}>☰</button>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B93A3" }}>
+          {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+        </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <span style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 13 }}>{profile.full_name}</span>
@@ -228,7 +271,7 @@ function DashboardView({ token, profile, setView }) {
   return (
     <div>
       <SectionTitle title={`Welcome, ${profile.full_name}`} />
-      <div style={S.statGrid}>
+      <div style={S.statGrid} className="depotos-statgrid">
         <StatCard icon="⬇" label="Open GRNs" value={stats.openGrns} color="#F5A623" onClick={() => setView("receiving")} />
         <StatCard icon="📍" label="Pending putaway" value={stats.pendingPutaway} color="#5B9EE8" onClick={() => setView("putaway")} />
         <StatCard icon="📦" label="Products catalogued" value={stats.products} color="#4CAF7D" onClick={() => setView("products")} />
@@ -1204,8 +1247,16 @@ function OrdersView({ token, profile, showToast }) {
   useEffect(() => { load(); }, [load]);
 
   const receivedOrders = orders.filter(o => o.status === "received");
+  const [skuFilter, setSkuFilter] = useState("all");
+  const orderSkuType = (orderId) => {
+    const c = lineStats[orderId]?.count || 0;
+    return c === 1 ? "single" : "multi";
+  };
+  const filteredReceived = receivedOrders.filter(o => skuFilter === "all" || orderSkuType(o.id) === skuFilter);
+  const singleCount = receivedOrders.filter(o => orderSkuType(o.id) === "single").length;
+  const multiCount = receivedOrders.filter(o => orderSkuType(o.id) === "multi").length;
   const selectedCount = Object.values(selectedOrders).filter(Boolean).length;
-  const toggleAll = (checked) => setSelectedOrders(Object.fromEntries(receivedOrders.map(o => [o.id, checked])));
+  const toggleAll = (checked) => setSelectedOrders(Object.fromEntries(filteredReceived.map(o => [o.id, checked])));
 
   const bulkReserveAndAssign = async () => {
     const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k]);
@@ -1676,6 +1727,18 @@ function OrdersView({ token, profile, showToast }) {
 
       {receivedOrders.length > 0 && (
         <div style={S.panel}>
+          <div style={S.panelTitle}>Smart Picking — order classification</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setSkuFilter("all")} style={{ ...S.pill, ...(skuFilter === "all" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>All ({receivedOrders.length})</button>
+            <button onClick={() => setSkuFilter("single")} style={{ ...S.pill, ...(skuFilter === "single" ? { background: "#4CAF7D", color: "#14161B", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleCount})</button>
+            <button onClick={() => setSkuFilter("multi")} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#14161B", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
+          </div>
+          <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8 }}>Single-SKU orders ek hi product ke liye hain — inhe ek aisle-trip mein saath batch karna zyada efficient hota hai.</div>
+        </div>
+      )}
+
+      {receivedOrders.length > 0 && (
+        <div style={S.panel}>
           <div style={S.panelTitle}>Bulk assign to picker ({selectedCount}/15 selected)</div>
           {totes.length === 0 && (
             <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ Koi available tote nahi hai — Admin se Tote Master check karwayein.</div>
@@ -1700,14 +1763,15 @@ function OrdersView({ token, profile, showToast }) {
         <table>
           <thead>
             <tr>
-              <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === receivedOrders.length} /></th>
+              <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === filteredReceived.length} /></th>
               <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
-              <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Received</th><th style={S.th}></th>
+              <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th><th style={S.th}>Received</th><th style={S.th}></th>
             </tr>
           </thead>
           <tbody>
-            {orders.filter(o => !statusFilter || o.status === statusFilter).map(o => {
+            {orders.filter(o => (!statusFilter || o.status === statusFilter) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).map(o => {
               const stat = lineStats[o.id] || { count: 0, qty: 0 };
+              const type = o.status === "received" ? orderSkuType(o.id) : null;
               return (
                 <tr key={o.id} style={{ cursor: "pointer" }} onClick={() => openOrderDetail(o)}>
                   <td style={S.td} onClick={e => e.stopPropagation()}>
@@ -1720,6 +1784,9 @@ function OrdersView({ token, profile, showToast }) {
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{o.status}</span></td>
                   <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
                   <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
+                  <td style={S.td}>
+                    {type && <span style={{ ...S.badgeSm, color: type === "single" ? "#4CAF7D" : "#5B9EE8", borderColor: type === "single" ? "#4CAF7D" : "#5B9EE8" }}>{type === "single" ? "Single-SKU" : "Multi-SKU"}</span>}
+                  </td>
                   <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
                   <td style={S.td}>
                     {o.status === "received" && (
@@ -1729,8 +1796,8 @@ function OrdersView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {orders.filter(o => !statusFilter || o.status === statusFilter).length === 0 && (
-              <tr><td colSpan={8}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
+            {orders.filter(o => (!statusFilter || o.status === statusFilter) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).length === 0 && (
+              <tr><td colSpan={9}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
             )}
           </tbody>
         </table>
@@ -2357,6 +2424,43 @@ function UsersView({ token, profile, showToast }) {
   const [warehouses, setWarehouses] = useState([]);
   const [form, setForm] = useState({ full_name: "", email: "", password: "", role: "picker", warehouse_id: profile.warehouse_id || "" });
   const [busy, setBusy] = useState(false);
+  const [editAccessId, setEditAccessId] = useState(null);
+  const [editOverrides, setEditOverrides] = useState({});
+
+  const NAV_LIST = [
+    ["dashboard", "Dashboard"], ["products", "Products"], ["receiving", "Receiving"], ["putaway", "Putaway"],
+    ["inventory", "Inventory"], ["orders", "Sales Orders"], ["picking", "Picking"], ["packing", "Packing"],
+    ["dispatch", "Dispatch"], ["returns", "Returns"], ["reports", "Reports"], ["bins", "Bin Master"],
+    ["totemaster", "Tote Master"], ["users", "Users"]
+  ];
+  const ROLE_DEFAULT_NAV = {
+    admin: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports", "bins", "totemaster", "users"],
+    warehouse_lead: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"],
+    supervisor: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"],
+    returns_agent: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"]
+  };
+
+  const openEditAccess = (u) => {
+    setEditAccessId(u.id);
+    setEditOverrides(u.nav_overrides || {});
+  };
+
+  const isNavVisible = (u, navId) => {
+    const roleDefault = (ROLE_DEFAULT_NAV[u.role] || ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch"]).includes(navId);
+    const override = (u.nav_overrides || {})[navId];
+    if (override === true) return true;
+    if (override === false) return false;
+    return roleDefault;
+  };
+
+  const saveAccess = async (u) => {
+    try {
+      await sb(`/rest/v1/profiles?id=eq.${u.id}`, { method: "PATCH", token, body: { nav_overrides: editOverrides } });
+      showToast(`${u.full_name} ki access update ho gayi`);
+      setEditAccessId(null);
+      load();
+    } catch (e) { showToast("Access save failed", "err"); }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -2438,10 +2542,30 @@ function UsersView({ token, profile, showToast }) {
             <div style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{u.full_name}</div>
             <div style={{ marginTop: 6 }}>
               <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{ROLE_LABEL[u.role] || u.role}</span>
+              {u.nav_overrides && Object.keys(u.nav_overrides).length > 0 && (
+                <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8", marginLeft: 6 }}>Custom access</span>
+              )}
             </div>
             <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>
               {warehouses.find(w => w.id === u.warehouse_id)?.name || (u.role === "admin" ? "All warehouses" : "No warehouse set")}
             </div>
+            <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => editAccessId === u.id ? setEditAccessId(null) : openEditAccess(u)}>
+              {editAccessId === u.id ? "✕ Close" : "🔐 Edit Access"}
+            </button>
+            {editAccessId === u.id && (
+              <div style={{ marginTop: 10, borderTop: "1px solid #333A47", paddingTop: 10 }}>
+                {NAV_LIST.map(([navId, label]) => {
+                  const checked = isNavVisible({ ...u, nav_overrides: editOverrides }, navId);
+                  return (
+                    <label key={navId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12, color: "#ECEAE3", cursor: "pointer" }}>
+                      <input type="checkbox" checked={checked} onChange={e => setEditOverrides({ ...editOverrides, [navId]: e.target.checked })} />
+                      {label}
+                    </label>
+                  );
+                })}
+                <button style={{ ...S.primaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => saveAccess(u)}>💾 Save access</button>
+              </div>
+            )}
           </div>
         ))}
         {users.length === 0 && <EmptyNote text="No staff yet." />}
@@ -2642,6 +2766,17 @@ function ReturnsView({ token, profile, showToast }) {
 }
 
 /* ================= REPORTS ================= */
+function categorizeEvent(ev) {
+  if (ev.entity_type === "putaway_task") return "Put Away";
+  if (ev.entity_type === "pick_task") return "Pick";
+  if (ev.entity_type === "pack_task") return "Pack";
+  if (ev.entity_type === "sales_order" && ev.action === "dispatched") return "Dispatch";
+  if (ev.entity_type === "return" || ev.entity_type === "return_line") return "Returns";
+  if (ev.entity_type === "grn" || ev.entity_type === "grn_line") return "GRN";
+  return "Other";
+}
+const CATEGORIES = ["GRN", "Put Away", "Pick", "Pack", "Dispatch", "Returns"];
+
 function ReportsView({ token, profile, showToast }) {
   const [loading, setLoading] = useState(true);
   const [staffCounts, setStaffCounts] = useState([]);
@@ -2649,13 +2784,17 @@ function ReportsView({ token, profile, showToast }) {
   const [profiles, setProfiles] = useState({});
   const [pickDurations, setPickDurations] = useState([]);
   const [rawEvents, setRawEvents] = useState([]);
+  const [teamComparison, setTeamComparison] = useState([]);
+  const [hourlyData, setHourlyData] = useState([]);
+  const [timelineUserId, setTimelineUserId] = useState("");
+  const [timelineDate, setTimelineDate] = useState(new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       try {
         const [events, profs, orders, pickTasks] = await Promise.all([
-          sb(`/rest/v1/event_log?select=*&order=created_at.desc&limit=1000`, { token }),
+          sb(`/rest/v1/event_log?select=*&order=created_at.desc&limit=2000`, { token }),
           sb(`/rest/v1/profiles?select=*`, { token }),
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.dispatched&select=*`, { token }),
           sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token })
@@ -2663,6 +2802,7 @@ function ReportsView({ token, profile, showToast }) {
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
         setProfiles(profMap);
         setRawEvents(events || []);
+        if (!timelineUserId && profs && profs.length) setTimelineUserId(profs[0].id);
 
         const pickDurByUser = {};
         for (const pt of pickTasks || []) {
@@ -2678,16 +2818,36 @@ function ReportsView({ token, profile, showToast }) {
         setPickDurations(pickAvg);
 
         const counts = {};
+        const catCounts = {};
         for (const ev of events || []) {
           if (!ev.user_id) continue;
           if (!counts[ev.user_id]) counts[ev.user_id] = {};
           counts[ev.user_id][ev.action] = (counts[ev.user_id][ev.action] || 0) + 1;
+          const cat = categorizeEvent(ev);
+          if (!catCounts[ev.user_id]) catCounts[ev.user_id] = Object.fromEntries(CATEGORIES.map(c => [c, 0]));
+          if (catCounts[ev.user_id][cat] !== undefined) catCounts[ev.user_id][cat] += 1;
         }
         const rows = Object.entries(counts).map(([userId, actions]) => ({
           userId, name: profMap[userId]?.full_name || "Unknown", role: profMap[userId]?.role,
           total: Object.values(actions).reduce((a, b) => a + b, 0), actions
         })).sort((a, b) => b.total - a.total);
         setStaffCounts(rows);
+
+        const teamRows = Object.entries(catCounts).map(([userId, cats]) => ({
+          userId, name: profMap[userId]?.full_name || "Unknown", role: profMap[userId]?.role, cats,
+          total: Object.values(cats).reduce((a, b) => a + b, 0)
+        })).sort((a, b) => b.total - a.total);
+        setTeamComparison(teamRows);
+
+        const today = new Date().toDateString();
+        const hourBuckets = Array.from({ length: 24 }, (_, h) => ({ hour: h, ...Object.fromEntries(CATEGORIES.map(c => [c, 0])) }));
+        for (const ev of events || []) {
+          const d = new Date(ev.created_at);
+          if (d.toDateString() !== today) continue;
+          const cat = categorizeEvent(ev);
+          if (hourBuckets[d.getHours()][cat] !== undefined) hourBuckets[d.getHours()][cat] += 1;
+        }
+        setHourlyData(hourBuckets.filter(h => CATEGORIES.some(c => h[c] > 0)));
 
         const durations = (orders || [])
           .filter(o => o.received_at && o.dispatched_at)
@@ -2704,7 +2864,7 @@ function ReportsView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Reports" />
-      <div style={S.statGrid}>
+      <div style={S.statGrid} className="depotos-statgrid">
         <div style={S.statCard}>
           <span style={{ fontSize: 16 }}>⏱</span>
           <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>
@@ -2722,6 +2882,79 @@ function ReportsView({ token, profile, showToast }) {
           <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{staffCounts.length}</div>
           <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Active staff (logged actions)</div>
         </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={S.panelTitle}>Team comparison — process-wise breakdown</div>
+          {teamComparison.length > 0 && (
+            <button style={S.secondaryBtnSm} onClick={() => exportCSV("team-comparison.csv", ["Staff", "Role", ...CATEGORIES, "Total"], teamComparison.map(r => [r.name, r.role, ...CATEGORIES.map(c => r.cats[c]), r.total]))}>⬇ Export CSV</button>
+          )}
+        </div>
+        {teamComparison.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
+          <table>
+            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th>{CATEGORIES.map(c => <th key={c} style={S.th}>{c}</th>)}<th style={S.th}>Total</th></tr></thead>
+            <tbody>
+              {teamComparison.map(r => (
+                <tr key={r.userId}>
+                  <td style={S.td}>{r.name}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.role}</td>
+                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: r.cats[c] > 0 ? "#ECEAE3" : "#5A6070" }}>{r.cats[c]}</td>)}
+                  <td style={{ ...S.td, color: "#F5A623", fontWeight: 600 }}>{r.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Hourly productivity — today</div>
+        {hourlyData.length === 0 ? <EmptyNote text="Aaj tak koi activity nahi hui." /> : (
+          <table>
+            <thead><tr><th style={S.th}>Hour</th>{CATEGORIES.map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
+            <tbody>
+              {hourlyData.map(h => (
+                <tr key={h.hour}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#5B9EE8" }}>{String(h.hour).padStart(2, "0")}:00</td>
+                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: h[c] > 0 ? "#ECEAE3" : "#5A6070" }}>{h[c] || 0}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>User daily timeline — kis ne kab kya kiya (gap analysis)</div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <select style={{ ...S.input, minWidth: 180 }} value={timelineUserId} onChange={e => setTimelineUserId(e.target.value)}>
+            {Object.values(profiles).map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+          </select>
+          <input type="date" style={{ ...S.input, maxWidth: 170 }} value={timelineDate} onChange={e => setTimelineDate(e.target.value)} />
+        </div>
+        {(() => {
+          const dayEvents = rawEvents
+            .filter(ev => ev.user_id === timelineUserId && new Date(ev.created_at).toISOString().slice(0, 10) === timelineDate)
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          if (dayEvents.length === 0) return <EmptyNote text="Is user ki is din koi activity nahi mili." />;
+          const rows = [];
+          for (let i = 0; i < dayEvents.length; i++) {
+            rows.push({ type: "event", ev: dayEvents[i] });
+            if (i < dayEvents.length - 1) {
+              const gapMin = (new Date(dayEvents[i + 1].created_at) - new Date(dayEvents[i].created_at)) / 60000;
+              if (gapMin > 15) rows.push({ type: "gap", mins: Math.round(gapMin) });
+            }
+          }
+          return rows.map((r, i) => r.type === "gap" ? (
+            <div key={i} style={{ padding: "6px 0", fontSize: 11, color: "#5A6070", fontStyle: "italic" }}>— No recorded WMS activity ({r.mins} min gap) —</div>
+          ) : (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
+              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{r.ev.action} <span style={{ color: "#8B93A3" }}>({categorizeEvent(r.ev)})</span></span>
+              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.ev.created_at)}</span>
+            </div>
+          ));
+        })()}
       </div>
 
       <div style={S.panel}>
@@ -3307,7 +3540,7 @@ const S = {
   navItemActive: { background: "#262B35", borderLeft: "2px solid #F5A623" },
   statGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 },
   statCard: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: "16px 18px" },
-  panel: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 18, marginBottom: 14 },
+  panel: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 18, marginBottom: 14, overflowX: "auto" },
   panelTitle: { color: "#ECEAE3", fontSize: 13, fontWeight: 600, marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.5 },
   cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 },
   card: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 16, cursor: "pointer" },
