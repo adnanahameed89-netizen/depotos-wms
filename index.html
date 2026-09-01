@@ -135,6 +135,7 @@ function App() {
           {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
       {toast && <Toast toast={toast} />}
@@ -215,7 +216,10 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
           );
         })}
       </div>
-      <button onClick={onLogout} style={{ ...S.navItem, borderTop: "1px solid #333A47", marginBottom: 12 }}>
+      <button onClick={() => setView("changepassword")} style={{ ...S.navItem, borderTop: "1px solid #333A47" }}>
+        <span>🔑</span><span style={{ color: view === "changepassword" ? "#ECEAE3" : "#8B93A3" }}>Change Password</span>
+      </button>
+      <button onClick={onLogout} style={{ ...S.navItem, marginBottom: 12 }}>
         <span>⏻</span><span style={{ color: "#8B93A3" }}>Sign out</span>
       </button>
     </div>
@@ -3553,6 +3557,49 @@ function ToteMasterView({ token, profile, showToast }) {
           </div>
         ))}
         {totes.length === 0 && <EmptyNote text="Koi tote nahi hai — upar se add karein." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= CHANGE PASSWORD (self-service, all roles) ================= */
+function ChangePasswordView({ token, showToast }) {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (newPassword.length < 6) { showToast("Password kam se kam 6 characters ka ho", "err"); return; }
+    if (newPassword !== confirmPassword) { showToast("Dono password match nahi ho rahe", "err"); return; }
+    setBusy(true);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        method: "PUT",
+        headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.msg || data.error_description || data.error || "Failed");
+      showToast("Password change ho gaya ✓");
+      setNewPassword(""); setConfirmPassword("");
+    } catch (e) {
+      showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Change Password" />
+      <div style={{ ...S.panel, maxWidth: 420 }}>
+        <div style={S.label}>NEW PASSWORD</div>
+        <input type="password" style={S.input} value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Kam se kam 6 characters" />
+        <div style={S.label}>CONFIRM NEW PASSWORD</div>
+        <input type="password" style={S.input} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()} placeholder="Dobara likhein" />
+        <button style={{ ...S.primaryBtnSm, marginTop: 16, width: "100%", justifyContent: "center" }} onClick={submit} disabled={busy}>
+          {busy ? "Saving…" : "🔑 Update Password"}
+        </button>
       </div>
     </div>
   );
