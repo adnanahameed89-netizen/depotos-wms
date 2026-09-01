@@ -790,27 +790,28 @@ function ReceivingView({ token, profile, showToast }) {
 
 /* ================= PUTAWAY ================= */
 function PutawayView({ token, profile, showToast }) {
-  const [tasks, setTasks] = useState([]);
+  const [unassignedTasks, setUnassignedTasks] = useState([]);
+  const [myAllTasks, setMyAllTasks] = useState([]);
   const [products, setProducts] = useState({});
   const [bins, setBins] = useState([]);
   const [staff, setStaff] = useState([]);
   const [grnLines, setGrnLines] = useState({});
   const [grns, setGrns] = useState({});
   const [binChoice, setBinChoice] = useState({});
-  const [verified, setVerified] = useState({});
-  const [scanInput, setScanInput] = useState({});
   const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
 
   const load = useCallback(async () => {
     try {
-      const [t, b, s] = await Promise.all([
-        sb(`/rest/v1/putaway_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
+      const [u, mine, b, s] = await Promise.all([
+        sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=is.null&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/putaway_tasks?assigned_to=eq.${profile.id}&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
-      setTasks(t || []); setBins(b || []); setStaff(s || []);
-      setProducts(await fetchProductsByIds(token, (t || []).map(x => x.product_id)));
-      const glIds = [...new Set((t || []).map(x => x.grn_line_id).filter(Boolean))];
+      setUnassignedTasks(u || []); setMyAllTasks(mine || []); setBins(b || []); setStaff(s || []);
+      const allTasks = [...(u || []), ...(mine || [])];
+      setProducts(await fetchProductsByIds(token, allTasks.map(x => x.product_id)));
+      const glIds = [...new Set(allTasks.map(x => x.grn_line_id).filter(Boolean))];
       if (glIds.length) {
         const gls = await sb(`/rest/v1/grn_lines?id=in.(${glIds.join(",")})&select=*`, { token });
         setGrnLines(Object.fromEntries((gls || []).map(x => [x.id, x])));
@@ -821,7 +822,7 @@ function PutawayView({ token, profile, showToast }) {
         }
       }
     } catch (e) { showToast("Load failed", "err"); }
-  }, [token, profile.warehouse_id]);
+  }, [token, profile.warehouse_id, profile.id]);
   useEffect(() => { load(); }, [load]);
 
   const grnNumberFor = (task) => {
@@ -837,54 +838,89 @@ function PutawayView({ token, profile, showToast }) {
     showToast("Assigned"); load();
   };
 
-  const putAway = async (task) => {
-    const binId = binChoice[task.id];
-    if (!binId) { showToast("Bin location select karein (list mein nahi hai to admin se Bin Master mein add karwayein)", "err"); return; }
+  /* ---- scan-driven flow ---- */
+  const [scanBarcodeInput, setScanBarcodeInput] = useState("");
+  const [scanLocationInput, setScanLocationInput] = useState("");
+  const [scanQty, setScanQty] = useState("");
+  const [matchedTaskId, setMatchedTaskId] = useState(null);
+  const [matchedBinId, setMatchedBinId] = useState("");
+  const [shortageOpen, setShortageOpen] = useState(false);
+  const [shortageQty, setShortageQty] = useState("");
+
+  const pendingMine = myAllTasks.filter(t => t.qty - (t.qty_completed || 0) > 0);
+  const matchedTask = pendingMine.find(t => t.id === matchedTaskId);
+  const matchedProduct = matchedTask ? products[matchedTask.product_id] : null;
+  const matchedRemaining = matchedTask ? matchedTask.qty - (matchedTask.qty_completed || 0) : 0;
+
+  const scanProduct = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : scanBarcodeInput).trim();
+    setScanBarcodeInput("");
+    if (!code) return;
+    const c = cleanCode(code);
+    const product = Object.values(products).find(p => cleanCode(p.barcode) === c || cleanCode(p.sku) === c);
+    if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+    const candidates = pendingMine.filter(t => t.product_id === product.id).sort((a, b) => a.id.localeCompare(b.id));
+    if (candidates.length === 0) { showToast("Yeh product aapke pending jobs mein nahi hai — WRONG ITEM ya already complete", "err"); return; }
+    setMatchedTaskId(candidates[0].id);
+    setMatchedBinId("");
+    setScanQty(String(candidates[0].qty - (candidates[0].qty_completed || 0)));
+    setShortageOpen(false);
+    showToast(`✓ Matched: ${product.barcode} — GRN ${grnNumberFor(candidates[0])}`);
+  };
+
+  const scanLocation = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : scanLocationInput).trim();
+    setScanLocationInput("");
+    if (!code) return;
+    const bin = bins.find(b => b.code.toLowerCase() === code.trim().toLowerCase());
+    if (!bin) { showToast("Location nahi mili — Bin Master check karein", "err"); return; }
+    setMatchedBinId(bin.id);
+    showToast(`📍 Location set: ${bin.code}`);
+  };
+
+  const confirmPutaway = async () => {
+    if (!matchedTask) { showToast("Pehle product scan karein", "err"); return; }
+    if (!matchedBinId) { showToast("Location scan/select karein", "err"); return; }
+    const qty = Number(scanQty);
+    if (!qty || qty <= 0) { showToast("Valid qty enter karein", "err"); return; }
+    if (qty > matchedRemaining) { showToast(`EXCESS QTY NOT ALLOWED — max ${matchedRemaining}`, "err"); return; }
     try {
-      await addOnHand(token, profile.warehouse_id, task.product_id, binId, task.qty);
-      await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: binId, completed_at: new Date().toISOString(), assigned_to: task.assigned_to || profile.id } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "completed", metadata: { bin_id: binId, qty: task.qty } } });
-      showToast("Putaway complete — stock now available"); load();
+      await addOnHand(token, profile.warehouse_id, matchedTask.product_id, matchedBinId, qty);
+      const newCompleted = (matchedTask.qty_completed || 0) + qty;
+      const done = newCompleted >= matchedTask.qty;
+      await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
+        method: "PATCH", token,
+        body: done
+          ? { qty_completed: newCompleted, status: "completed", bin_id: matchedBinId, completed_at: new Date().toISOString() }
+          : { qty_completed: newCompleted, bin_id: matchedBinId }
+      });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: matchedBinId, qty } } });
+      showToast(done ? "✓ Putaway complete" : `✓ ${qty} pcs put away — ${matchedTask.qty - newCompleted} remaining`);
+      setMatchedTaskId(null); setMatchedBinId(""); setScanQty("");
+      load();
     } catch (e) { showToast("Putaway failed", "err"); }
   };
 
-  const reportShortage = async (task, shortQty) => {
-    const qty = Number(shortQty);
-    if (!qty || qty <= 0 || qty > task.qty) { showToast("Valid short qty (1 se task qty tak) enter karein", "err"); return; }
+  const reportShortage = async () => {
+    const qty = Number(shortageQty);
+    if (!matchedTask) return;
+    if (!qty || qty <= 0 || qty > matchedRemaining) { showToast(`Valid short qty (1 se ${matchedRemaining} tak) enter karein`, "err"); return; }
     try {
-      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: task.grn_line_id, product_id: task.product_id, expected_qty: task.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id } });
-      const newQty = task.qty - qty;
-      if (newQty > 0) {
-        await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { qty: newQty } });
-      } else {
-        await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "completed", completed_at: new Date().toISOString(), assigned_to: task.assigned_to || profile.id } });
-      }
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty } } });
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id } });
+      const newRequired = matchedTask.qty - qty;
+      const done = (matchedTask.qty_completed || 0) >= newRequired;
+      await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
+        method: "PATCH", token,
+        body: done ? { qty: newRequired, status: "completed", completed_at: new Date().toISOString() } : { qty: newRequired }
+      });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty } } });
       showToast(`${qty} pcs RTV record ho gaya`);
+      setMatchedTaskId(null); setShortageOpen(false); setShortageQty("");
       load();
     } catch (e) { showToast("RTV report failed", "err"); }
   };
 
-  const myTasks = tasks.filter(t => t.assigned_to === profile.id);
-  const unassignedTasks = tasks.filter(t => !t.assigned_to);
-
-  const verifyProduct = (task, codeArg) => {
-    const code = (codeArg !== undefined ? codeArg : (scanInput[task.id] || "")).trim();
-    setScanInput({ ...scanInput, [task.id]: "" });
-    if (!code) return;
-    const p = products[task.product_id];
-    if (p && (p.barcode === code || p.sku === code)) {
-      setVerified({ ...verified, [task.id]: true });
-      showToast("Product verified ✓");
-    } else {
-      showToast("WRONG ITEM — is task ka product nahi hai", "err");
-    }
-  };
-
-  const [shortageOpen, setShortageOpen] = useState({});
-  const [shortageQty, setShortageQty] = useState({});
-
-  const TaskCard = ({ t, showAssign }) => {
+  const UnassignedCard = ({ t }) => {
     const p = products[t.product_id];
     return (
       <div style={S.card}>
@@ -892,56 +928,105 @@ function PutawayView({ token, profile, showToast }) {
           <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{grnNumberFor(t)}</span>
           <span style={{ ...S.badgeSm, color: "#8B93A3", borderColor: "#333A47" }}>Pending</span>
         </div>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 14, marginTop: 10 }}>{p?.sku || "—"}</div>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 14, marginTop: 10 }}>{p?.barcode || "—"}</div>
         <div style={{ color: "#ECEAE3", fontSize: 13 }}>{p?.name}</div>
         <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>Qty: {t.qty}</div>
-        {showAssign ? (
-          <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onChange={e => e.target.value && assignTask(t, e.target.value)} defaultValue="">
-            <option value="">Assign to staff…</option>
-            {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
-          </select>
-        ) : !verified[t.id] ? (
-          <>
-            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-              <input style={{ ...S.input, fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan product to verify"
-                value={scanInput[t.id] || ""} onChange={e => setScanInput({ ...scanInput, [t.id]: e.target.value })}
-                onKeyDown={e => e.key === "Enter" && verifyProduct(t)} />
-              <CameraScanButton onScan={(text) => verifyProduct(t, text)} />
-            </div>
-            <button style={{ ...S.secondaryBtnSm, marginTop: 8, width: "100%", justifyContent: "center" }} onClick={() => verifyProduct(t)}>Verify</button>
-            <button style={{ ...S.secondaryBtnSm, marginTop: 6, width: "100%", justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen({ ...shortageOpen, [t.id]: !shortageOpen[t.id] })}>⚠ Physical item nahi mila (RTV)</button>
-            {shortageOpen[t.id] && (
-              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                <input style={{ ...S.input, fontSize: 12 }} type="number" min={1} max={t.qty} placeholder={`Kitne short (max ${t.qty})`} value={shortageQty[t.id] || ""} onChange={e => setShortageQty({ ...shortageQty, [t.id]: e.target.value })} />
-                <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportShortage(t, shortageQty[t.id])}>Report</button>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} value={binChoice[t.id] || ""} onChange={e => setBinChoice({ ...binChoice, [t.id]: e.target.value })}>
-              <option value="">Select bin location</option>
-              {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-            </select>
-            <button style={{ ...S.primaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => putAway(t)}>✓ Confirm putaway</button>
-          </>
-        )}
+        <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onChange={e => e.target.value && assignTask(t, e.target.value)} defaultValue="">
+          <option value="">Assign to staff…</option>
+          {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+        </select>
       </div>
     );
   };
 
   return (
     <div>
-      <SectionTitle title="My putaway jobs" />
-      <div style={S.cardGrid}>
-        {myTasks.map(t => <TaskCard key={t.id} t={t} showAssign={false} />)}
-        {myTasks.length === 0 && <EmptyNote text="Koi job aapko assign nahi hui." />}
+      <SectionTitle title="Put Away — scan-driven" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>1. Scan product (koi bhi sequence mein)</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+            value={scanBarcodeInput} onChange={e => setScanBarcodeInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && scanProduct()} />
+          <CameraScanButton onScan={(text) => scanProduct(text)} />
+          <button style={S.primaryBtnSm} onClick={() => scanProduct()}>Scan</button>
+        </div>
       </div>
+
+      {matchedTask && matchedProduct && (
+        <div style={{ ...S.panel, borderColor: "#F5A623" }}>
+          <div style={S.panelTitle}>Matched item</div>
+          <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 16 }}>{matchedProduct.barcode}</div>
+          <div style={{ color: "#ECEAE3", fontSize: 14 }}>{matchedProduct.name}</div>
+          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>
+            GRN: {grnNumberFor(matchedTask)} · Required: {matchedTask.qty} · Put away so far: {matchedTask.qty_completed || 0} · Remaining: {matchedRemaining}
+          </div>
+
+          <div style={S.label}>2. SCAN LOCATION</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace", minWidth: 160 }} placeholder="Scan or type bin code"
+              value={scanLocationInput} onChange={e => setScanLocationInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && scanLocation()} />
+            <CameraScanButton onScan={(text) => scanLocation(text)} />
+            <select style={{ ...S.input, minWidth: 140 }} value={matchedBinId} onChange={e => setMatchedBinId(e.target.value)}>
+              <option value="">or select…</option>
+              {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+            </select>
+          </div>
+          {matchedBinId && <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 6 }}>📍 {bins.find(b => b.id === matchedBinId)?.code}</div>}
+
+          <div style={S.label}>3. QUANTITY</div>
+          <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, maxWidth: 140 }} value={scanQty} onChange={e => setScanQty(e.target.value)} />
+
+          <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+            <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>
+            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Physical item nahi mila (RTV)</button>
+            <button style={S.secondaryBtnSm} onClick={() => { setMatchedTaskId(null); setMatchedBinId(""); setShortageOpen(false); }}>Cancel</button>
+          </div>
+          {shortageOpen && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, width: 140 }} placeholder={`Short qty (max ${matchedRemaining})`} value={shortageQty} onChange={e => setShortageQty(e.target.value)} />
+              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={reportShortage}>Report RTV</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>My putaway jobs — tracking</div>
+        <table>
+          <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>GRN</th><th style={S.th}>Required</th><th style={S.th}>Put Away</th><th style={S.th}>Remaining</th><th style={S.th}>Location</th><th style={S.th}>Status</th></tr></thead>
+          <tbody>
+            {myAllTasks.map(t => {
+              const p = products[t.product_id];
+              const completed = t.qty_completed || 0;
+              const remaining = t.qty - completed;
+              const status = remaining <= 0 ? "Completed" : completed > 0 ? "Partial" : "Pending";
+              const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#8B93A3";
+              const bin = bins.find(b => b.id === t.bin_id);
+              return (
+                <tr key={t.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                  <td style={S.td}>{p?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{grnNumberFor(t)}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{t.qty}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{completed}</td>
+                  <td style={{ ...S.td, color: remaining > 0 ? "#E5484D" : "#8B93A3" }}>{remaining}</td>
+                  <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "—"}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: statusColor, borderColor: statusColor }}>{status}</span></td>
+                </tr>
+              );
+            })}
+            {myAllTasks.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi job aapko assign nahi hui." /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
       {canAssign && (
         <>
           <SectionTitle title="Unassigned putaway queue (assign to staff)" />
           <div style={S.cardGrid}>
-            {unassignedTasks.map(t => <TaskCard key={t.id} t={t} showAssign={true} />)}
+            {unassignedTasks.map(t => <UnassignedCard key={t.id} t={t} />)}
             {unassignedTasks.length === 0 && <EmptyNote text="Sab tasks assign ho chuke hain." />}
           </div>
         </>
