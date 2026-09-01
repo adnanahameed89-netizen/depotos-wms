@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://unpkg.com/chart.js@4.4.4/dist/chart.umd.js"></script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; background: #14161B; font-family: 'Space Grotesk', sans-serif; }
@@ -71,6 +72,7 @@ async function login(email, password) {
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D", incomplete: "#E5484D" };
+const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -243,6 +245,13 @@ function Toast({ toast }) {
 function DashboardView({ token, profile, setView }) {
   const [stats, setStats] = useState({ openGrns: 0, pendingPutaway: 0, products: 0 });
   const [orderStats, setOrderStats] = useState(null);
+  const [kpi, setKpi] = useState({ dispatchedUnitsToday: 0, avgLeadTimeToday: null, avgLeadTimeYesterday: null });
+  const [throughput, setThroughput] = useState([]);
+  const [productivity, setProductivity] = useState([]);
+  const [activeShipments, setActiveShipments] = useState([]);
+  const chartRef = useRef(null);
+  const chartInstance = useRef(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -256,9 +265,105 @@ function DashboardView({ token, profile, setView }) {
         const STAGES = ["received", "queued", "picking", "packed", "dispatched"];
         const counts = Object.fromEntries(STAGES.map(s => [s, (orders || []).filter(o => o.status === s).length]));
         setOrderStats({ total: (orders || []).length, counts });
+
+        // ---- KPIs: dispatched units today + lead time today vs yesterday ----
+        const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); sevenDaysAgo.setHours(0, 0, 0, 0);
+        const dispatchedRecent = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.dispatched&dispatched_at=gte.${sevenDaysAgo.toISOString()}&select=*`, { token });
+        const todayStr = new Date().toDateString();
+        const yestStr = new Date(Date.now() - 86400000).toDateString();
+        const todayOrders = (dispatchedRecent || []).filter(o => new Date(o.dispatched_at).toDateString() === todayStr);
+        const yestOrders = (dispatchedRecent || []).filter(o => new Date(o.dispatched_at).toDateString() === yestStr);
+
+        let unitsToday = 0;
+        if (todayOrders.length) {
+          const ids = todayOrders.map(o => o.id);
+          const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
+          unitsToday = (lines || []).reduce((s, l) => s + l.qty, 0);
+        }
+        const leadHrs = (arr) => {
+          const vals = arr.filter(o => o.received_at && o.dispatched_at).map(o => (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000);
+          return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+        };
+        setKpi({ dispatchedUnitsToday: unitsToday, avgLeadTimeToday: leadHrs(todayOrders), avgLeadTimeYesterday: leadHrs(yestOrders) });
+
+        // ---- 7-day throughput (dispatched order count per day) ----
+        const days = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(); d.setDate(d.getDate() - i);
+          days.push({ label: d.toLocaleDateString(undefined, { weekday: "short" }), dateStr: d.toDateString() });
+        }
+        const byDay = Object.fromEntries(days.map(d => [d.dateStr, 0]));
+        for (const o of dispatchedRecent || []) {
+          const ds = new Date(o.dispatched_at).toDateString();
+          if (byDay[ds] !== undefined) byDay[ds]++;
+        }
+        setThroughput(days.map(d => ({ label: d.label, value: byDay[d.dateStr] })));
+
+        // ---- User productivity today (actions/hr) ----
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const [events, profs] = await Promise.all([
+          sb(`/rest/v1/event_log?created_at=gte.${todayStart.toISOString()}&select=*`, { token }),
+          sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+        const byUser = {};
+        for (const ev of events || []) {
+          if (!ev.user_id || !profMap[ev.user_id]) continue;
+          if (!byUser[ev.user_id]) byUser[ev.user_id] = [];
+          byUser[ev.user_id].push(new Date(ev.created_at));
+        }
+        const prod = Object.entries(byUser).map(([userId, times]) => {
+          times.sort((a, b) => a - b);
+          const spanHrs = Math.max((times[times.length - 1] - times[0]) / 3600000, 0.25);
+          return { userId, name: profMap[userId].full_name, role: profMap[userId].role, actions: times.length, rate: Math.round(times.length / spanHrs) };
+        }).sort((a, b) => b.actions - a.actions).slice(0, 8);
+        setProductivity(prod);
+
+        // ---- Active shipments (picking / ready / needs amendment) ----
+        const active = (orders || []).filter(o => ["picking", "packed", "rtd", "incomplete", "queued"].includes(o.status));
+        const activeFull = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(picking,packed,rtd,incomplete,queued)&select=*&order=received_at.desc&limit=6`, { token });
+        const shipRows = [];
+        for (const o of activeFull || []) {
+          let subtitle = "";
+          if (o.status === "incomplete") {
+            const short = await sb(`/rest/v1/order_shortage_lines?order_id=eq.${o.id}&select=*&limit=1`, { token });
+            const prod = short && short[0] ? (await fetchProductsByIds(token, [short[0].product_id]))[short[0].product_id] : null;
+            subtitle = `Shortage: ${prod?.barcode || prod?.name || "—"}`;
+          } else if (o.status === "picking") subtitle = "Picking in progress";
+          else if (o.status === "queued") subtitle = "Queued for picking";
+          else subtitle = "Ready for dispatch";
+          shipRows.push({ ...o, subtitle });
+        }
+        setActiveShipments(shipRows);
       } catch (e) {}
     })();
   }, [token, profile.warehouse_id]);
+
+  useEffect(() => {
+    if (!chartRef.current || throughput.length === 0 || typeof Chart === "undefined") return;
+    if (chartInstance.current) chartInstance.current.destroy();
+    chartInstance.current = new Chart(chartRef.current.getContext("2d"), {
+      type: "line",
+      data: {
+        labels: throughput.map(t => t.label),
+        datasets: [{
+          data: throughput.map(t => t.value),
+          borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.15)",
+          fill: true, tension: 0.35, pointBackgroundColor: "#F5A623", pointRadius: 4
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#8B93A3" }, grid: { color: "#262B35" } },
+          y: { ticks: { color: "#8B93A3", precision: 0 }, grid: { color: "#262B35" }, beginAtZero: true }
+        }
+      }
+    });
+    return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+  }, [throughput]);
+
   const STAGE_META = [
     { key: "received", label: "New", color: "#8B93A3", icon: "🧾" },
     { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
@@ -268,9 +373,127 @@ function DashboardView({ token, profile, setView }) {
     { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
     { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
   ];
+  const leadDelta = (kpi.avgLeadTimeToday != null && kpi.avgLeadTimeYesterday) ? ((kpi.avgLeadTimeToday - kpi.avgLeadTimeYesterday) / kpi.avgLeadTimeYesterday * 100) : null;
+  const AVATAR_COLORS = ["#F5A623", "#5B9EE8", "#4CAF7D", "#B084F5", "#E5484D", "#F5A623"];
+
+  const initials = profile.full_name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
+  const SHIP_META = {
+    incomplete: { bar: "#E5484D", label: "AMEND", labelColor: "#E5484D" },
+    picking: { bar: "#F5A623", label: "PICKING", labelColor: "#F5A623" },
+    queued: { bar: "#5B9EE8", label: "QUEUED", labelColor: "#5B9EE8" },
+    packed: { bar: "#1D4D3E", label: "READY", labelColor: "#4CAF7D" },
+    rtd: { bar: "#1D4D3E", label: "READY", labelColor: "#4CAF7D" }
+  };
+
   return (
     <div>
-      <SectionTitle title={`Welcome, ${profile.full_name}`} />
+      <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL WAREHOUSING</div>
+          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
+        </div>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#14161B", fontWeight: 700, fontSize: 14 }}>{initials}</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
+        <div style={{ background: "#D9A441", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("receiving")}>
+          <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING GRN</div>
+          <div style={{ color: "#1A1206", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{stats.openGrns}</div>
+        </div>
+        <div style={{ background: "#A6472F", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("putaway")}>
+          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PUT AWAY</div>
+          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{stats.pendingPutaway}</div>
+        </div>
+        <div style={{ background: "#1D4D3E", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("picking")}>
+          <div style={{ color: "#8FCBB4", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PICKING</div>
+          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.picking || 0}</div>
+        </div>
+        <div style={{ background: "#14161B", border: "1px solid #333A47", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("dispatch")}>
+          <div style={{ color: "#8B93A3", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCH</div>
+          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.dispatched || 0}</div>
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={{ ...S.panelTitle, textAlign: "center" }}>Quick Workflows</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+          {[
+            { icon: "📷", label: "Scan Inbound", view: "receiving" },
+            { icon: "🧰", label: "Inventory", view: "inventory" },
+            { icon: "🛒", label: "Picking Jobs", view: "picking" },
+            { icon: "🚚", label: "Load Sheets", view: "dispatch" }
+          ].map(w => (
+            <button key={w.view} onClick={() => setView(w.view)} style={{ background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: "16px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <span style={{ fontSize: 18 }}>{w.icon}</span>
+              <span style={{ color: "#ECEAE3", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, textAlign: "left" }}>{w.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={S.panelTitle}>Active Shipments</div>
+          <span style={{ color: "#F5A623", fontSize: 12, cursor: "pointer" }} onClick={() => setView("orders")}>VIEW ALL</span>
+        </div>
+        {activeShipments.length === 0 ? <EmptyNote text="Koi active shipment nahi hai." /> : activeShipments.map(o => {
+          const meta = SHIP_META[o.status] || { bar: "#8B93A3", label: o.status.toUpperCase(), labelColor: "#8B93A3" };
+          return (
+            <div key={o.id} onClick={() => setView("orders")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid #262B35", cursor: "pointer" }}>
+              <div style={{ width: 4, height: 34, borderRadius: 2, background: meta.bar, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#ECEAE3", fontSize: 13, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>Order #{o.external_order_id} · {o.courier}</div>
+                <div style={{ color: o.status === "incomplete" ? "#E5484D" : "#8B93A3", fontSize: 11, marginTop: 2 }}>{o.subtitle}</div>
+              </div>
+              <span style={{ color: meta.labelColor, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>{meta.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 16 }}>
+        <div style={{ background: "#F5A623", borderRadius: 12, padding: "20px 22px" }}>
+          <div style={{ color: "#5A3D0A", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>TOTAL DISPATCH</div>
+          <div style={{ color: "#14161B", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>{kpi.dispatchedUnitsToday.toLocaleString()}</div>
+          <div style={{ color: "#5A3D0A", fontSize: 11, marginTop: 4 }}>Units Today</div>
+        </div>
+        <div style={{ background: "#1D4D3E", borderRadius: 12, padding: "20px 22px" }}>
+          <div style={{ color: "#8FCBB4", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>AVG LEAD TIME</div>
+          <div style={{ color: "#ECEAE3", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>
+            {kpi.avgLeadTimeToday != null ? `${kpi.avgLeadTimeToday.toFixed(1)}h` : "—"}
+          </div>
+          <div style={{ color: leadDelta == null ? "#8FCBB4" : leadDelta <= 0 ? "#8FCBB4" : "#F5A6A6", fontSize: 11, marginTop: 4 }}>
+            {leadDelta == null ? "No comparison yet" : `${leadDelta <= 0 ? "▼" : "▲"} ${Math.abs(leadDelta).toFixed(0)}% vs yesterday`}
+          </div>
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Daily Throughput — dispatched orders (last 7 days)</div>
+        <div style={{ height: 220, position: "relative" }}>
+          <canvas ref={chartRef}></canvas>
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>User productivity — today (actions/hr)</div>
+        {productivity.length === 0 ? <EmptyNote text="Aaj tak koi activity nahi hui." /> : productivity.map((p, i) => (
+          <div key={p.userId} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < productivity.length - 1 ? "1px solid #262B35" : "none" }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: AVATAR_COLORS[i % AVATAR_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", color: "#14161B", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+              {p.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase()}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ color: "#ECEAE3", fontSize: 14, fontFamily: "'Space Grotesk', sans-serif" }}>{p.name}</div>
+              <div style={{ color: "#8B93A3", fontSize: 11 }}>{ROLE_LABEL_GLOBAL[p.role] || p.role}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ color: "#F5A623", fontSize: 16, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{p.rate}</div>
+              <div style={{ color: "#5A6070", fontSize: 10 }}>actions/hr</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
       <div style={S.statGrid} className="depotos-statgrid">
         <StatCard icon="⬇" label="Open GRNs" value={stats.openGrns} color="#F5A623" onClick={() => setView("receiving")} />
         <StatCard icon="📍" label="Pending putaway" value={stats.pendingPutaway} color="#5B9EE8" onClick={() => setView("putaway")} />
