@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>DepotOS — Receiving & Putaway</title>
+<title>Mughal Warehousing — Receiving & Putaway</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
@@ -152,8 +152,8 @@ function LoginScreen({ onLogin, error }) {
         <div style={S.hazardBar} />
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <span style={{ fontSize: 22 }}>📦</span>
-          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22, color: "#ECEAE3" }}>
-            DEPOT<span style={{ color: "#F5A623" }}>OS</span>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#ECEAE3" }}>
+            MUGHAL<span style={{ color: "#F5A623" }}> WAREHOUSING</span>
           </span>
         </div>
         <div style={{ color: "#8B93A3", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
@@ -199,9 +199,9 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
   }
   return (
     <div style={S.sidebar} className={`depotos-sidebar${sidebarOpen ? " open" : ""}`}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "22px 20px 26px" }}>
-        <span style={{ fontSize: 18 }}>📦</span>
-        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#ECEAE3", fontSize: 16 }}>DEPOT<span style={{ color: "#F5A623" }}>OS</span></span>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "20px 16px 24px" }}>
+        <span style={{ fontSize: 16 }}>📦</span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#ECEAE3", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>WAREHOUSING</span></span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {visibleItems.map(it => {
@@ -2503,6 +2503,19 @@ function UsersView({ token, profile, showToast }) {
     setBusy(false);
   };
 
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  const deleteUser = async (u) => {
+    if (u.id === profile.id) { showToast("Aap khud ko delete nahi kar sakte", "err"); return; }
+    try {
+      await sb(`/rest/v1/profiles?id=eq.${u.id}`, { method: "DELETE", token });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "user", entity_id: u.id, user_id: profile.id, action: "removed_from_wms", metadata: { removed_name: u.full_name } } });
+      showToast(`${u.full_name} WMS se remove ho gaye`);
+      setConfirmDeleteId(null);
+      load();
+    } catch (e) { showToast("Delete failed", "err"); }
+  };
+
   const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 
   return (
@@ -2566,9 +2579,22 @@ function UsersView({ token, profile, showToast }) {
                 <button style={{ ...S.primaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => saveAccess(u)}>💾 Save access</button>
               </div>
             )}
+            {u.id !== profile.id && (
+              confirmDeleteId === u.id ? (
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => deleteUser(u)}>Confirm delete</button>
+                  <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center" }} onClick={() => setConfirmDeleteId(null)}>Cancel</button>
+                </div>
+              ) : (
+                <button style={{ ...S.secondaryBtnSm, marginTop: 8, width: "100%", justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setConfirmDeleteId(u.id)}>🗑 Delete user</button>
+              )
+            )}
           </div>
         ))}
         {users.length === 0 && <EmptyNote text="No staff yet." />}
+      </div>
+      <div style={{ fontSize: 11, color: "#5A6070", marginTop: 4 }}>
+        ⚠ "Delete user" sirf WMS profile hataata hai (access khatam ho jayega). Unka Supabase Auth account agar poori tarah delete karna ho to Supabase dashboard → Authentication → Users se manually karna hoga.
       </div>
     </div>
   );
