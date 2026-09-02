@@ -711,6 +711,7 @@ function ReceivingView({ token, profile, showToast }) {
   const [grnReport, setGrnReport] = useState(null);
   const [grnLineStats, setGrnLineStats] = useState({});
   const [grnStatus, setGrnStatus] = useState({}); // grn_id -> {status, totalQty, putawayQty}
+  const [rpoRecords, setRpoRecords] = useState([]);
   const [statusTab, setStatusTab] = useState("all");
   const [selectedGrns, setSelectedGrns] = useState({});
   const [staff, setStaff] = useState([]);
@@ -723,6 +724,23 @@ function ReceivingView({ token, profile, showToast }) {
       const g = await sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token });
       setGrns(g || []);
       setStaff(await sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || []);
+      const rpos = await sb(`/rest/v1/rtv_returns?select=*&order=created_at.desc&limit=200`, { token });
+      if (rpos && rpos.length) {
+        const glIds = [...new Set(rpos.map(r => r.grn_line_id).filter(Boolean))];
+        const gls = glIds.length ? await sb(`/rest/v1/grn_lines?id=in.(${glIds.join(",")})&select=*`, { token }) : [];
+        const glMap = Object.fromEntries((gls || []).map(l => [l.id, l]));
+        const grnIds = [...new Set((gls || []).map(l => l.grn_id))];
+        const rGrns = grnIds.length ? await sb(`/rest/v1/grn?id=in.(${grnIds.join(",")})&select=*`, { token }) : [];
+        const grnMap2 = Object.fromEntries((rGrns || []).map(x => [x.id, x]));
+        const prodMap = await fetchProductsByIds(token, rpos.map(r => r.product_id));
+        const profMap = Object.fromEntries((await sb(`/rest/v1/profiles?select=*`, { token }) || []).map(p => [p.id, p]));
+        setRpoRecords(rpos.map(r => ({
+          ...r,
+          grnNumber: glMap[r.grn_line_id] ? grnMap2[glMap[r.grn_line_id].grn_id]?.grn_number : "—",
+          product: prodMap[r.product_id],
+          createdByName: profMap[r.created_by]?.full_name || "—"
+        })));
+      } else setRpoRecords([]);
       const ids = (g || []).map(x => x.id);
       if (ids.length) {
         const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=id,grn_id,qty_expected`, { token });
@@ -833,7 +851,17 @@ function ReceivingView({ token, profile, showToast }) {
       }
 
       const report = validateImportRows(rows, map, productMap, "reference", existingGroupLines);
-      setGrnReport({ report, map });
+      const meta = {};
+      for (const r of report.validRows) {
+        if (!meta[r.groupVal]) {
+          const srcRow = rows.find(row => cleanCode(getVal(row, map, "reference")) === r.groupVal);
+          meta[r.groupVal] = {
+            source: String(getVal(srcRow, map, "contact") || "").trim(),
+            poNumber: String(getVal(srcRow, map, "sourceDocument") || "").trim()
+          };
+        }
+      }
+      setGrnReport({ report, map, meta });
       showToast(`Validated: ${report.validRows.length} valid, ${report.invalidRows.length} invalid`);
     } catch (err) { showToast(`Validation failed: ${(err.message || "").slice(0, 100)}`, "err"); }
     setImporting(false);
@@ -855,9 +883,10 @@ function ReceivingView({ token, profile, showToast }) {
       for (const [ref, groupRows] of Object.entries(groups)) {
         let grnId = grnMap[ref];
         if (!grnId) {
+          const m = grnReport.meta[ref] || {};
           const created = await sb(`/rest/v1/grn`, {
             method: "POST", token, prefer: "return=representation",
-            body: { grn_number: ref, warehouse_id: profile.warehouse_id, source: "", status: "open" }
+            body: { grn_number: ref, warehouse_id: profile.warehouse_id, source: m.source || "", po_number: m.poNumber || null, status: "open" }
           });
           grnId = created[0].id;
           grnMap[ref] = grnId;
@@ -877,12 +906,13 @@ function ReceivingView({ token, profile, showToast }) {
     setImporting(false);
   };
 
+  const [poNumber, setPoNumber] = useState("");
   const createGrn = async () => {
     if (!grnNumber.trim()) return;
     try {
-      const created = await sb(`/rest/v1/grn`, { method: "POST", token, prefer: "return=representation", body: { grn_number: grnNumber.trim(), warehouse_id: profile.warehouse_id, source: source.trim(), status: "open" } });
+      const created = await sb(`/rest/v1/grn`, { method: "POST", token, prefer: "return=representation", body: { grn_number: grnNumber.trim(), po_number: poNumber.trim() || null, warehouse_id: profile.warehouse_id, source: source.trim(), status: "open" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn", entity_id: created[0].id, user_id: profile.id, action: "created" } });
-      setGrnNumber(""); setSource(""); showToast("GRN created"); load();
+      setGrnNumber(""); setSource(""); setPoNumber(""); showToast("GRN created"); load();
       setOpenGrn(created[0]); loadLines(created[0].id);
     } catch (e) { showToast("GRN number may already exist", "err"); }
   };
@@ -985,6 +1015,7 @@ function ReceivingView({ token, profile, showToast }) {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="GRN number" value={grnNumber} onChange={e => setGrnNumber(e.target.value)} />
           <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Source (supplier etc.)" value={source} onChange={e => setSource(e.target.value)} />
+          <input style={{ ...S.input, flex: 1, minWidth: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="PO #" value={poNumber} onChange={e => setPoNumber(e.target.value)} />
           <button style={S.primaryBtnSm} onClick={createGrn}>+ Create GRN</button>
         </div>
       </div>
@@ -996,9 +1027,10 @@ function ReceivingView({ token, profile, showToast }) {
           { key: "open", label: "Open" },
           { key: "assigned", label: "Assigned" },
           { key: "partial", label: "Partial" },
-          { key: "completed", label: "Completed" }
+          { key: "completed", label: "Completed" },
+          { key: "rpo", label: "RPO / Exception" }
         ];
-        const counts = Object.fromEntries(TABS.map(t => [t.key, t.key === "all" ? grns.length : grns.filter(g => (grnStatus[g.id]?.status || "open") === t.key).length]));
+        const counts = Object.fromEntries(TABS.map(t => [t.key, t.key === "all" ? grns.length : t.key === "rpo" ? rpoRecords.length : grns.filter(g => (grnStatus[g.id]?.status || "open") === t.key).length]));
         return (
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             {TABS.map(t => (
@@ -1010,7 +1042,7 @@ function ReceivingView({ token, profile, showToast }) {
         );
       })()}
 
-      {canManageGrn && (
+      {canManageGrn && statusTab !== "rpo" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Selected GRNs ({Object.values(selectedGrns).filter(Boolean).length}) — assign Put Away Officer</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -1023,12 +1055,35 @@ function ReceivingView({ token, profile, showToast }) {
         </div>
       )}
 
+      {statusTab === "rpo" ? (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>RPO / Shortage transactions — physical vs GRN qty mismatch</div>
+          <table>
+            <thead><tr><th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Expected</th><th style={S.th}>Short</th><th style={S.th}>Reason</th><th style={S.th}>By</th><th style={S.th}>Date</th></tr></thead>
+            <tbody>
+              {rpoRecords.map(r => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.rpo_number || "—"}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{r.grnNumber}</td>
+                  <td style={S.td}>{r.product?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.expected_qty}</td>
+                  <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.short_qty}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.reason}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.createdByName}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
+                </tr>
+              ))}
+              {rpoRecords.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi RPO/shortage record nahi hai." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      ) : (
       <div style={S.panel}>
         <table>
           <thead>
             <tr>
               {canManageGrn && <th style={S.th}></th>}
-              <th style={S.th}>GRN #</th><th style={S.th}>Source</th><th style={S.th}>Status</th><th style={S.th}>Lines</th>
+              <th style={S.th}>GRN #</th><th style={S.th}>PO #</th><th style={S.th}>Source</th><th style={S.th}>Status</th><th style={S.th}>Lines</th>
               <th style={S.th}>Put Away Qty</th><th style={S.th}>Total Qty</th><th style={S.th}>Created</th>
             </tr>
           </thead>
@@ -1046,6 +1101,7 @@ function ReceivingView({ token, profile, showToast }) {
                     </td>
                   )}
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", cursor: "pointer" }} onClick={() => { setOpenGrn(g); loadLines(g.id); }}>{g.grn_number}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{g.po_number || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{g.source || "No source"}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COL[st.status], borderColor: STATUS_COL[st.status] }}>{STATUS_LABELS[st.status]}</span></td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{stat.count}</td>
@@ -1056,11 +1112,12 @@ function ReceivingView({ token, profile, showToast }) {
               );
             })}
             {grns.filter(g => statusTab === "all" || (grnStatus[g.id]?.status || "open") === statusTab).length === 0 && (
-              <tr><td colSpan={canManageGrn ? 8 : 7}><EmptyNote text="Is status mein koi GRN nahi hai." /></td></tr>
+              <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="Is status mein koi GRN nahi hai." /></td></tr>
             )}
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }
@@ -1183,15 +1240,22 @@ function PutawayView({ token, profile, showToast }) {
     if (!matchedTask) return;
     if (!qty || qty <= 0 || qty > matchedRemaining) { showToast(`Valid short qty (1 se ${matchedRemaining} tak) enter karein`, "err"); return; }
     try {
-      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id } });
+      const existingRpos = await sb(`/rest/v1/rtv_returns?rpo_number=not.is.null&select=rpo_number`, { token });
+      let maxSerial = 0;
+      for (const r of existingRpos || []) {
+        const m = String(r.rpo_number).match(/(\d+)$/);
+        if (m) maxSerial = Math.max(maxSerial, parseInt(m[1], 10));
+      }
+      const rpoNumber = `RPO-${String(maxSerial + 1).padStart(5, "0")}`;
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber } });
       const newRequired = matchedTask.qty - qty;
       const done = (matchedTask.qty_completed || 0) >= newRequired;
       await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
         method: "PATCH", token,
         body: done ? { qty: newRequired, status: "completed", completed_at: new Date().toISOString() } : { qty: newRequired }
       });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty } } });
-      showToast(`${qty} pcs RTV record ho gaya`);
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty, rpo_number: rpoNumber } } });
+      showToast(`${rpoNumber} created — ${qty} pcs recorded`);
       setMatchedTaskId(null); setShortageOpen(false); setShortageQty("");
       load();
     } catch (e) { showToast("RTV report failed", "err"); }
@@ -1704,13 +1768,14 @@ function OrdersView({ token, profile, showToast }) {
   };
 
   const openOrderDetail = async (order) => {
-    const [lines, events, shortages, pickTasks, packTasks, loadSheets] = await Promise.all([
+    const [lines, events, shortages, pickTasks, packTasks, loadSheets, audits] = await Promise.all([
       sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token }),
       sb(`/rest/v1/event_log?entity_id=eq.${order.id}&select=*&order=created_at.asc`, { token }),
       sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}&select=*`, { token }),
       sb(`/rest/v1/pick_tasks?order_id=eq.${order.id}&select=*`, { token }),
       sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&select=*`, { token }),
-      sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&order_ids=cs.{${order.id}}&select=*`, { token })
+      sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&order_ids=cs.{${order.id}}&select=*`, { token }),
+      sb(`/rest/v1/audit_trail?entity_id=eq.${order.id}&entity_type=eq.sales_order&select=*`, { token })
     ]);
     setOpenLines(lines || []);
     setOpenShortages(shortages || []);
@@ -1727,6 +1792,9 @@ function OrdersView({ token, profile, showToast }) {
     }
     for (const ls of loadSheets || []) {
       history.push({ ts: ls.created_at, label: `Dispatched — Load Sheet ${ls.load_sheet_number}`, user: profiles[ls.created_by]?.full_name || "—" });
+    }
+    for (const a of audits || []) {
+      history.push({ ts: a.changed_at, label: `Amended: ${a.field_changed} — "${a.old_value || "—"}" → "${a.new_value || "—"}"`, user: profiles[a.changed_by]?.full_name || "—" });
     }
     history.sort((a, b) => new Date(a.ts) - new Date(b.ts));
     setOpenEvents(history);
@@ -1757,15 +1825,24 @@ function OrdersView({ token, profile, showToast }) {
 
   const saveOrderEdits = async () => {
     try {
+      const changes = [];
+      if (editTracking.trim() !== openOrder.external_order_id) changes.push({ field: "Tracking Number", old: openOrder.external_order_id, new: editTracking.trim() });
+      if (editCourier.trim() !== openOrder.courier) changes.push({ field: "Courier", old: openOrder.courier, new: editCourier.trim() });
+
       await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { external_order_id: editTracking.trim(), courier: editCourier.trim() } });
       for (const l of openLines) {
         const newQty = editQty[l.id] !== undefined ? Number(editQty[l.id]) : l.qty;
         if (newQty !== l.qty && newQty > 0) {
+          const p = productCache[l.product_id];
+          changes.push({ field: `Qty — ${p?.barcode || p?.name || l.product_id}`, old: String(l.qty), new: String(newQty) });
           await sb(`/rest/v1/sales_order_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty: newQty } });
         }
       }
+      for (const c of changes) {
+        await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openOrder.id, field_changed: c.field, old_value: c.old, new_value: c.new, changed_by: profile.id } });
+      }
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openOrder.id, user_id: profile.id, action: "amended", metadata: { tracking: editTracking, courier: editCourier } } });
-      showToast("Order amended");
+      showToast(changes.length ? `Order amended — ${changes.length} field(s) changed` : "Koi change nahi tha");
       openOrderDetail({ ...openOrder, external_order_id: editTracking.trim(), courier: editCourier.trim() });
     } catch (e) { showToast("Save failed — tracking number already exist ho sakta hai", "err"); }
   };
@@ -2057,6 +2134,7 @@ function PickingView({ token, profile, showToast }) {
   const [toteScans, setToteScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
   const [lastScannedProduct, setLastScannedProduct] = useState(null);
+  const [pickViewMode, setPickViewMode] = useState("location");
   const canBatch = ["admin", "supervisor", "warehouse_lead"].includes(profile.role);
 
   const load = useCallback(async () => {
@@ -2169,9 +2247,32 @@ function PickingView({ token, profile, showToast }) {
   };
 
   if (openTote) {
+    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    const totalSku = consolidated.length;
+    const totalQty = consolidated.reduce((s, g) => s + g.required, 0);
+    const pickedQty = consolidated.reduce((s, g) => s + g.scanned, 0);
+    const startTime = toteTasks.reduce((min, t) => (t.assigned_at && (!min || t.assigned_at < min)) ? t.assigned_at : min, null);
     return (
       <div>
-        <SectionTitle title={`${openTote.tote_number} — consolidated pick list`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
+        <SectionTitle title={`${openTote.tote_number} — Picking Job`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
+
+        <div style={S.panel}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 12 }}>
+            <div><div style={S.label}>TROLLEY/TOTE</div><div style={{ color: "#2B2620", fontFamily: "'IBM Plex Mono', monospace", fontSize: 14 }}>{openTote.tote_number}</div></div>
+            <div><div style={S.label}>ORDERS</div><div style={{ color: "#2B2620", fontSize: 14, fontWeight: 700 }}>{toteTasks.length}</div></div>
+            <div><div style={S.label}>TOTAL SKU</div><div style={{ color: "#2B2620", fontSize: 14, fontWeight: 700 }}>{totalSku}</div></div>
+            <div><div style={S.label}>TOTAL QTY</div><div style={{ color: "#2B2620", fontSize: 14, fontWeight: 700 }}>{totalQty}</div></div>
+            <div><div style={S.label}>PICKED QTY</div><div style={{ color: "#4CAF7D", fontSize: 14, fontWeight: 700 }}>{pickedQty}</div></div>
+            <div><div style={S.label}>START TIME</div><div style={{ color: "#6B6355", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }}>{startTime ? fmtTime(startTime) : "—"}</div></div>
+            <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{openTote.status}</span></div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button onClick={() => setPickViewMode("location")} style={{ ...S.pill, ...(pickViewMode === "location" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>📍 By Location</button>
+          <button onClick={() => setPickViewMode("order")} style={{ ...S.pill, ...(pickViewMode === "order" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🧾 By Order</button>
+        </div>
+
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan product at each location (koi bhi sequence mein)</div>
           <div style={{ display: "flex", gap: 10 }}>
@@ -2196,6 +2297,38 @@ function PickingView({ token, profile, showToast }) {
             </div>
           </div>
         )}
+        {pickViewMode === "order" ? (
+          <div style={S.panel}>
+            <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin 15)</div>
+            <table>
+              <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
+              <tbody>
+                {[...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99)).map(t => {
+                  const o = orders[t.order_id];
+                  const lines = taskLines[t.id] || [];
+                  const required = lines.reduce((s, l) => s + l.qty_required, 0);
+                  const picked = lines.reduce((s, l) => {
+                    const g = consolidated.find(gr => gr.product_id === l.product_id);
+                    const ref = g?.refs.find(r => r.line_id === l.id);
+                    return s + (ref?.allocated || 0);
+                  }, 0);
+                  const status = picked >= required && required > 0 ? "Completed" : picked > 0 ? "Partial" : "Pending";
+                  const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#6B6355";
+                  return (
+                    <tr key={t.id}>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{String(t.tote_bin_number || "?").padStart(2, "0")}</td>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{o?.external_order_id || "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{o?.courier || "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{required}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{picked}</td>
+                      <td style={S.td}><span style={{ ...S.badgeSm, color: statusColor, borderColor: statusColor }}>{status}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
         <div style={S.panel}>
           <div style={S.panelTitle}>Pick list — location-wise (ek bin ek hi baar visit karein)</div>
           {consolidated.map((g, i) => {
@@ -2221,10 +2354,11 @@ function PickingView({ token, profile, showToast }) {
             );
           })}
           {consolidated.length === 0 && <EmptyNote text="Is tote mein koi item nahi hai." />}
-          {allToteScanned && consolidated.length > 0 && (
-            <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={completeTotePicking}>✓ Complete tote picking — send to packer</button>
-          )}
         </div>
+        )}
+        {allToteScanned && consolidated.length > 0 && (
+          <button style={{ ...S.primaryBtnSm, marginTop: 4, marginBottom: 16 }} onClick={completeTotePicking}>✓ Complete tote picking — send to packer</button>
+        )}
       </div>
     );
   }
@@ -2397,16 +2531,23 @@ function PackingView({ token, profile, showToast }) {
     });
     await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "rtd" } });
     await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pack_task", entity_id: openTask.id, user_id: profile.id, action: "labeled", metadata: { label_number: labelNumber } } });
+    showToast(`Packed & labeled: ${labelNumber}`);
 
     if (openTask.tote_id) {
-      const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=id`, { token });
+      const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=*`, { token });
       if (!remaining || remaining.length === 0) {
         await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, completed_at: new Date().toISOString() } });
         showToast("Tote fully packed — all orders RTD, trolley ab dobara available hai");
-        setOpenTote(null);
+        setOpenTask(null); setOpenTote(null); load();
+        return;
       }
+      // auto-advance to next bin in sequence
+      const next = [...remaining].sort((a, b) => (binNumMap[a.order_id] || 99) - (binNumMap[b.order_id] || 99))[0];
+      showToast(`Bin ${binNumMap[next.order_id] || "?"} → next order`);
+      openPack(next);
+      load();
+      return;
     }
-    showToast(`Packed & labeled: ${labelNumber}`);
     setOpenTask(null); load();
   };
 
@@ -2520,11 +2661,32 @@ function DispatchView({ token, profile, showToast }) {
   const [loadSheets, setLoadSheets] = useState([]);
   const [profiles, setProfiles] = useState({});
   const [scanTrackingInput, setScanTrackingInput] = useState("");
+  const [handoverModal, setHandoverModal] = useState(null);
+  const [courierRepName, setCourierRepName] = useState("");
+  const [handoverRemarks, setHandoverRemarks] = useState("");
+
+  const confirmHandover = async () => {
+    if (!handoverModal) return;
+    try {
+      await sb(`/rest/v1/load_sheets?id=eq.${handoverModal.id}`, {
+        method: "PATCH", token,
+        body: { handover_status: "handed_over", handed_over_by: profile.id, handed_over_at: new Date().toISOString(), courier_rep_name: courierRepName.trim() || null, handover_remarks: handoverRemarks.trim() || null }
+      });
+      const ids = handoverModal.order_ids || [];
+      for (const orderId of ids) {
+        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "handed_over" } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "load_sheet", entity_id: handoverModal.id, user_id: profile.id, action: "handed_over", metadata: { courier_rep_name: courierRepName, remarks: handoverRemarks } } });
+      showToast(`${handoverModal.load_sheet_number} handed over ✓`);
+      setHandoverModal(null); setCourierRepName(""); setHandoverRemarks("");
+      load();
+    } catch (e) { showToast("Handover confirm failed", "err"); }
+  };
 
   const load = useCallback(async () => {
     try {
       const [o, ls, pf] = await Promise.all([
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.rtd&select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(rtd,scanned)&select=*`, { token }),
         sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token }),
         sb(`/rest/v1/profiles?select=*`, { token })
       ]);
@@ -2536,7 +2698,7 @@ function DispatchView({ token, profile, showToast }) {
 
   const toggle = (id) => setSelected({ ...selected, [id]: !selected[id] });
 
-  const scanTracking = (codeArg) => {
+  const scanTracking = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : scanTrackingInput).trim();
     setScanTrackingInput("");
     if (!code) return;
@@ -2544,6 +2706,10 @@ function DispatchView({ token, profile, showToast }) {
     if (!order) { showToast("Tracking number is packed-orders list mein nahi mila", "err"); return; }
     if (selected[order.id]) { showToast("Already selected"); return; }
     setSelected(prev => ({ ...prev, [order.id]: true }));
+    try {
+      await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "scanned" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "tracking_scanned" } });
+    } catch (e) {}
     showToast(`Added: ${order.external_order_id} (${order.courier})`);
   };
 
@@ -2607,7 +2773,7 @@ function DispatchView({ token, profile, showToast }) {
         {orders.length === 0 ? <EmptyNote text="No RTD orders waiting." /> : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
             {orders.map(o => {
-              const ok = !!selected[o.id];
+              const ok = o.status === "scanned" || !!selected[o.id];
               return (
                 <div key={o.id} onClick={() => toggle(o.id)} style={{
                   cursor: "pointer", borderRadius: 8, padding: "10px 12px",
@@ -2628,43 +2794,95 @@ function DispatchView({ token, profile, showToast }) {
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
-        {loadSheets.map(ls => (
-          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#2B2620" }}>{ls.load_sheet_number}</span>
-            <span style={{ color: "#6B6355", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
-            <button style={S.secondaryBtnSm} onClick={async () => {
-              const ids = ls.order_ids || [];
-              if (ids.length === 0) return;
-              const os = await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token });
-              const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-              const rows = [
-                [esc("Load Sheet Number"), esc(ls.load_sheet_number)],
-                [esc("Courier"), esc(ls.courier)],
-                [esc("Created Date"), esc(fmtTime(ls.created_at))],
-                [esc("Created By"), esc(profiles[ls.created_by]?.full_name || "—")],
-                [],
-                [esc("Customer"), esc("Tracking"), esc("Qty"), esc("Order Timestamp")]
-              ];
-              for (const o of os || []) {
-                const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
-                const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
-                rows.push([esc(o.raw_data?.customer_order_number || o.raw_data?.customer || "—"), esc(o.external_order_id), esc(qty), esc(fmtTime(o.dispatched_at))]);
-              }
-              const csv = rows.map(r => r.join(",")).join("\n");
-              const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url; a.download = `${ls.load_sheet_number}.csv`;
-              document.body.appendChild(a); a.click(); document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            }}>⬇ Export</button>
+        {loadSheets.map(ls => {
+          const handedOver = ls.handover_status === "handed_over";
+          return (
+          <div key={ls.id} style={{ padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#2B2620" }}>{ls.load_sheet_number}</span>
+              <span style={{ color: "#6B6355", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
+              <span style={{ ...S.badgeSm, color: handedOver ? "#4CAF7D" : "#F5A623", borderColor: handedOver ? "#4CAF7D" : "#F5A623" }}>{handedOver ? "HANDED OVER" : "READY FOR HANDOVER"}</span>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+              <button style={S.secondaryBtnSm} onClick={async () => {
+                const ids = ls.order_ids || [];
+                if (ids.length === 0) return;
+                const os = await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token });
+                const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+                const rows = [
+                  [esc("Load Sheet Number"), esc(ls.load_sheet_number)],
+                  [esc("Courier"), esc(ls.courier)],
+                  [esc("Created Date"), esc(fmtTime(ls.created_at))],
+                  [esc("Created By"), esc(profiles[ls.created_by]?.full_name || "—")],
+                  [],
+                  [esc("Customer"), esc("Tracking"), esc("Qty"), esc("Order Timestamp")]
+                ];
+                for (const o of os || []) {
+                  const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
+                  const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
+                  rows.push([esc(o.raw_data?.customer_order_number || o.raw_data?.customer || "—"), esc(o.external_order_id), esc(qty), esc(fmtTime(o.dispatched_at))]);
+                }
+                const csv = rows.map(r => r.join(",")).join("\n");
+                const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url; a.download = `${ls.load_sheet_number}.csv`;
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }}>⬇ Export CSV</button>
+              <button style={S.secondaryBtnSm} onClick={async () => {
+                const ids = ls.order_ids || [];
+                const os = ids.length ? await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token }) : [];
+                let rowsHtml = "";
+                for (const o of os || []) {
+                  const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
+                  const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
+                  rowsHtml += `<tr><td>${o.raw_data?.customer_order_number || o.raw_data?.customer || "—"}</td><td>${o.external_order_id}</td><td>${qty}</td></tr>`;
+                }
+                const w = window.open("", "_blank");
+                w.document.write(`<html><head><title>${ls.load_sheet_number}</title><style>
+                  body{font-family:Arial;padding:24px;color:#111} h2{margin-bottom:4px} .meta{color:#555;font-size:13px;margin-bottom:16px}
+                  table{width:100%;border-collapse:collapse} th,td{border:1px solid #ccc;padding:8px;text-align:left;font-size:13px}
+                  th{background:#eee}
+                </style></head><body>
+                  <h2>Load Sheet: ${ls.load_sheet_number}</h2>
+                  <div class="meta">Courier: ${ls.courier} &nbsp;|&nbsp; Date: ${fmtTime(ls.created_at)} &nbsp;|&nbsp; Created by: ${profiles[ls.created_by]?.full_name || "—"} &nbsp;|&nbsp; Orders: ${ids.length}</div>
+                  <table><thead><tr><th>Customer</th><th>Tracking</th><th>Qty</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+                </body></html>`);
+                w.document.close();
+                w.print();
+              }}>🖨 Print</button>
+              {!handedOver && ["admin", "warehouse_lead"].includes(profile.role) && (
+                <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => setHandoverModal(ls)}>✓ Confirm Handover</button>
+              )}
+              {handedOver && (
+                <span style={{ color: "#6B6355", fontSize: 11, alignSelf: "center" }}>By {profiles[ls.handed_over_by]?.full_name || "—"} · {fmtTime(ls.handed_over_at)} {ls.courier_rep_name ? `· Rep: ${ls.courier_rep_name}` : ""}</span>
+              )}
+            </div>
           </div>
-        ))}
+          );
+        })}
         {loadSheets.length === 0 && <EmptyNote text="No load sheets yet." />}
         <div style={{ marginTop: 12, fontSize: 11, color: "#8A8272" }}>
           ⚠ Email auto-send abhi nahi hai (real backend chahiye) — load sheet yahan record ho jata hai, aap manually forward kar sakte hain jab tak hum email automation set up karein.
         </div>
       </div>
+
+      {handoverModal && (
+        <div style={S.scanOverlay}>
+          <div style={S.scanModal}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+              <span style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>Confirm Handover — {handoverModal.load_sheet_number}</span>
+              <button style={S.iconBtnCircle} onClick={() => setHandoverModal(null)}>✕</button>
+            </div>
+            <div style={S.label}>COURIER REPRESENTATIVE NAME (optional)</div>
+            <input style={S.input} value={courierRepName} onChange={e => setCourierRepName(e.target.value)} placeholder="e.g. Waqas" />
+            <div style={S.label}>REMARKS (optional)</div>
+            <input style={S.input} value={handoverRemarks} onChange={e => setHandoverRemarks(e.target.value)} placeholder="Koi note" />
+            <button style={{ ...S.primaryBtnSm, marginTop: 16, width: "100%", justifyContent: "center" }} onClick={confirmHandover}>✓ Confirm — mark HANDED OVER</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3548,11 +3766,21 @@ function ToteMasterView({ token, profile, showToast }) {
     } catch (e) { showToast("Tote already exists", "err"); }
   };
 
+  const [releaseReasonId, setReleaseReasonId] = useState(null);
+  const [releaseReason, setReleaseReason] = useState("");
+
   const forceRelease = async (tote) => {
+    if (!releaseReason.trim()) { showToast("Reason likhna zaroori hai", "err"); return; }
     try {
-      await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "force_released" } });
-      showToast(`${tote.tote_number} force-released`); load();
+      const prevPacker = tote.assigned_to ? profiles[tote.assigned_to]?.full_name : "—";
+      await sb(`/rest/v1/totes?id=eq.${tote.id}`, {
+        method: "PATCH", token,
+        body: { status: "open", assigned_to: null, locked_by: null, last_reassign_reason: releaseReason.trim(), last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() }
+      });
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, field_changed: "assigned_to", old_value: prevPacker, new_value: "Unassigned", reason: releaseReason.trim(), changed_by: profile.id } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "force_released", metadata: { reason: releaseReason.trim(), previous: prevPacker } } });
+      showToast(`${tote.tote_number} force-released`);
+      setReleaseReasonId(null); setReleaseReason(""); load();
     } catch (e) { showToast("Release failed", "err"); }
   };
 
@@ -3576,8 +3804,21 @@ function ToteMasterView({ token, profile, showToast }) {
             <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {t.assigned_to ? `With: ${profiles[t.assigned_to]?.full_name || "—"}` : "Unassigned"}
             </div>
+            {t.last_reassign_reason && (
+              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 6 }}>Last reassign: "{t.last_reassign_reason}" — {profiles[t.last_reassigned_by]?.full_name || "—"}, {fmtTime(t.last_reassigned_at)}</div>
+            )}
             {t.status !== "open" && (
-              <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => forceRelease(t)}>🔓 Force release</button>
+              releaseReasonId === t.id ? (
+                <div style={{ marginTop: 10 }}>
+                  <input style={{ ...S.input, fontSize: 12 }} placeholder="Reason for reassign/release" value={releaseReason} onChange={e => setReleaseReason(e.target.value)} />
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center", color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => forceRelease(t)}>Confirm</button>
+                    <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center" }} onClick={() => { setReleaseReasonId(null); setReleaseReason(""); }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => setReleaseReasonId(t.id)}>🔓 Reassign / Release</button>
+              )
             )}
           </div>
         ))}
