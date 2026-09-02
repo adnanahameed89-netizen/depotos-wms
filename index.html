@@ -125,7 +125,7 @@ function App() {
           {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "inventory" && <InventoryView token={session.token} profile={profile} />}
+          {view === "inventory" && <InventoryView token={session.token} profile={profile} showToast={showToast} />}
           {view === "orders" && <OrdersView token={session.token} profile={profile} showToast={showToast} />}
           {view === "picking" && <PickingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "packing" && <PackingView token={session.token} profile={profile} showToast={showToast} />}
@@ -1131,6 +1131,8 @@ function PutawayView({ token, profile, showToast }) {
   const [staff, setStaff] = useState([]);
   const [grnLines, setGrnLines] = useState({});
   const [grns, setGrns] = useState({});
+  const [returnLines, setReturnLines] = useState({});
+  const [returnsMap, setReturnsMap] = useState({});
   const [binChoice, setBinChoice] = useState({});
   const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
 
@@ -1155,11 +1157,29 @@ function PutawayView({ token, profile, showToast }) {
           setGrns(Object.fromEntries((gs || []).map(x => [x.id, x])));
         }
       }
+      const rlIds = [...new Set(allTasks.map(x => x.return_line_id).filter(Boolean))];
+      if (rlIds.length) {
+        const rls = await sb(`/rest/v1/return_lines?id=in.(${rlIds.join(",")})&select=*`, { token });
+        setReturnLines(Object.fromEntries((rls || []).map(x => [x.id, x])));
+        const returnIds = [...new Set((rls || []).map(x => x.return_id))];
+        if (returnIds.length) {
+          const rs = await sb(`/rest/v1/returns?id=in.(${returnIds.join(",")})&select=*`, { token });
+          const sOrderIds = [...new Set((rs || []).map(x => x.order_id).filter(Boolean))];
+          const sOrders = sOrderIds.length ? await sb(`/rest/v1/sales_orders?id=in.(${sOrderIds.join(",")})&select=*`, { token }) : [];
+          const sOrderMap = Object.fromEntries((sOrders || []).map(o => [o.id, o]));
+          setReturnsMap(Object.fromEntries((rs || []).map(x => [x.id, { ...x, orderRef: sOrderMap[x.order_id]?.external_order_id }])));
+        }
+      }
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id, profile.id]);
   useEffect(() => { load(); }, [load]);
 
   const grnNumberFor = (task) => {
+    if (task.return_line_id) {
+      const rl = returnLines[task.return_line_id];
+      const ret = rl ? returnsMap[rl.return_id] : null;
+      return ret ? `RTN-${ret.orderRef || ret.id.slice(0, 6)}` : "RTN-?";
+    }
     const gl = grnLines[task.grn_line_id];
     if (!gl) return "—";
     const g = grns[gl.grn_id];
@@ -1377,16 +1397,18 @@ function PutawayView({ token, profile, showToast }) {
 }
 
 /* ================= INVENTORY ================= */
-function InventoryView({ token, profile }) {
+function InventoryView({ token, profile, showToast }) {
   const [tab, setTab] = useState("ledger");
   const [rows, setRows] = useState([]);
   const [reserved, setReserved] = useState({});
   const [products, setProducts] = useState({});
   const [bins, setBins] = useState({});
   const [query, setQuery] = useState("");
+  const [openingReport, setOpeningReport] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const canImport = ["admin", "warehouse_lead"].includes(profile.role);
 
-  useEffect(() => {
-    (async () => {
+  const loadAll = useCallback(async () => {
       const [inv, res, prods, binList] = await Promise.all([
         sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
@@ -1397,8 +1419,67 @@ function InventoryView({ token, profile }) {
       setReserved(Object.fromEntries((res || []).map(r => [r.product_id, r.reserved])));
       setProducts(Object.fromEntries((prods || []).map(p => [p.id, p])));
       setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
-    })();
   }, [token, profile.warehouse_id]);
+
+  const handleOpeningStockFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setOpeningReport(null);
+    try {
+      const rows2 = await parseSheet(file);
+      if (rows2.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
+      const map = buildColumnMap(Object.keys(rows2[0]));
+      if (!map.barcode) { showToast("Barcode column nahi mila", "err"); setImporting(false); return; }
+      const fileBarcodes = rows2.map(r => getVal(r, map, "barcode"));
+      const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
+      const binCodeHeader = Object.keys(rows2[0]).find(h => normHeader(h) === "bin" || normHeader(h) === "location") || null;
+      const valid = [], invalid = [];
+      for (const [i, row] of rows2.entries()) {
+        const barcode = cleanCode(getVal(row, map, "barcode"));
+        const qty = Number(getVal(row, map, "qty"));
+        const product = barcode ? productMap[barcode] : null;
+        const binCode = binCodeHeader ? String(row[binCodeHeader] || "").trim() : "";
+        if (!barcode || !product || !qty || qty <= 0) { invalid.push({ rowNum: i + 2, barcode, qty }); continue; }
+        valid.push({ product, qty, binCode });
+      }
+      setOpeningReport({ valid, invalid, fileName: file.name });
+      showToast(`Validated: ${valid.length} valid, ${invalid.length} invalid`);
+    } catch (err) { showToast(`Validation failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  const confirmOpeningStock = async () => {
+    if (!openingReport) return;
+    setImporting(true);
+    try {
+      const binCache = {};
+      let count = 0;
+      for (const r of openingReport.valid) {
+        let binId = null;
+        if (r.binCode) {
+          if (!binCache[r.binCode]) {
+            let existing = Object.values(bins).find(b => b.code.toLowerCase() === r.binCode.toLowerCase());
+            if (!existing) {
+              const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: profile.warehouse_id, code: r.binCode } });
+              existing = created[0];
+            }
+            binCache[r.binCode] = existing;
+          }
+          binId = binCache[r.binCode].id;
+        }
+        await addOnHand(token, profile.warehouse_id, r.product.id, binId, r.qty);
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "inventory", entity_id: r.product.id, user_id: profile.id, action: "opening_stock_import", metadata: { qty: r.qty, bin: r.binCode || null } } });
+        count++;
+      }
+      showToast(`${count} opening stock lines imported`);
+      setOpeningReport(null);
+      loadAll();
+    } catch (e) { showToast("Import failed", "err"); }
+    setImporting(false);
+  };
+
+  useEffect(() => { loadAll(); }, [loadAll]);
 
   const q = query.trim().toLowerCase();
 
@@ -1427,7 +1508,32 @@ function InventoryView({ token, profile }) {
 
   return (
     <div>
-      <SectionTitle title="Inventory" />
+      <SectionTitle title="Inventory" action={
+        canImport ? (
+          <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+            {importing ? "Importing…" : "📤 Import Opening Stock"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleOpeningStockFile} disabled={importing} />
+          </label>
+        ) : null
+      } />
+      {openingReport && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Opening Stock — validation report ({openingReport.fileName})</div>
+          <div style={{ display: "flex", gap: 20, marginBottom: 12 }}>
+            <div><span style={{ color: "#4CAF7D", fontWeight: 700, fontSize: 18 }}>{openingReport.valid.length}</span> <span style={{ color: "#6B6355", fontSize: 12 }}>valid</span></div>
+            <div><span style={{ color: "#E5484D", fontWeight: 700, fontSize: 18 }}>{openingReport.invalid.length}</span> <span style={{ color: "#6B6355", fontSize: 12 }}>invalid (skipped)</span></div>
+          </div>
+          {openingReport.invalid.length > 0 && (
+            <div style={{ fontSize: 11, color: "#E5484D", marginBottom: 10 }}>
+              Row(s): {openingReport.invalid.slice(0, 15).map(r => `#${r.rowNum} (${r.barcode || "no barcode"})`).join(", ")}{openingReport.invalid.length > 15 ? "…" : ""}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={S.primaryBtnSm} onClick={confirmOpeningStock} disabled={importing || openingReport.valid.length === 0}>✓ Confirm & add stock ({openingReport.valid.length})</button>
+            <button style={S.secondaryBtnSm} onClick={() => setOpeningReport(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <button onClick={() => setTab("ledger")} style={{ ...S.pill, ...(tab === "ledger" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>📒 Inventory Ledger</button>
         <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
@@ -3074,17 +3180,18 @@ function ReturnsView({ token, profile, showToast }) {
   const [returns, setReturns] = useState([]);
   const [products, setProducts] = useState({});
   const [orders, setOrders] = useState([]);
-  const [showForm, setShowForm] = useState(false);
-  const [orderRef, setOrderRef] = useState("");
-  const [courier, setCourier] = useState("Postex");
-  const [reason, setReason] = useState("");
+  const [orderScanInput, setOrderScanInput] = useState("");
   const [openReturn, setOpenReturn] = useState(null);
   const [openLines, setOpenLines] = useState([]);
-  const [pendingProduct, setPendingProduct] = useState(null);
+  const [matchedOrder, setMatchedOrder] = useState(null);
+  const [scanInput, setScanInput] = useState("");
   const [lineQty, setLineQty] = useState(1);
   const [lineCondition, setLineCondition] = useState("good");
   const [bins, setBins] = useState([]);
   const [lineBin, setLineBin] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState(null);
+  const canImport = ["admin", "warehouse_lead"].includes(profile.role);
 
   const load = useCallback(async () => {
     try {
@@ -3098,17 +3205,22 @@ function ReturnsView({ token, profile, showToast }) {
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
 
-  const createReturn = async () => {
+  const scanOrderTracking = async (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : orderScanInput).trim();
+    setOrderScanInput("");
+    if (!code) return;
+    const order = orders.find(o => o.external_order_id === code);
     try {
-      const matched = orders.find(o => o.external_order_id === orderRef.trim());
       const created = await sb(`/rest/v1/returns`, {
         method: "POST", token, prefer: "return=representation",
-        body: { order_id: matched ? matched.id : null, courier, reason: reason.trim(), status: "pending" }
+        body: { order_id: order ? order.id : null, courier: order?.courier || "Other", status: "pending" }
       });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created" } });
-      setOrderRef(""); setReason(""); setShowForm(false);
-      showToast("Return record created"); load();
-      openReturnDetail(created[0]);
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code } } });
+      showToast(order ? `Order mila — ${order.courier}` : "Order database mein nahi mila, phir bhi return record ban gaya");
+      load();
+      setMatchedOrder(order || null);
+      setOpenLines([]);
+      setOpenReturn(created[0]);
     } catch (e) { showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err"); }
   };
 
@@ -3117,32 +3229,36 @@ function ReturnsView({ token, profile, showToast }) {
     setOpenLines(lines || []);
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProducts(prev => ({ ...prev, ...newProducts }));
+    setMatchedOrder(orders.find(o => o.id === ret.order_id) || null);
     setOpenReturn(ret);
   };
 
-  const addReturnLine = async () => {
-    if (!pendingProduct || lineQty <= 0) { showToast("Product select karein", "err"); return; }
-    if (lineCondition === "damaged" && !lineBin) {
-      showToast("Damaged item ke liye bin location select karein (Bin Master mein nahi hai to Admin se add karwayein)", "err");
-      return;
-    }
+  const scanReturnItem = async (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : scanInput).trim();
+    setScanInput("");
+    if (!code) return;
+    if (lineCondition === "damaged" && !lineBin) { showToast("Damaged item ke liye pehle bin location select karein", "err"); return; }
+    const product = await lookupProductByCode(token, code);
+    if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
     try {
-      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: pendingProduct.id, qty: Number(lineQty), condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
-      setProducts(prev => ({ ...prev, [pendingProduct.id]: pendingProduct }));
-      setPendingProduct(null); setLineQty(1); setLineCondition("good"); setLineBin("");
+      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: product.id, qty: Number(lineQty) || 1, condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
+      setProducts(prev => ({ ...prev, [product.id]: product }));
+      showToast(`✓ ${product.barcode} added (${lineCondition})`);
+      setLineQty(1);
       openReturnDetail(openReturn);
-      load();
     } catch (e) { showToast("Add failed", "err"); }
   };
 
-  const processReturn = async () => {
+  const submitReturn = async () => {
     try {
       let anyGood = false, anyDamaged = false;
       let strNumber = null;
       for (const l of openLines) {
         if (l.condition === "good") {
           anyGood = true;
-          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty);
+          // Route to Putaway queue instead of direct restock — same accountable flow as GRN receiving
+          await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { product_id: l.product_id, qty: l.qty, return_line_id: l.id, status: "pending" } });
+          await sb(`/rest/v1/return_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { processed_via_putaway: true } });
         } else if (l.condition === "damaged") {
           anyDamaged = true;
           const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&bin_id=eq.${l.bin_id}&select=*`, { token });
@@ -3156,26 +3272,82 @@ function ReturnsView({ token, profile, showToast }) {
       if (anyDamaged) {
         strNumber = `STR-${(openReturn.courier || "GEN").replace(/\s/g, "")}-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
       }
-      const finalStatus = anyDamaged && !anyGood ? "damaged_writeoff" : "restocked";
-      await sb(`/rest/v1/returns?id=eq.${openReturn.id}`, { method: "PATCH", token, body: { status: finalStatus, processed_by: profile.id, processed_at: new Date().toISOString(), ...(strNumber ? { str_number: strNumber } : {}) } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: openReturn.id, user_id: profile.id, action: finalStatus, metadata: { str_number: strNumber } } });
-      showToast(strNumber ? `Processed — STR: ${strNumber}` : "Good items restocked");
+      await sb(`/rest/v1/returns?id=eq.${openReturn.id}`, { method: "PATCH", token, body: { status: "restocked", processed_by: profile.id, processed_at: new Date().toISOString(), ...(strNumber ? { str_number: strNumber } : {}) } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: openReturn.id, user_id: profile.id, action: "submitted", metadata: { str_number: strNumber, good: anyGood, damaged: anyDamaged } } });
+      showToast(anyGood ? "Return submitted — good items Putaway queue mein bhej diye" : strNumber ? `Processed — STR: ${strNumber}` : "Return submitted");
       setOpenReturn(null); load();
-    } catch (e) { showToast("Processing failed", "err"); }
+    } catch (e) { showToast("Submit failed", "err"); }
+  };
+
+  const handleReturnsImportFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true); setImportReport(null);
+    try {
+      const rows = await parseSheet(file);
+      if (rows.length === 0) { showToast("File khali hai", "err"); setImporting(false); return; }
+      const map = buildColumnMap(Object.keys(rows[0]));
+      const condHeader = Object.keys(rows[0]).find(h => normHeader(h) === "condition");
+      const reasonHeader = Object.keys(rows[0]).find(h => normHeader(h) === "reason");
+      if (!map.barcode || !map.orderRef) { showToast("Barcode ya Tracking column nahi mila", "err"); setImporting(false); return; }
+      const fileBarcodes = rows.map(r => getVal(r, map, "barcode"));
+      const productMap = await fetchProductsByBarcodes(token, fileBarcodes);
+      const valid = [], invalid = [];
+      rows.forEach((row, i) => {
+        const tracking = cleanCode(getVal(row, map, "orderRef"));
+        const barcode = cleanCode(getVal(row, map, "barcode"));
+        const qty = Number(getVal(row, map, "qty")) || 1;
+        const product = barcode ? productMap[barcode] : null;
+        const condition = (condHeader ? String(row[condHeader] || "good") : "good").trim().toLowerCase() === "damaged" ? "damaged" : "good";
+        if (!tracking || !product) { invalid.push({ rowNum: i + 2, tracking, barcode }); return; }
+        valid.push({ tracking, product, qty, condition, courier: String(getVal(row, map, "courier") || "Other").trim(), reason: reasonHeader ? String(row[reasonHeader] || "") : "" });
+      });
+      setImportReport({ valid, invalid, fileName: file.name });
+      showToast(`Validated: ${valid.length} valid, ${invalid.length} invalid`);
+    } catch (err) { showToast(`Validation failed: ${(err.message || "").slice(0, 100)}`, "err"); }
+    setImporting(false);
+  };
+
+  const confirmReturnsImport = async () => {
+    if (!importReport) return;
+    setImporting(true);
+    try {
+      const byTracking = {};
+      for (const r of importReport.valid) { (byTracking[r.tracking] = byTracking[r.tracking] || []).push(r); }
+      let created = 0;
+      for (const [tracking, rows] of Object.entries(byTracking)) {
+        const order = orders.find(o => o.external_order_id === tracking);
+        const first = rows[0];
+        const ret = await sb(`/rest/v1/returns`, {
+          method: "POST", token, prefer: "return=representation",
+          body: { order_id: order ? order.id : null, courier: first.courier, reason: first.reason, status: "restocked", processed_by: profile.id, processed_at: new Date().toISOString() }
+        });
+        for (const r of rows) {
+          await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: ret[0].id, product_id: r.product.id, qty: r.qty, condition: r.condition } });
+        }
+        created++;
+      }
+      showToast(`${created} historical return record(s) imported`);
+      setImportReport(null); load();
+    } catch (e) { showToast("Import failed", "err"); }
+    setImporting(false);
   };
 
   if (openReturn) {
     return (
       <div>
-        <SectionTitle title={`Return — ${openReturn.courier || "—"}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenReturn(null)}>← Back</button>} />
+        <SectionTitle title={`Return — ${matchedOrder?.external_order_id || "Unlinked"} (${openReturn.courier || "—"})`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenReturn(null)}>← Back</button>} />
+        {matchedOrder && (
+          <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ Original order match mil gaya — customer/courier auto-linked. Original items reference ke liye order detail dekhein.</div>
+        )}
         <div style={S.panel}>
-          <div style={S.panelTitle}>Add item</div>
+          <div style={S.panelTitle}>Scan each returned product</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <ProductPicker token={token} onSelect={(p) => setPendingProduct(p)} />
-            {pendingProduct && (
-              <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{pendingProduct.barcode} — {pendingProduct.name} <span style={{ cursor: "pointer", marginLeft: 6 }} onClick={() => setPendingProduct(null)}>✕</span></span>
-            )}
-            <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
+            <input autoFocus style={{ ...S.input, flex: 1, minWidth: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode/SKU, then Enter"
+              value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanReturnItem()} />
+            <CameraScanButton onScan={(text) => scanReturnItem(text)} />
+            <input style={{ ...S.input, width: 80 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
             <div style={{ display: "flex", gap: 8 }}>
               {["good", "damaged"].map(c => (
                 <button key={c} onClick={() => setLineCondition(c)} style={{ ...S.secondaryBtnSm, ...(lineCondition === c ? { background: c === "good" ? "#4CAF7D" : "#E5484D", color: "#1A1206", borderColor: c === "good" ? "#4CAF7D" : "#E5484D" } : {}) }}>
@@ -3189,11 +3361,11 @@ function ReturnsView({ token, profile, showToast }) {
                 {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
               </select>
             )}
-            <button style={S.primaryBtnSm} onClick={addReturnLine}>+ Add item</button>
+            <button style={S.primaryBtnSm} onClick={() => scanReturnItem()}>Scan</button>
           </div>
         </div>
         <div style={S.panel}>
-          <div style={S.panelTitle}>Items in this return</div>
+          <div style={S.panelTitle}>Items scanned</div>
           <table>
             <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Condition</th><th style={S.th}>Bin</th></tr></thead>
             <tbody>
@@ -3210,11 +3382,11 @@ function ReturnsView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="No items added yet." /></td></tr>}
+              {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="Abhi tak koi item scan nahi hua." /></td></tr>}
             </tbody>
           </table>
           {openLines.length > 0 && (
-            <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={processReturn}>✓ Process return (restock good items)</button>
+            <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitReturn}>✓ Submit return — Good items Put Away queue mein jayenge</button>
           )}
         </div>
       </div>
@@ -3223,21 +3395,36 @@ function ReturnsView({ token, profile, showToast }) {
 
   return (
     <div>
-      <SectionTitle title="Returns" action={<button style={S.primaryBtnSm} onClick={() => setShowForm(s => !s)}>+ New return</button>} />
-      {showForm && (
+      <SectionTitle title="Returns" action={
+        canImport ? (
+          <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+            {importing ? "Importing…" : "📤 Import historical returns"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleReturnsImportFile} disabled={importing} />
+          </label>
+        ) : null
+      } />
+      {importReport && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Log incoming return</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input style={{ ...S.input, flex: 1, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Original order ID (optional)" value={orderRef} onChange={e => setOrderRef(e.target.value)} />
-            <select style={{ ...S.input, minWidth: 140 }} value={courier} onChange={e => setCourier(e.target.value)}>
-              <option value="Postex">Postex</option>
-              <option value="M&P">M&P</option>
-            </select>
-            <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Reason (customer refused, damaged, etc.)" value={reason} onChange={e => setReason(e.target.value)} />
-            <button style={S.primaryBtnSm} onClick={createReturn}>Create & add items</button>
+          <div style={S.panelTitle}>Historical returns — validation report ({importReport.fileName})</div>
+          <div style={{ display: "flex", gap: 20, marginBottom: 12 }}>
+            <div><span style={{ color: "#4CAF7D", fontWeight: 700, fontSize: 18 }}>{importReport.valid.length}</span> <span style={{ color: "#6B6355", fontSize: 12 }}>valid</span></div>
+            <div><span style={{ color: "#E5484D", fontWeight: 700, fontSize: 18 }}>{importReport.invalid.length}</span> <span style={{ color: "#6B6355", fontSize: 12 }}>invalid</span></div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={S.primaryBtnSm} onClick={confirmReturnsImport} disabled={importing || importReport.valid.length === 0}>✓ Confirm import</button>
+            <button style={S.secondaryBtnSm} onClick={() => setImportReport(null)}>Cancel</button>
           </div>
         </div>
       )}
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Scan order tracking number — courier se return receive hua</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type tracking number, then Enter"
+            value={orderScanInput} onChange={e => setOrderScanInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanOrderTracking()} />
+          <CameraScanButton onScan={(text) => scanOrderTracking(text)} />
+          <button style={S.primaryBtnSm} onClick={() => scanOrderTracking()}>Start Return</button>
+        </div>
+      </div>
       <div style={S.cardGrid}>
         {returns.map(r => {
           const order = orders.find(o => o.id === r.order_id);
