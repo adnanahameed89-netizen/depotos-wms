@@ -13,7 +13,7 @@
 <script src="https://unpkg.com/chart.js@4.4.4/dist/chart.umd.js"></script>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; background: #14161B; font-family: 'Space Grotesk', sans-serif; }
+  body { margin: 0; background: #F4EFE6; font-family: 'Space Grotesk', sans-serif; }
   input, select, button { font-family: inherit; }
   table { width: 100%; border-collapse: collapse; }
 
@@ -71,7 +71,7 @@ async function login(email, password) {
 }
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
-const STATUS_COLORS = { received: "#8B93A3", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#8B93A3", completed: "#4CAF7D", incomplete: "#E5484D" };
+const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
 const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
@@ -149,24 +149,26 @@ function LoginScreen({ onLogin, error }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const submit = async () => { if (!email || !password) return; setBusy(true); await onLogin(email, password); setBusy(false); };
+  const darkInput = { background: "#171A21", border: "1px solid #2C323F", borderRadius: 6, color: "#E8E6E1", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" };
+  const darkLabel = { color: "#6B7280", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" };
   return (
     <div style={S.loginWrap}>
       <div style={S.loginCard}>
         <div style={S.hazardBar} />
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <span style={{ fontSize: 22 }}>📦</span>
-          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#ECEAE3" }}>
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#E8E6E1" }}>
             MUGHAL<span style={{ color: "#F5A623" }}> WAREHOUSING</span>
           </span>
         </div>
-        <div style={{ color: "#8B93A3", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
-        <div style={S.label}>EMAIL</div>
-        <input style={S.input} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
-        <div style={S.label}>PASSWORD</div>
-        <input style={S.input} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
-        <button style={S.primaryBtn} onClick={submit} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-        {error && <div style={{ color: "#E5484D", fontSize: 12, marginTop: 12 }}>{error}</div>}
-        <div style={S.disclaimer}>⚠ Live production database — real accounts only.</div>
+        <div style={{ color: "#9098A8", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
+        <div style={darkLabel}>EMAIL</div>
+        <input style={darkInput} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+        <div style={darkLabel}>PASSWORD</div>
+        <input style={darkInput} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
+        <button style={{ width: "100%", background: "#F5A623", color: "#1A1206", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" }} onClick={submit} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+        {error && <div style={{ color: "#F5A6A6", fontSize: 12, marginTop: 12 }}>{error}</div>}
+        <div style={{ display: "flex", gap: 6, marginTop: 22, fontSize: 11, color: "#6B7280", lineHeight: 1.4 }}>⚠ Live production database — real accounts only.</div>
       </div>
     </div>
   );
@@ -204,23 +206,23 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     <div style={S.sidebar} className={`depotos-sidebar${sidebarOpen ? " open" : ""}`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "20px 16px 24px" }}>
         <span style={{ fontSize: 16 }}>📦</span>
-        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#ECEAE3", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>WAREHOUSING</span></span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>WAREHOUSING</span></span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {visibleItems.map(it => {
           const active = view === it.id;
           return (
             <button key={it.id} onClick={() => setView(it.id)} style={{ ...S.navItem, ...(active ? S.navItemActive : {}) }}>
-              <span>{it.icon}</span><span style={{ color: active ? "#ECEAE3" : "#8B93A3" }}>{it.label}</span>
+              <span>{it.icon}</span><span style={{ color: active ? "#E8E6E1" : "#9098A8" }}>{it.label}</span>
             </button>
           );
         })}
       </div>
-      <button onClick={() => setView("changepassword")} style={{ ...S.navItem, borderTop: "1px solid #333A47" }}>
-        <span>🔑</span><span style={{ color: view === "changepassword" ? "#ECEAE3" : "#8B93A3" }}>Change Password</span>
+      <button onClick={() => setView("changepassword")} style={{ ...S.navItem, borderTop: "1px solid #2C323F" }}>
+        <span>🔑</span><span style={{ color: view === "changepassword" ? "#E8E6E1" : "#9098A8" }}>Change Password</span>
       </button>
       <button onClick={onLogout} style={{ ...S.navItem, marginBottom: 12 }}>
-        <span>⏻</span><span style={{ color: "#8B93A3" }}>Sign out</span>
+        <span>⏻</span><span style={{ color: "#9098A8" }}>Sign out</span>
       </button>
     </div>
   );
@@ -229,13 +231,13 @@ function TopBar({ profile, onMenuClick }) {
   return (
     <div style={S.topbar} className="depotos-topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button className="depotos-menu-btn" onClick={onMenuClick} style={{ background: "none", border: "1px solid #333A47", borderRadius: 6, color: "#ECEAE3", width: 32, height: 32, alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 16 }}>☰</button>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8B93A3" }}>
+        <button className="depotos-menu-btn" onClick={onMenuClick} style={{ background: "none", border: "1px solid #E0D8C5", borderRadius: 6, color: "#2B2620", width: 32, height: 32, alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 16 }}>☰</button>
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#6B6355" }}>
           {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <span style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 13 }}>{profile.full_name}</span>
+        <span style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 13 }}>{profile.full_name}</span>
         <span style={S.badge}>{profile.role}</span>
       </div>
     </div>
@@ -360,8 +362,8 @@ function DashboardView({ token, profile, setView }) {
         responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: {
-          x: { ticks: { color: "#8B93A3" }, grid: { color: "#262B35" } },
-          y: { ticks: { color: "#8B93A3", precision: 0 }, grid: { color: "#262B35" }, beginAtZero: true }
+          x: { ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } },
+          y: { ticks: { color: "#6B6355", precision: 0 }, grid: { color: "#EFE8D8" }, beginAtZero: true }
         }
       }
     });
@@ -369,7 +371,7 @@ function DashboardView({ token, profile, setView }) {
   }, [throughput]);
 
   const STAGE_META = [
-    { key: "received", label: "New", color: "#8B93A3", icon: "🧾" },
+    { key: "received", label: "New", color: "#6B6355", icon: "🧾" },
     { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
     { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
     { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
@@ -396,7 +398,7 @@ function DashboardView({ token, profile, setView }) {
           <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL WAREHOUSING</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
         </div>
-        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#14161B", fontWeight: 700, fontSize: 14 }}>{initials}</div>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 14 }}>{initials}</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
@@ -412,8 +414,8 @@ function DashboardView({ token, profile, setView }) {
           <div style={{ color: "#8FCBB4", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PICKING</div>
           <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.picking || 0}</div>
         </div>
-        <div style={{ background: "#14161B", border: "1px solid #333A47", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("dispatch")}>
-          <div style={{ color: "#8B93A3", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCH</div>
+        <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("dispatch")}>
+          <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCH</div>
           <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.dispatched || 0}</div>
         </div>
       </div>
@@ -427,9 +429,9 @@ function DashboardView({ token, profile, setView }) {
             { icon: "🛒", label: "Picking Jobs", view: "picking" },
             { icon: "🚚", label: "Load Sheets", view: "dispatch" }
           ].map(w => (
-            <button key={w.view} onClick={() => setView(w.view)} style={{ background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: "16px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <button key={w.view} onClick={() => setView(w.view)} style={{ background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 8, padding: "16px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
               <span style={{ fontSize: 18 }}>{w.icon}</span>
-              <span style={{ color: "#ECEAE3", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, textAlign: "left" }}>{w.label}</span>
+              <span style={{ color: "#2B2620", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, textAlign: "left" }}>{w.label}</span>
             </button>
           ))}
         </div>
@@ -441,13 +443,13 @@ function DashboardView({ token, profile, setView }) {
           <span style={{ color: "#F5A623", fontSize: 12, cursor: "pointer" }} onClick={() => setView("orders")}>VIEW ALL</span>
         </div>
         {activeShipments.length === 0 ? <EmptyNote text="Koi active shipment nahi hai." /> : activeShipments.map(o => {
-          const meta = SHIP_META[o.status] || { bar: "#8B93A3", label: o.status.toUpperCase(), labelColor: "#8B93A3" };
+          const meta = SHIP_META[o.status] || { bar: "#6B6355", label: o.status.toUpperCase(), labelColor: "#6B6355" };
           return (
-            <div key={o.id} onClick={() => setView("orders")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid #262B35", cursor: "pointer" }}>
+            <div key={o.id} onClick={() => setView("orders")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid #EFE8D8", cursor: "pointer" }}>
               <div style={{ width: 4, height: 34, borderRadius: 2, background: meta.bar, flexShrink: 0 }} />
               <div style={{ flex: 1 }}>
-                <div style={{ color: "#ECEAE3", fontSize: 13, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>Order #{o.external_order_id} · {o.courier}</div>
-                <div style={{ color: o.status === "incomplete" ? "#E5484D" : "#8B93A3", fontSize: 11, marginTop: 2 }}>{o.subtitle}</div>
+                <div style={{ color: "#2B2620", fontSize: 13, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>Order #{o.external_order_id} · {o.courier}</div>
+                <div style={{ color: o.status === "incomplete" ? "#E5484D" : "#6B6355", fontSize: 11, marginTop: 2 }}>{o.subtitle}</div>
               </div>
               <span style={{ color: meta.labelColor, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>{meta.label}</span>
             </div>
@@ -458,12 +460,12 @@ function DashboardView({ token, profile, setView }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 16 }}>
         <div style={{ background: "#F5A623", borderRadius: 12, padding: "20px 22px" }}>
           <div style={{ color: "#5A3D0A", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>TOTAL DISPATCH</div>
-          <div style={{ color: "#14161B", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>{kpi.dispatchedUnitsToday.toLocaleString()}</div>
+          <div style={{ color: "#1A1206", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>{kpi.dispatchedUnitsToday.toLocaleString()}</div>
           <div style={{ color: "#5A3D0A", fontSize: 11, marginTop: 4 }}>Units Today</div>
         </div>
         <div style={{ background: "#1D4D3E", borderRadius: 12, padding: "20px 22px" }}>
           <div style={{ color: "#8FCBB4", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>AVG LEAD TIME</div>
-          <div style={{ color: "#ECEAE3", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>
+          <div style={{ color: "#2B2620", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>
             {kpi.avgLeadTimeToday != null ? `${kpi.avgLeadTimeToday.toFixed(1)}h` : "—"}
           </div>
           <div style={{ color: leadDelta == null ? "#8FCBB4" : leadDelta <= 0 ? "#8FCBB4" : "#F5A6A6", fontSize: 11, marginTop: 4 }}>
@@ -482,17 +484,17 @@ function DashboardView({ token, profile, setView }) {
       <div style={S.panel}>
         <div style={S.panelTitle}>User productivity — today (actions/hr)</div>
         {productivity.length === 0 ? <EmptyNote text="Aaj tak koi activity nahi hui." /> : productivity.map((p, i) => (
-          <div key={p.userId} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < productivity.length - 1 ? "1px solid #262B35" : "none" }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", background: AVATAR_COLORS[i % AVATAR_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", color: "#14161B", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
+          <div key={p.userId} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i < productivity.length - 1 ? "1px solid #EFE8D8" : "none" }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: AVATAR_COLORS[i % AVATAR_COLORS.length], display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
               {p.name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase()}
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ color: "#ECEAE3", fontSize: 14, fontFamily: "'Space Grotesk', sans-serif" }}>{p.name}</div>
-              <div style={{ color: "#8B93A3", fontSize: 11 }}>{ROLE_LABEL_GLOBAL[p.role] || p.role}</div>
+              <div style={{ color: "#2B2620", fontSize: 14, fontFamily: "'Space Grotesk', sans-serif" }}>{p.name}</div>
+              <div style={{ color: "#6B6355", fontSize: 11 }}>{ROLE_LABEL_GLOBAL[p.role] || p.role}</div>
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ color: "#F5A623", fontSize: 16, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif" }}>{p.rate}</div>
-              <div style={{ color: "#5A6070", fontSize: 10 }}>actions/hr</div>
+              <div style={{ color: "#8A8272", fontSize: 10 }}>actions/hr</div>
             </div>
           </div>
         ))}
@@ -511,7 +513,7 @@ function DashboardView({ token, profile, setView }) {
               <div key={s.key} onClick={() => setView("orders")} style={{ ...S.statCard, cursor: "pointer" }}>
                 <span style={{ fontSize: 15 }}>{s.icon}</span>
                 <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: s.color, marginTop: 8 }}>{orderStats.counts[s.key] || 0}</div>
-                <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{s.label}</div>
+                <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{s.label}</div>
               </div>
             ))}
           </div>
@@ -520,22 +522,22 @@ function DashboardView({ token, profile, setView }) {
       <div style={S.panel}>
         <div style={S.panelTitle}>Standard flow (locked)</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <FlowStep label="1. Receiving" /> <span style={{color:"#5A6070"}}>→</span>
-          <FlowStep label="2. Putaway (bin-wise)" /> <span style={{color:"#5A6070"}}>→</span>
+          <FlowStep label="1. Receiving" /> <span style={{color:"#8A8272"}}>→</span>
+          <FlowStep label="2. Putaway (bin-wise)" /> <span style={{color:"#8A8272"}}>→</span>
           <FlowStep label="3. Available for orders" />
         </div>
-        <div style={{ marginTop: 12, fontSize: 12, color: "#8B93A3" }}>⚡ Exception: urgent stock can skip putaway → direct to packing-ready.</div>
+        <div style={{ marginTop: 12, fontSize: 12, color: "#6B6355" }}>⚡ Exception: urgent stock can skip putaway → direct to packing-ready.</div>
       </div>
     </div>
   );
 }
-function FlowStep({ label }) { return <div style={{ background: "#14161B", border: "1px solid #333A47", borderRadius: 20, padding: "6px 14px", fontSize: 12, color: "#ECEAE3" }}>{label}</div>; }
+function FlowStep({ label }) { return <div style={{ background: "#F4EFE6", border: "1px solid #E0D8C5", borderRadius: 20, padding: "6px 14px", fontSize: 12, color: "#2B2620" }}>{label}</div>; }
 function StatCard({ icon, label, value, color, onClick }) {
   return (
     <div style={{ ...S.statCard, cursor: onClick ? "pointer" : "default" }} onClick={onClick}>
       <span style={{ fontSize: 16 }}>{icon}</span>
-      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{value}</div>
-      <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>{label}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>{value}</div>
+      <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>{label}</div>
     </div>
   );
 }
@@ -544,7 +546,7 @@ function StatCard({ icon, label, value, color, onClick }) {
 function ProductsView({ token, profile, showToast }) {
   const [products, setProducts] = useState([]);
   const [totalCount, setTotalCount] = useState(null);
-  const [form, setForm] = useState({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
+  const [form, setForm] = useState({ barcode: "", name: "", category: "", department: "Default", sales_price: "", image_url: "" });
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importSummary, setImportSummary] = useState(null);
@@ -583,9 +585,9 @@ function ProductsView({ token, profile, showToast }) {
       const barcode = cleanCode(form.barcode);
       await sb(`/rest/v1/products`, {
         method: "POST", token, prefer: "return=representation",
-        body: { sku: barcode, barcode, name: form.name.trim(), category: form.category.trim() || null, department: form.department.trim() || "Default", sales_price: form.sales_price ? Number(form.sales_price) : null }
+        body: { sku: barcode, barcode, name: form.name.trim(), category: form.category.trim() || null, department: form.department.trim() || "Default", sales_price: form.sales_price ? Number(form.sales_price) : null, image_url: form.image_url.trim() || null }
       });
-      setForm({ barcode: "", name: "", category: "", department: "Default", sales_price: "" });
+      setForm({ barcode: "", name: "", category: "", department: "Default", sales_price: "", image_url: "" });
       showToast("Product added"); load();
     } catch (e) { showToast("Could not add — barcode may already exist", "err"); }
   };
@@ -610,7 +612,8 @@ function ProductsView({ token, profile, showToast }) {
           sku: barcode, barcode, name: name || barcode,
           category: String(getVal(row, map, "category") || "").trim() || null,
           department: String(getVal(row, map, "department") || "Default").trim(),
-          sales_price: (() => { const v = Number(getVal(row, map, "salesPrice")); return isNaN(v) ? null : v; })()
+          sales_price: (() => { const v = Number(getVal(row, map, "salesPrice")); return isNaN(v) ? null : v; })(),
+          image_url: String(getVal(row, map, "imageUrl") || "").trim() || null
         });
       }
       const CHUNK = 200;
@@ -638,8 +641,8 @@ function ProductsView({ token, profile, showToast }) {
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
-      <div style={{ marginBottom: 10, fontSize: 11, color: "#5A6070" }}>
-        CSV columns expected: <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#8B93A3" }}>department, product_category, barcode, product_name, sales_price</span>
+      <div style={{ marginBottom: 10, fontSize: 11, color: "#8A8272" }}>
+        CSV columns expected: <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>department, product_category, barcode, product_name, sales_price, image_url</span>
         {totalCount !== null && <span> · Catalogue mein {totalCount.toLocaleString()} products hain</span>}
       </div>
       <div style={S.panel}>
@@ -651,6 +654,7 @@ function ProductsView({ token, profile, showToast }) {
           <input style={{ ...S.input, flex: 1, minWidth: 130 }} placeholder="Product category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} />
           <input style={{ ...S.input, flex: 1, minWidth: 110 }} placeholder="Department" value={form.department} onChange={e => setForm({ ...form, department: e.target.value })} />
           <input style={{ ...S.input, width: 110 }} type="number" placeholder="Sales price" value={form.sales_price} onChange={e => setForm({ ...form, sales_price: e.target.value })} />
+          <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Image URL (Shopify se)" value={form.image_url} onChange={e => setForm({ ...form, image_url: e.target.value })} />
           <button style={S.primaryBtnSm} onClick={add}>+ Add</button>
         </div>
       </div>
@@ -666,21 +670,24 @@ function ProductsView({ token, profile, showToast }) {
           <table>
             <thead>
               <tr>
-                <th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
+                <th style={S.th}></th><th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Department</th>
                 <th style={S.th}>Category</th><th style={S.th}>Sales Price</th>
               </tr>
             </thead>
             <tbody>
               {products.map(p => (
                 <tr key={p.id}>
+                  <td style={S.td}>
+                    {p.image_url ? <img src={p.image_url} alt="" style={{ width: 32, height: 32, objectFit: "cover", borderRadius: 4 }} onError={e => { e.target.style.display = "none"; }} /> : <span style={{ color: "#8A8272" }}>—</span>}
+                  </td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p.barcode || "—"}</td>
                   <td style={S.td}>{p.name}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.department || "Default"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.category || "—"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{p.department || "Default"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{p.category || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{p.sales_price != null ? p.sales_price : "—"}</td>
                 </tr>
               ))}
-              {!loading && products.length === 0 && <tr><td colSpan={5}><EmptyNote text="No products found." /></td></tr>}
+              {!loading && products.length === 0 && <tr><td colSpan={6}><EmptyNote text="No products found." /></td></tr>}
             </tbody>
           </table>
         )}
@@ -963,7 +970,7 @@ function ReceivingView({ token, profile, showToast }) {
         ) : null
       } />
       {!canManageGrn && (
-        <div style={{ ...S.panel, fontSize: 12, color: "#8B93A3" }}>ℹ️ GRN upload/assignment sirf Admin ya Warehouse Lead kar sakte hain.</div>
+        <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ GRN upload/assignment sirf Admin ya Warehouse Lead kar sakte hain.</div>
       )}
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
@@ -995,7 +1002,7 @@ function ReceivingView({ token, profile, showToast }) {
         return (
           <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
             {TABS.map(t => (
-              <button key={t.key} onClick={() => setStatusTab(t.key)} style={{ ...S.pill, ...(statusTab === t.key ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>
+              <button key={t.key} onClick={() => setStatusTab(t.key)} style={{ ...S.pill, ...(statusTab === t.key ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>
                 {t.label} ({counts[t.key]})
               </button>
             ))}
@@ -1030,7 +1037,7 @@ function ReceivingView({ token, profile, showToast }) {
               const stat = grnLineStats[g.id] || { count: 0, qty: 0 };
               const st = grnStatus[g.id] || { status: "open", putawayQty: 0, totalQty: stat.qty };
               const STATUS_LABELS = { open: "Open", assigned: "Assigned", partial: "Partial", completed: "Completed" };
-              const STATUS_COL = { open: "#8B93A3", assigned: "#5B9EE8", partial: "#F5A623", completed: "#4CAF7D" };
+              const STATUS_COL = { open: "#6B6355", assigned: "#5B9EE8", partial: "#F5A623", completed: "#4CAF7D" };
               return (
                 <tr key={g.id}>
                   {canManageGrn && (
@@ -1039,12 +1046,12 @@ function ReceivingView({ token, profile, showToast }) {
                     </td>
                   )}
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", cursor: "pointer" }} onClick={() => { setOpenGrn(g); loadLines(g.id); }}>{g.grn_number}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{g.source || "No source"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{g.source || "No source"}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COL[st.status], borderColor: STATUS_COL[st.status] }}>{STATUS_LABELS[st.status]}</span></td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{stat.count}</td>
                   <td style={{ ...S.td, color: st.status === "completed" ? "#4CAF7D" : "#F5A623" }}>{st.putawayQty} / {st.totalQty}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
-                  <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(g.created_at)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{stat.qty}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(g.created_at)}</td>
                 </tr>
               );
             })}
@@ -1195,12 +1202,12 @@ function PutawayView({ token, profile, showToast }) {
     return (
       <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8B93A3" }}>{grnNumberFor(t)}</span>
-          <span style={{ ...S.badgeSm, color: "#8B93A3", borderColor: "#333A47" }}>Pending</span>
+          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#6B6355" }}>{grnNumberFor(t)}</span>
+          <span style={{ ...S.badgeSm, color: "#6B6355", borderColor: "#E0D8C5" }}>Pending</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 14, marginTop: 10 }}>{p?.barcode || "—"}</div>
-        <div style={{ color: "#ECEAE3", fontSize: 13 }}>{p?.name}</div>
-        <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>Qty: {t.qty}</div>
+        <div style={{ color: "#2B2620", fontSize: 13 }}>{p?.name}</div>
+        <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>Qty: {t.qty}</div>
         <select style={{ ...S.input, marginTop: 10, fontSize: 12 }} onChange={e => e.target.value && assignTask(t, e.target.value)} defaultValue="">
           <option value="">Assign to staff…</option>
           {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
@@ -1227,8 +1234,8 @@ function PutawayView({ token, profile, showToast }) {
         <div style={{ ...S.panel, borderColor: "#F5A623" }}>
           <div style={S.panelTitle}>Matched item</div>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 16 }}>{matchedProduct.barcode}</div>
-          <div style={{ color: "#ECEAE3", fontSize: 14 }}>{matchedProduct.name}</div>
-          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>
+          <div style={{ color: "#2B2620", fontSize: 14 }}>{matchedProduct.name}</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>
             GRN: {grnNumberFor(matchedTask)} · Required: {matchedTask.qty} · Put away so far: {matchedTask.qty_completed || 0} · Remaining: {matchedRemaining}
           </div>
 
@@ -1272,17 +1279,17 @@ function PutawayView({ token, profile, showToast }) {
               const completed = t.qty_completed || 0;
               const remaining = t.qty - completed;
               const status = remaining <= 0 ? "Completed" : completed > 0 ? "Partial" : "Pending";
-              const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#8B93A3";
+              const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#6B6355";
               const bin = bins.find(b => b.id === t.bin_id);
               return (
                 <tr key={t.id}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                   <td style={S.td}>{p?.name || "—"}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{grnNumberFor(t)}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{t.qty}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{completed}</td>
-                  <td style={{ ...S.td, color: remaining > 0 ? "#E5484D" : "#8B93A3" }}>{remaining}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{grnNumberFor(t)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{t.qty}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{completed}</td>
+                  <td style={{ ...S.td, color: remaining > 0 ? "#E5484D" : "#6B6355" }}>{remaining}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "—"}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: statusColor, borderColor: statusColor }}>{status}</span></td>
                 </tr>
               );
@@ -1358,8 +1365,8 @@ function InventoryView({ token, profile }) {
     <div>
       <SectionTitle title="Inventory" />
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <button onClick={() => setTab("ledger")} style={{ ...S.pill, ...(tab === "ledger" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>📒 Inventory Ledger</button>
-        <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
+        <button onClick={() => setTab("ledger")} style={{ ...S.pill, ...(tab === "ledger" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>📒 Inventory Ledger</button>
+        <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
       </div>
       <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
 
@@ -1374,8 +1381,8 @@ function InventoryView({ token, profile }) {
                   <tr key={r.productId}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
-                    <td style={{ ...S.td, color: "#8B93A3" }}>{r.onHand}</td>
-                    <td style={{ ...S.td, color: r.reserved > 0 ? "#E5484D" : "#8B93A3" }}>{r.reserved}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{r.onHand}</td>
+                    <td style={{ ...S.td, color: r.reserved > 0 ? "#E5484D" : "#6B6355" }}>{r.reserved}</td>
                     <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{r.available}</td>
                   </tr>
                 );
@@ -1399,7 +1406,7 @@ function InventoryView({ token, profile }) {
                   <tr key={i}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
-                    <td style={{ ...S.td, color: "#8B93A3" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
                     <td style={S.td}>{r.on_hand}</td>
                     <td style={S.td}>
                       {productReserved > 0
@@ -1412,7 +1419,7 @@ function InventoryView({ token, profile }) {
               {binRows.length === 0 && <tr><td colSpan={5}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
-          <div style={{ marginTop: 10, fontSize: 11, color: "#5A6070" }}>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#8A8272" }}>
             ⚠ Reservation abhi product-level track hoti hai (jis bin se picking suggest hui hai wahi highlight ho sakti hai, exact bin-split system abhi nahi hai).
           </div>
         </div>
@@ -1792,10 +1799,10 @@ function OrdersView({ token, profile, showToast }) {
             </div>
           ) : (
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-              <div><div style={S.label}>COURIER</div><div style={{ color: "#ECEAE3", fontSize: 14 }}>{openOrder.courier}</div></div>
+              <div><div style={S.label}>COURIER</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier}</div></div>
               <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{openOrder.status}</span></div>
-              <div><div style={S.label}>RECEIVED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
-              {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#8B93A3", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
+              <div><div style={S.label}>RECEIVED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
+              {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
             </div>
           )}
         </div>
@@ -1812,8 +1819,8 @@ function OrdersView({ token, profile, showToast }) {
                     <tr key={s.id}>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                       <td style={S.td}>{p?.name || "—"}</td>
-                      <td style={{ ...S.td, color: "#8B93A3" }}>{s.qty_required}</td>
-                      <td style={{ ...S.td, color: "#8B93A3" }}>{s.qty_available}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{s.qty_required}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{s.qty_available}</td>
                       <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{s.not_available_qty}</td>
                     </tr>
                   );
@@ -1851,9 +1858,9 @@ function OrdersView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Order history — kisne kya kiya, kab</div>
           {openEvents.length === 0 ? <EmptyNote text="Abhi tak koi activity nahi hui." /> : openEvents.map((ev, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
-              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{ev.label} <span style={{ color: "#8B93A3" }}>— {ev.user}</span></span>
-              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.ts)}</span>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <span style={{ color: "#2B2620", fontSize: 13 }}>{ev.label} <span style={{ color: "#6B6355" }}>— {ev.user}</span></span>
+              <span style={{ color: "#8A8272", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.ts)}</span>
             </div>
           ))}
         </div>
@@ -1909,10 +1916,10 @@ function OrdersView({ token, profile, showToast }) {
           {items.length > 0 && (
             <div style={{ marginBottom: 12 }}>
               {items.map((it, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", background: "#14161B", border: "1px solid #333A47", borderRadius: 6, padding: "8px 10px", marginBottom: 6, fontSize: 13 }}>
+                <div key={i} style={{ display: "flex", alignItems: "center", background: "#F4EFE6", border: "1px solid #E0D8C5", borderRadius: 6, padding: "8px 10px", marginBottom: 6, fontSize: 13 }}>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{it.barcode}</span>
-                  <span style={{ color: "#ECEAE3", flex: 1, marginLeft: 8 }}>{it.name}</span>
-                  <span style={{ color: "#8B93A3" }}>× {it.qty}</span>
+                  <span style={{ color: "#2B2620", flex: 1, marginLeft: 8 }}>{it.name}</span>
+                  <span style={{ color: "#6B6355" }}>× {it.qty}</span>
                 </div>
               ))}
             </div>
@@ -1923,7 +1930,7 @@ function OrdersView({ token, profile, showToast }) {
 
       {(() => {
         const STAGES = [
-          { key: "received", label: "New / Received", color: "#8B93A3", icon: "🧾" },
+          { key: "received", label: "New / Received", color: "#6B6355", icon: "🧾" },
           { key: "queued", label: "Queued for Pick", color: "#5B9EE8", icon: "🛒" },
           { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
           { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
@@ -1937,15 +1944,15 @@ function OrdersView({ token, profile, showToast }) {
             <div onClick={() => setStatusFilter(null)}
               style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === null ? { borderColor: "#F5A623" } : {}) }}>
               <span style={{ fontSize: 16 }}>📋</span>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#ECEAE3", marginTop: 8 }}>{orders.length}</div>
-              <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>All orders</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 8 }}>{orders.length}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>All orders</div>
             </div>
             {STAGES.map(s => (
               <div key={s.key} onClick={() => setStatusFilter(s.key)}
                 style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === s.key ? { borderColor: s.color } : {}) }}>
                 <span style={{ fontSize: 16 }}>{s.icon}</span>
                 <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: s.color, marginTop: 8 }}>{counts[s.key] || 0}</div>
-                <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{s.label}</div>
+                <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{s.label}</div>
               </div>
             ))}
           </div>
@@ -1956,11 +1963,11 @@ function OrdersView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Smart Picking — order classification</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setSkuFilter("all")} style={{ ...S.pill, ...(skuFilter === "all" ? { background: "#F5A623", color: "#14161B", borderColor: "#F5A623" } : {}) }}>All ({receivedOrders.length})</button>
-            <button onClick={() => setSkuFilter("single")} style={{ ...S.pill, ...(skuFilter === "single" ? { background: "#4CAF7D", color: "#14161B", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleCount})</button>
-            <button onClick={() => setSkuFilter("multi")} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#14161B", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
+            <button onClick={() => setSkuFilter("all")} style={{ ...S.pill, ...(skuFilter === "all" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>All ({receivedOrders.length})</button>
+            <button onClick={() => setSkuFilter("single")} style={{ ...S.pill, ...(skuFilter === "single" ? { background: "#4CAF7D", color: "#1A1206", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleCount})</button>
+            <button onClick={() => setSkuFilter("multi")} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#1A1206", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
           </div>
-          <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8 }}>Single-SKU orders ek hi product ke liye hain — inhe ek aisle-trip mein saath batch karna zyada efficient hota hai.</div>
+          <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Single-SKU orders ek hi product ke liye hain — inhe ek aisle-trip mein saath batch karna zyada efficient hota hai.</div>
         </div>
       )}
 
@@ -2009,12 +2016,12 @@ function OrdersView({ token, profile, showToast }) {
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
                   <td style={S.td}>{o.courier}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{o.status}</span></td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.count}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{stat.qty}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{stat.count}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{stat.qty}</td>
                   <td style={S.td}>
                     {type && <span style={{ ...S.badgeSm, color: type === "single" ? "#4CAF7D" : "#5B9EE8", borderColor: type === "single" ? "#4CAF7D" : "#5B9EE8" }}>{type === "single" ? "Single-SKU" : "Multi-SKU"}</span>}
                   </td>
-                  <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
                   <td style={S.td}>
                     {o.status === "received" && (
                       <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve only</button>
@@ -2049,6 +2056,7 @@ function PickingView({ token, profile, showToast }) {
   const [consolidated, setConsolidated] = useState([]);
   const [toteScans, setToteScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
+  const [lastScannedProduct, setLastScannedProduct] = useState(null);
   const canBatch = ["admin", "supervisor", "warehouse_lead"].includes(profile.role);
 
   const load = useCallback(async () => {
@@ -2115,6 +2123,7 @@ function PickingView({ token, profile, showToast }) {
     for (const g of Object.values(groups)) g.refs.sort((a, b) => (a.toteBin || 99) - (b.toteBin || 99));
     const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
     setConsolidated(list);
+    setLastScannedProduct(null);
     setOpenTote(tote);
   };
 
@@ -2132,6 +2141,7 @@ function PickingView({ token, profile, showToast }) {
     ref.allocated += 1;
     group.scanned += 1;
     setConsolidated([...consolidated]);
+    setLastScannedProduct(p);
     const order = orders[ref.order_id];
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
   };
@@ -2172,6 +2182,20 @@ function PickingView({ token, profile, showToast }) {
             <button style={S.primaryBtnSm} onClick={() => scanToteBarcode()}>Scan</button>
           </div>
         </div>
+        {lastScannedProduct && (
+          <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center" }}>
+            {lastScannedProduct.image_url ? (
+              <img src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+            ) : (
+              <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
+            )}
+            <div>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>LAST SCANNED — VERIFY PRODUCT</div>
+              <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, marginTop: 4 }}>{lastScannedProduct.name}</div>
+              <div style={{ color: "#F5A623", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>{lastScannedProduct.barcode}</div>
+            </div>
+          </div>
+        )}
         <div style={S.panel}>
           <div style={S.panelTitle}>Pick list — location-wise (ek bin ek hi baar visit karein)</div>
           {consolidated.map((g, i) => {
@@ -2179,16 +2203,16 @@ function PickingView({ token, profile, showToast }) {
             const bin = bins[g.bin_id];
             const done = g.scanned >= g.required;
             return (
-              <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+              <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
-                  <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
-                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{g.scanned} / {g.required}</span>
+                  <span style={{ flex: 1, color: "#2B2620", fontSize: 13 }}>{p?.name}</span>
+                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#6B6355", borderColor: done ? "#4CAF7D" : "#E0D8C5" }}>{g.scanned} / {g.required}</span>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 100 }}>
                   {g.refs.map((r, j) => (
-                    <span key={j} style={{ fontSize: 10, color: r.allocated >= r.qty_required ? "#4CAF7D" : "#5A6070", fontFamily: "'IBM Plex Mono', monospace" }}>
+                    <span key={j} style={{ fontSize: 10, color: r.allocated >= r.qty_required ? "#4CAF7D" : "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
                       Bin#{r.toteBin || "?"}: {r.allocated}/{r.qty_required}
                     </span>
                   ))}
@@ -2221,7 +2245,7 @@ function PickingView({ token, profile, showToast }) {
                 <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>{tt.status}</span>
               </div>
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
-              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{pickedCount} / {toteTasks.length} orders picked</div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{pickedCount} / {toteTasks.length} orders picked</div>
             </div>
           );
         })}
@@ -2260,8 +2284,8 @@ function PickingView({ token, profile, showToast }) {
                     <tr key={t.id}>
                       <td style={S.td}><input type="checkbox" checked={!!selectedForTote[t.id]} onChange={e => setSelectedForTote({ ...selectedForTote, [t.id]: e.target.checked })} /></td>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o?.external_order_id}</td>
-                      <td style={{ ...S.td, color: "#8B93A3" }}>{o?.courier}</td>
-                      <td style={{ ...S.td, color: "#8B93A3" }}>{(taskLines[t.id] || []).length}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{o?.courier}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{(taskLines[t.id] || []).length}</td>
                     </tr>
                   );
                 })}
@@ -2408,10 +2432,10 @@ function PackingView({ token, profile, showToast }) {
             const got = scans[l.product_id] || 0;
             const done = got >= l.qty;
             return (
-              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #262B35" }}>
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
                 <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 110 }}>{p?.sku}</span>
-                <span style={{ flex: 1, color: "#ECEAE3", fontSize: 13 }}>{p?.name}</span>
-                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#8B93A3", borderColor: done ? "#4CAF7D" : "#333A47" }}>{got} / {l.qty}</span>
+                <span style={{ flex: 1, color: "#2B2620", fontSize: 13 }}>{p?.name}</span>
+                <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#6B6355", borderColor: done ? "#4CAF7D" : "#E0D8C5" }}>{got} / {l.qty}</span>
               </div>
             );
           })}
@@ -2437,8 +2461,8 @@ function PackingView({ token, profile, showToast }) {
                   <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Bin #{binNumMap[t.order_id] || "?"}</span>
                   <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
                 </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#8B93A3", marginTop: 8 }}>{o?.external_order_id}</div>
-                <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 4 }}>{o?.courier}</div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: "#6B6355", marginTop: 8 }}>{o?.external_order_id}</div>
+                <div style={{ color: "#2B2620", fontSize: 14, marginTop: 4 }}>{o?.courier}</div>
               </div>
             );
           })}
@@ -2479,7 +2503,7 @@ function PackingView({ token, profile, showToast }) {
             <div key={tt.id} style={S.card} onClick={() => scanTote(tt.tote_number)}>
               <span>🧺</span>
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
-              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
             </div>
           );
         })}
@@ -2591,7 +2615,7 @@ function DispatchView({ token, profile, showToast }) {
                   border: `1px solid ${ok ? "#4CAF7D" : "#E5484D"}`
                 }}>
                   <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: ok ? "#4CAF7D" : "#E5484D", fontSize: 13 }}>{o.external_order_id}</div>
-                  <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 2 }}>{o.courier} · {ok ? "Verified" : "Pending"}</div>
+                  <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{o.courier} · {ok ? "Verified" : "Pending"}</div>
                 </div>
               );
             })}
@@ -2599,15 +2623,15 @@ function DispatchView({ token, profile, showToast }) {
         )}
         <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
           <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet(s) — auto courier-wise</button>
-          <span style={{ color: "#5A6070", fontSize: 11 }}>Verified orders alag-alag courier ke hon to system khud alag load sheets bana dega</span>
+          <span style={{ color: "#8A8272", fontSize: 11 }}>Verified orders alag-alag courier ke hon to system khud alag load sheets bana dega</span>
         </div>
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
         {loadSheets.map(ls => (
-          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #262B35" }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#ECEAE3" }}>{ls.load_sheet_number}</span>
-            <span style={{ color: "#8B93A3", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
+          <div key={ls.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
+            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#2B2620" }}>{ls.load_sheet_number}</span>
+            <span style={{ color: "#6B6355", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
             <button style={S.secondaryBtnSm} onClick={async () => {
               const ids = ls.order_ids || [];
               if (ids.length === 0) return;
@@ -2637,7 +2661,7 @@ function DispatchView({ token, profile, showToast }) {
           </div>
         ))}
         {loadSheets.length === 0 && <EmptyNote text="No load sheets yet." />}
-        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#8A8272" }}>
           ⚠ Email auto-send abhi nahi hai (real backend chahiye) — load sheet yahan record ho jata hai, aap manually forward kar sakte hain jab tak hum email automation set up karein.
         </div>
       </div>
@@ -2772,32 +2796,32 @@ function UsersView({ token, profile, showToast }) {
           )}
           <button style={S.primaryBtnSm} onClick={addUser} disabled={busy}>{busy ? "Adding…" : "+ Add staff"}</button>
         </div>
-        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#8A8272" }}>
           ⚠ Naya staff member is email/password se seedha login kar sakega. Real email inbox zaroori nahi (jab tak "Confirm email" Supabase mein off hai).
         </div>
       </div>
       <div style={S.cardGrid}>
         {users.map(u => (
           <div key={u.id} style={S.card}>
-            <div style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{u.full_name}</div>
+            <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{u.full_name}</div>
             <div style={{ marginTop: 6 }}>
               <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>{ROLE_LABEL[u.role] || u.role}</span>
               {u.nav_overrides && Object.keys(u.nav_overrides).length > 0 && (
                 <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8", marginLeft: 6 }}>Custom access</span>
               )}
             </div>
-            <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>
+            <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {warehouses.find(w => w.id === u.warehouse_id)?.name || (u.role === "admin" ? "All warehouses" : "No warehouse set")}
             </div>
             <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => editAccessId === u.id ? setEditAccessId(null) : openEditAccess(u)}>
               {editAccessId === u.id ? "✕ Close" : "🔐 Edit Access"}
             </button>
             {editAccessId === u.id && (
-              <div style={{ marginTop: 10, borderTop: "1px solid #333A47", paddingTop: 10 }}>
+              <div style={{ marginTop: 10, borderTop: "1px solid #E0D8C5", paddingTop: 10 }}>
                 {NAV_LIST.map(([navId, label]) => {
                   const checked = isNavVisible({ ...u, nav_overrides: editOverrides }, navId);
                   return (
-                    <label key={navId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12, color: "#ECEAE3", cursor: "pointer" }}>
+                    <label key={navId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12, color: "#2B2620", cursor: "pointer" }}>
                       <input type="checkbox" checked={checked} onChange={e => setEditOverrides({ ...editOverrides, [navId]: e.target.checked })} />
                       {label}
                     </label>
@@ -2820,7 +2844,7 @@ function UsersView({ token, profile, showToast }) {
         ))}
         {users.length === 0 && <EmptyNote text="No staff yet." />}
       </div>
-      <div style={{ fontSize: 11, color: "#5A6070", marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: "#8A8272", marginTop: 4 }}>
         ⚠ "Delete user" sirf WMS profile hataata hai (access khatam ho jayega). Unka Supabase Auth account agar poori tarah delete karna ho to Supabase dashboard → Authentication → Users se manually karna hoga.
       </div>
     </div>
@@ -2936,7 +2960,7 @@ function ReturnsView({ token, profile, showToast }) {
             <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
             <div style={{ display: "flex", gap: 8 }}>
               {["good", "damaged"].map(c => (
-                <button key={c} onClick={() => setLineCondition(c)} style={{ ...S.secondaryBtnSm, ...(lineCondition === c ? { background: c === "good" ? "#4CAF7D" : "#E5484D", color: "#14161B", borderColor: c === "good" ? "#4CAF7D" : "#E5484D" } : {}) }}>
+                <button key={c} onClick={() => setLineCondition(c)} style={{ ...S.secondaryBtnSm, ...(lineCondition === c ? { background: c === "good" ? "#4CAF7D" : "#E5484D", color: "#1A1206", borderColor: c === "good" ? "#4CAF7D" : "#E5484D" } : {}) }}>
                   {c === "good" ? "✓ Good" : "✕ Damaged"}
                 </button>
               ))}
@@ -2964,7 +2988,7 @@ function ReturnsView({ token, profile, showToast }) {
                     <td style={S.td}>{p?.name}</td>
                     <td style={S.td}>{l.qty}</td>
                     <td style={S.td}><span style={{ ...S.badgeSm, color: l.condition === "good" ? "#4CAF7D" : "#E5484D", borderColor: l.condition === "good" ? "#4CAF7D" : "#E5484D" }}>{l.condition}</span></td>
-                    <td style={{ ...S.td, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace" }}>{bin?.code || "—"}</td>
+                    <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{bin?.code || "—"}</td>
                   </tr>
                 );
               })}
@@ -3003,12 +3027,12 @@ function ReturnsView({ token, profile, showToast }) {
             <div key={r.id} style={S.card} onClick={() => openReturnDetail(r)}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span>↩</span>
-                <span style={{ ...S.badgeSm, color: r.status === "pending" ? "#8B93A3" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#333A47" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span>
+                <span style={{ ...S.badgeSm, color: r.status === "pending" ? "#6B6355" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#E0D8C5" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span>
               </div>
-              <div style={{ color: "#ECEAE3", fontSize: 14, marginTop: 10 }}>{order?.external_order_id || "No order link"}</div>
-              <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 4 }}>{r.reason || "No reason noted"}</div>
+              <div style={{ color: "#2B2620", fontSize: 14, marginTop: 10 }}>{order?.external_order_id || "No order link"}</div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{r.reason || "No reason noted"}</div>
               {r.str_number && <div style={{ color: "#F5A623", fontSize: 11, marginTop: 6, fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number}</div>}
-              <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.received_at)}</div>
+              <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.received_at)}</div>
             </div>
           );
         })}
@@ -3120,20 +3144,20 @@ function ReportsView({ token, profile, showToast }) {
       <div style={S.statGrid} className="depotos-statgrid">
         <div style={S.statCard}>
           <span style={{ fontSize: 16 }}>⏱</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>
             {leadTime.avgHours !== null ? leadTime.avgHours.toFixed(1) + "h" : "—"}
           </div>
-          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Avg warehouse lead-time (receive → dispatch)</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Avg warehouse lead-time (receive → dispatch)</div>
         </div>
         <div style={S.statCard}>
           <span style={{ fontSize: 16 }}>📦</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{leadTime.samples}</div>
-          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Dispatched orders measured</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>{leadTime.samples}</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Dispatched orders measured</div>
         </div>
         <div style={S.statCard}>
           <span style={{ fontSize: 16 }}>👥</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#ECEAE3", marginTop: 10 }}>{staffCounts.length}</div>
-          <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 2 }}>Active staff (logged actions)</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>{staffCounts.length}</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Active staff (logged actions)</div>
         </div>
       </div>
 
@@ -3151,8 +3175,8 @@ function ReportsView({ token, profile, showToast }) {
               {teamComparison.map(r => (
                 <tr key={r.userId}>
                   <td style={S.td}>{r.name}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.role}</td>
-                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: r.cats[c] > 0 ? "#ECEAE3" : "#5A6070" }}>{r.cats[c]}</td>)}
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
+                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: r.cats[c] > 0 ? "#2B2620" : "#8A8272" }}>{r.cats[c]}</td>)}
                   <td style={{ ...S.td, color: "#F5A623", fontWeight: 600 }}>{r.total}</td>
                 </tr>
               ))}
@@ -3170,7 +3194,7 @@ function ReportsView({ token, profile, showToast }) {
               {hourlyData.map(h => (
                 <tr key={h.hour}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#5B9EE8" }}>{String(h.hour).padStart(2, "0")}:00</td>
-                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: h[c] > 0 ? "#ECEAE3" : "#5A6070" }}>{h[c] || 0}</td>)}
+                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: h[c] > 0 ? "#2B2620" : "#8A8272" }}>{h[c] || 0}</td>)}
                 </tr>
               ))}
             </tbody>
@@ -3200,11 +3224,11 @@ function ReportsView({ token, profile, showToast }) {
             }
           }
           return rows.map((r, i) => r.type === "gap" ? (
-            <div key={i} style={{ padding: "6px 0", fontSize: 11, color: "#5A6070", fontStyle: "italic" }}>— No recorded WMS activity ({r.mins} min gap) —</div>
+            <div key={i} style={{ padding: "6px 0", fontSize: 11, color: "#8A8272", fontStyle: "italic" }}>— No recorded WMS activity ({r.mins} min gap) —</div>
           ) : (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #262B35" }}>
-              <span style={{ color: "#ECEAE3", fontSize: 13 }}>{r.ev.action} <span style={{ color: "#8B93A3" }}>({categorizeEvent(r.ev)})</span></span>
-              <span style={{ color: "#5A6070", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.ev.created_at)}</span>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <span style={{ color: "#2B2620", fontSize: 13 }}>{r.ev.action} <span style={{ color: "#6B6355" }}>({categorizeEvent(r.ev)})</span></span>
+              <span style={{ color: "#8A8272", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.ev.created_at)}</span>
             </div>
           ));
         })()}
@@ -3224,7 +3248,7 @@ function ReportsView({ token, profile, showToast }) {
               {pickDurations.map(r => (
                 <tr key={r.userId}>
                   <td style={S.td}>{r.name}</td>
-                  <td style={{ ...S.td, color: "#8B93A3" }}>{r.count}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.count}</td>
                   <td style={{ ...S.td, color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{r.avgMins.toFixed(1)} min</td>
                 </tr>
               ))}
@@ -3243,17 +3267,17 @@ function ReportsView({ token, profile, showToast }) {
         {loading ? <EmptyNote text="Loading…" /> : staffCounts.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
           <div>
             {staffCounts.map(r => (
-              <div key={r.userId} style={{ padding: "10px 0", borderBottom: "1px solid #262B35" }}>
+              <div key={r.userId} style={{ padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ color: "#ECEAE3", fontSize: 13 }}>{r.name} <span style={{ color: "#5A6070", fontSize: 11 }}>({r.role})</span></span>
+                  <span style={{ color: "#2B2620", fontSize: 13 }}>{r.name} <span style={{ color: "#8A8272", fontSize: 11 }}>({r.role})</span></span>
                   <span style={{ color: "#F5A623", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{r.total} actions</span>
                 </div>
-                <div style={{ background: "#14161B", borderRadius: 4, height: 6, overflow: "hidden" }}>
+                <div style={{ background: "#F4EFE6", borderRadius: 4, height: 6, overflow: "hidden" }}>
                   <div style={{ width: `${(r.total / maxTotal) * 100}%`, background: "#F5A623", height: "100%" }} />
                 </div>
                 <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
                   {Object.entries(r.actions).map(([action, count]) => (
-                    <span key={action} style={{ fontSize: 10, color: "#8B93A3", fontFamily: "'IBM Plex Mono', monospace" }}>{action}: {count}</span>
+                    <span key={action} style={{ fontSize: 10, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{action}: {count}</span>
                   ))}
                 </div>
               </div>
@@ -3272,10 +3296,10 @@ function ReportsView({ token, profile, showToast }) {
             )}>⬇ Export CSV ({rawEvents.length} events)</button>
           )}
         </div>
-        <div style={{ color: "#5A6070", fontSize: 11, marginTop: 8 }}>Last {rawEvents.length} events (GRN, Putaway, Orders, Picking, Packing, Dispatch, Returns) — user, action, timestamp ke sath.</div>
+        <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Last {rawEvents.length} events (GRN, Putaway, Orders, Picking, Packing, Dispatch, Returns) — user, action, timestamp ke sath.</div>
       </div>
 
-      <div style={{ fontSize: 11, color: "#5A6070" }}>
+      <div style={{ fontSize: 11, color: "#8A8272" }}>
         ⚠ Last-mile lead-time (dispatch ke baad courier ke paas) abhi track nahi ho sakta — yeh sirf M&P/Postex ke apne system mein hota hai. Unka API integrate hone ke baad yeh add hoga.
       </div>
     </div>
@@ -3304,6 +3328,7 @@ const FIELD_ALIASES = {
   department: ["department"],
   salesPrice: ["salesprice", "price"],
   sku: ["productsku", "internalreference", "sku"],
+  imageUrl: ["imageurl", "image", "imagesrc", "photourl"],
   productName: ["productname", "stockmoveproduct", "product", "description"],
   qty: ["stockmovequantity", "requiredquantity", "qtyordered", "quantity", "qty"],
   reference: ["reference"],
@@ -3483,7 +3508,7 @@ function BinsView({ token, profile, showToast }) {
           <input style={{ ...S.input, maxWidth: 220 }} placeholder="e.g. A-01-03" value={newCode} onChange={e => setNewCode(e.target.value)} />
           <button style={S.primaryBtnSm} onClick={addBin}>+ Add</button>
         </div>
-        <div style={{ marginTop: 12, fontSize: 11, color: "#5A6070" }}>
+        <div style={{ marginTop: 12, fontSize: 11, color: "#8A8272" }}>
           ⚠ Sirf yahan se bin locations bante hain — staff Putaway ya Returns screen se koi nayi location nahi khol sakte, sirf yahan uploaded list mein se select karenge.
         </div>
       </div>
@@ -3548,7 +3573,7 @@ function ToteMasterView({ token, profile, showToast }) {
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{t.tote_number}</span>
               <span style={{ ...S.badgeSm, color: t.status === "open" ? "#4CAF7D" : "#5B9EE8", borderColor: t.status === "open" ? "#4CAF7D" : "#5B9EE8" }}>{t.status}</span>
             </div>
-            <div style={{ color: "#8B93A3", fontSize: 12, marginTop: 8 }}>
+            <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {t.assigned_to ? `With: ${profiles[t.assigned_to]?.full_name || "—"}` : "Unassigned"}
             </div>
             {t.status !== "open" && (
@@ -3636,11 +3661,11 @@ function CameraScanModal({ onScan, onClose }) {
     <div style={S.scanOverlay}>
       <div style={S.scanModal}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <span style={{ color: "#ECEAE3", fontFamily: "'Space Grotesk', sans-serif", fontSize: 14 }}>📷 Scan barcode</span>
+          <span style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 14 }}>📷 Scan barcode</span>
           <button style={S.iconBtnCircle} onClick={onClose}>✕</button>
         </div>
         <div id={regionId} style={{ width: "100%", borderRadius: 8, overflow: "hidden" }}></div>
-        <div style={{ color: "#8B93A3", fontSize: 11, marginTop: 10, textAlign: "center" }}>Camera ko barcode ke upar point karein</div>
+        <div style={{ color: "#6B6355", fontSize: 11, marginTop: 10, textAlign: "center" }}>Camera ko barcode ke upar point karein</div>
       </div>
     </div>
   );
@@ -3686,11 +3711,11 @@ function ProductPicker({ token, onSelect, placeholder }) {
       {open && (
         <div style={S.pickerDropdown}>
           {results.length === 0 ? (
-            <div style={{ padding: "10px 12px", color: "#5A6070", fontSize: 12 }}>No matches</div>
+            <div style={{ padding: "10px 12px", color: "#8A8272", fontSize: 12 }}>No matches</div>
           ) : results.map(p => (
             <div key={p.id} style={S.pickerItem} onMouseDown={() => pick(p)}>
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 12 }}>{p.barcode}</span>
-              <span style={{ color: "#ECEAE3", marginLeft: 8, fontSize: 13 }}>{p.name}</span>
+              <span style={{ color: "#2B2620", marginLeft: 8, fontSize: 13 }}>{p.name}</span>
             </div>
           ))}
         </div>
@@ -3705,11 +3730,11 @@ function ImportReportPanel({ report, onConfirm, onCancel, importing, confirmLabe
     <div style={S.panel}>
       <div style={S.panelTitle}>Upload validation report</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 16 }}>
-        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#ECEAE3" }}>{report.total}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Total rows</div></div>
-        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#4CAF7D" }}>{report.validRows.length}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Valid rows</div></div>
-        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#E5484D" }}>{report.invalidRows.length}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Invalid rows</div></div>
-        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.invalidBarcodeCount}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Barcode not found</div></div>
-        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.duplicateCount}</div><div style={{ color: "#8B93A3", fontSize: 11 }}>Duplicates</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#2B2620" }}>{report.total}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Total rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#4CAF7D" }}>{report.validRows.length}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Valid rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#E5484D" }}>{report.invalidRows.length}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Invalid rows</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.invalidBarcodeCount}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Barcode not found</div></div>
+        <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.duplicateCount}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Duplicates</div></div>
       </div>
 
       {report.invalidRows.length > 0 && (
@@ -3729,7 +3754,7 @@ function ImportReportPanel({ report, onConfirm, onCancel, importing, confirmLabe
               ))}
             </tbody>
           </table>
-          {report.invalidRows.length > 100 && <div style={{ color: "#5A6070", fontSize: 11, marginTop: 6 }}>+{report.invalidRows.length - 100} more invalid rows not shown</div>}
+          {report.invalidRows.length > 100 && <div style={{ color: "#8A8272", fontSize: 11, marginTop: 6 }}>+{report.invalidRows.length - 100} more invalid rows not shown</div>}
         </>
       )}
 
@@ -3813,47 +3838,47 @@ function SectionTitle({ title, action }) {
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ width: 4, height: 18, background: "#F5A623" }} />
-        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 19, fontWeight: 600, color: "#ECEAE3" }}>{title}</span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 19, fontWeight: 600, color: "#2B2620" }}>{title}</span>
       </div>
       {action}
     </div>
   );
 }
-function EmptyNote({ text }) { return <div style={{ color: "#5A6070", fontSize: 13, padding: "20px 4px", fontFamily: "'IBM Plex Mono', monospace" }}>— {text}</div>; }
+function EmptyNote({ text }) { return <div style={{ color: "#8A8272", fontSize: 13, padding: "20px 4px", fontFamily: "'IBM Plex Mono', monospace" }}>— {text}</div>; }
 
 const S = {
   scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
-  scanModal: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 12, padding: 16, width: "100%", maxWidth: 420 },
-  iconBtnCircle: { background: "#14161B", border: "1px solid #333A47", color: "#8B93A3", borderRadius: "50%", width: 26, height: 26, cursor: "pointer" },
-  pickerDropdown: { position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#1D2129", border: "1px solid #333A47", borderRadius: 6, maxHeight: 220, overflowY: "auto", zIndex: 50, boxShadow: "0 8px 20px rgba(0,0,0,0.4)" },
-  pickerItem: { padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #262B35" },
-  app: { display: "flex", height: "100vh", background: "#14161B", fontFamily: "'Space Grotesk', sans-serif", overflow: "hidden" },
-  sidebar: { width: 210, background: "#1D2129", borderRight: "1px solid #333A47", display: "flex", flexDirection: "column", flexShrink: 0 },
+  scanModal: { background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 12, padding: 16, width: "100%", maxWidth: 420 },
+  iconBtnCircle: { background: "#F4EFE6", border: "1px solid #E0D8C5", color: "#6B6355", borderRadius: "50%", width: 26, height: 26, cursor: "pointer" },
+  pickerDropdown: { position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 6, maxHeight: 220, overflowY: "auto", zIndex: 50, boxShadow: "0 8px 20px rgba(0,0,0,0.4)" },
+  pickerItem: { padding: "8px 12px", cursor: "pointer", borderBottom: "1px solid #EFE8D8" },
+  app: { display: "flex", height: "100vh", background: "#F4EFE6", fontFamily: "'Space Grotesk', sans-serif", overflow: "hidden" },
+  sidebar: { width: 210, background: "#1A1E27", borderRight: "1px solid #2C323F", display: "flex", flexDirection: "column", flexShrink: 0 },
   main: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0 },
-  topbar: { height: 56, borderBottom: "1px solid #333A47", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", flexShrink: 0 },
+  topbar: { height: 56, borderBottom: "1px solid #E0D8C5", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", flexShrink: 0 },
   content: { flex: 1, overflowY: "auto", padding: "22px 24px 60px" },
   navItem: { display: "flex", alignItems: "center", gap: 10, padding: "10px 20px", background: "none", border: "none", cursor: "pointer", fontSize: 13, width: "100%", textAlign: "left", fontFamily: "'Space Grotesk', sans-serif" },
-  navItemActive: { background: "#262B35", borderLeft: "2px solid #F5A623" },
+  navItemActive: { background: "#242A35", borderLeft: "2px solid #F5A623" },
   statGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 },
-  statCard: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: "16px 18px" },
-  panel: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 18, marginBottom: 14, overflowX: "auto" },
-  panelTitle: { color: "#ECEAE3", fontSize: 13, fontWeight: 600, marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.5 },
+  statCard: { background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 8, padding: "16px 18px" },
+  panel: { background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 8, padding: 18, marginBottom: 14, overflowX: "auto" },
+  panelTitle: { color: "#2B2620", fontSize: 13, fontWeight: 600, marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.5 },
   cardGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 },
-  card: { background: "#1D2129", border: "1px solid #333A47", borderRadius: 8, padding: 16, cursor: "pointer" },
-  input: { background: "#14161B", border: "1px solid #333A47", borderRadius: 6, color: "#ECEAE3", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" },
-  label: { color: "#5A6070", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" },
-  primaryBtn: { width: "100%", background: "#F5A623", color: "#14161B", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" },
-  primaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "#F5A623", color: "#14161B", border: "none", borderRadius: 6, padding: "9px 14px", fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
-  secondaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "transparent", color: "#ECEAE3", border: "1px solid #333A47", borderRadius: 6, padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
-  badge: { fontSize: 11, color: "#8B93A3", border: "1px solid #333A47", borderRadius: 20, padding: "3px 10px", fontFamily: "'IBM Plex Mono', monospace" },
+  card: { background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 8, padding: 16, cursor: "pointer" },
+  input: { background: "#F4EFE6", border: "1px solid #E0D8C5", borderRadius: 6, color: "#2B2620", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" },
+  label: { color: "#8A8272", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" },
+  primaryBtn: { width: "100%", background: "#F5A623", color: "#1A1206", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" },
+  primaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "#F5A623", color: "#1A1206", border: "none", borderRadius: 6, padding: "9px 14px", fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
+  secondaryBtnSm: { display: "flex", alignItems: "center", gap: 5, background: "transparent", color: "#2B2620", border: "1px solid #E0D8C5", borderRadius: 6, padding: "7px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" },
+  badge: { fontSize: 11, color: "#6B6355", border: "1px solid #E0D8C5", borderRadius: 20, padding: "3px 10px", fontFamily: "'IBM Plex Mono', monospace" },
   badgeSm: { fontSize: 10, border: "1px solid", borderRadius: 20, padding: "2px 8px", fontFamily: "'IBM Plex Mono', monospace" },
-  hazardBar: { height: 4, width: "100%", background: "repeating-linear-gradient(45deg, #F5A623 0 10px, #14161B 10px 20px)", position: "absolute", top: 0, left: 0, borderRadius: "10px 10px 0 0" },
-  disclaimer: { marginTop: 22, fontSize: 11, color: "#5A6070", lineHeight: 1.4 },
-  loginWrap: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#14161B", backgroundImage: "radial-gradient(circle at 20% 20%, #1D2129 0%, #14161B 60%)" },
-  loginCard: { position: "relative", width: 380, background: "#1D2129", border: "1px solid #333A47", borderRadius: 12, padding: "28px 26px", overflow: "hidden" },
-  th: { textAlign: "left", color: "#5A6070", fontSize: 10.5, letterSpacing: 0.5, padding: "6px 8px", borderBottom: "1px solid #333A47", fontFamily: "'IBM Plex Mono', monospace" },
-  td: { padding: "9px 8px", fontSize: 13, color: "#ECEAE3", borderBottom: "1px solid #262B35" },
-  toast: { position: "fixed", bottom: 24, right: 24, background: "#1D2129", border: "1px solid", borderRadius: 8, padding: "12px 16px", color: "#ECEAE3", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }
+  hazardBar: { height: 4, width: "100%", background: "repeating-linear-gradient(45deg, #F5A623 0 10px, #1F2430 10px 20px)", position: "absolute", top: 0, left: 0, borderRadius: "10px 10px 0 0" },
+  disclaimer: { marginTop: 22, fontSize: 11, color: "#8A8272", lineHeight: 1.4 },
+  loginWrap: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#171A21", backgroundImage: "radial-gradient(circle at 20% 20%, #1F2430 0%, #171A21 60%)" },
+  loginCard: { position: "relative", width: 380, background: "#1F2430", border: "1px solid #2C323F", borderRadius: 12, padding: "28px 26px", overflow: "hidden" },
+  th: { textAlign: "left", color: "#8A8272", fontSize: 10.5, letterSpacing: 0.5, padding: "6px 8px", borderBottom: "1px solid #E0D8C5", fontFamily: "'IBM Plex Mono', monospace" },
+  td: { padding: "9px 8px", fontSize: 13, color: "#2B2620", borderBottom: "1px solid #EFE8D8" },
+  toast: { position: "fixed", bottom: 24, right: 24, background: "#FFFFFF", border: "1px solid", borderRadius: 8, padding: "12px 16px", color: "#2B2620", fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }
 };
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
