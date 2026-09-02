@@ -130,7 +130,7 @@ function App() {
           {view === "picking" && <PickingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "packing" && <PackingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "dispatch" && <DispatchView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "users" && profile.role === "admin" && <UsersView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "users" && ["admin", "warehouse_lead"].includes(profile.role) && <UsersView token={session.token} profile={profile} showToast={showToast} />}
           {view === "returns" && <ReturnsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
@@ -188,7 +188,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
   const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : ["warehouse_lead", "supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
+    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+    : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
   const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports", "bins", "totemaster", "users"];
   const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, returns: { label: "Returns", icon: "↩" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
@@ -1196,10 +1197,13 @@ function PutawayView({ token, profile, showToast }) {
   const [scanBarcodeInput, setScanBarcodeInput] = useState("");
   const [scanLocationInput, setScanLocationInput] = useState("");
   const [scanQty, setScanQty] = useState("");
+  const [pieceCount, setPieceCount] = useState(0);
   const [matchedTaskId, setMatchedTaskId] = useState(null);
   const [matchedBinId, setMatchedBinId] = useState("");
   const [shortageOpen, setShortageOpen] = useState(false);
   const [shortageQty, setShortageQty] = useState("");
+  const putawayMode = profile.putaway_mode || "bulk";
+  const isPieceMode = putawayMode === "piece";
 
   const pendingMine = myAllTasks.filter(t => t.qty - (t.qty_completed || 0) > 0);
   const matchedTask = pendingMine.find(t => t.id === matchedTaskId);
@@ -1213,13 +1217,23 @@ function PutawayView({ token, profile, showToast }) {
     const c = cleanCode(code);
     const product = Object.values(products).find(p => cleanCode(p.barcode) === c || cleanCode(p.sku) === c);
     if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+
+    // Piece-to-Piece mode: re-scanning the SAME product that's already matched increments the count by 1
+    if (isPieceMode && matchedTask && matchedTask.product_id === product.id) {
+      if (pieceCount >= matchedRemaining) { showToast("Required quantity already scan ho chuki", "err"); return; }
+      setPieceCount(c2 => c2 + 1);
+      showToast(`✓ Piece ${pieceCount + 1} / ${matchedRemaining}`);
+      return;
+    }
+
     const candidates = pendingMine.filter(t => t.product_id === product.id).sort((a, b) => a.id.localeCompare(b.id));
     if (candidates.length === 0) { showToast("Yeh product aapke pending jobs mein nahi hai — WRONG ITEM ya already complete", "err"); return; }
     setMatchedTaskId(candidates[0].id);
     setMatchedBinId("");
+    setPieceCount(0);
     setScanQty(String(candidates[0].qty - (candidates[0].qty_completed || 0)));
     setShortageOpen(false);
-    showToast(`✓ Matched: ${product.barcode} — GRN ${grnNumberFor(candidates[0])}`);
+    showToast(`✓ Matched: ${product.barcode} — GRN ${grnNumberFor(candidates[0])} (${isPieceMode ? "Piece-to-Piece mode" : "Bulk mode"})`);
   };
 
   const scanLocation = (codeArg) => {
@@ -1235,8 +1249,8 @@ function PutawayView({ token, profile, showToast }) {
   const confirmPutaway = async () => {
     if (!matchedTask) { showToast("Pehle product scan karein", "err"); return; }
     if (!matchedBinId) { showToast("Location scan/select karein", "err"); return; }
-    const qty = Number(scanQty);
-    if (!qty || qty <= 0) { showToast("Valid qty enter karein", "err"); return; }
+    const qty = isPieceMode ? pieceCount : Number(scanQty);
+    if (!qty || qty <= 0) { showToast(isPieceMode ? "Kam se kam 1 piece scan karein" : "Valid qty enter karein", "err"); return; }
     if (qty > matchedRemaining) { showToast(`EXCESS QTY NOT ALLOWED — max ${matchedRemaining}`, "err"); return; }
     try {
       await addOnHand(token, profile.warehouse_id, matchedTask.product_id, matchedBinId, qty);
@@ -1248,9 +1262,9 @@ function PutawayView({ token, profile, showToast }) {
           ? { qty_completed: newCompleted, status: "completed", bin_id: matchedBinId, completed_at: new Date().toISOString() }
           : { qty_completed: newCompleted, bin_id: matchedBinId }
       });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: matchedBinId, qty } } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: matchedBinId, qty, mode: putawayMode } } });
       showToast(done ? "✓ Putaway complete" : `✓ ${qty} pcs put away — ${matchedTask.qty - newCompleted} remaining`);
-      setMatchedTaskId(null); setMatchedBinId(""); setScanQty("");
+      setMatchedTaskId(null); setMatchedBinId(""); setScanQty(""); setPieceCount(0);
       load();
     } catch (e) { showToast("Putaway failed", "err"); }
   };
@@ -1316,7 +1330,10 @@ function PutawayView({ token, profile, showToast }) {
 
       {matchedTask && matchedProduct && (
         <div style={{ ...S.panel, borderColor: "#F5A623" }}>
-          <div style={S.panelTitle}>Matched item</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={S.panelTitle}>Matched item</div>
+            <span style={{ ...S.badgeSm, color: isPieceMode ? "#5B9EE8" : "#F5A623", borderColor: isPieceMode ? "#5B9EE8" : "#F5A623" }}>{isPieceMode ? "🔢 Piece-to-Piece" : "📦 Bulk"}</span>
+          </div>
           <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 16 }}>{matchedProduct.barcode}</div>
           <div style={{ color: "#2B2620", fontSize: 14 }}>{matchedProduct.name}</div>
           <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>
@@ -1336,8 +1353,20 @@ function PutawayView({ token, profile, showToast }) {
           </div>
           {matchedBinId && <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 6 }}>📍 {bins.find(b => b.id === matchedBinId)?.code}</div>}
 
-          <div style={S.label}>3. QUANTITY</div>
-          <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, maxWidth: 140 }} value={scanQty} onChange={e => setScanQty(e.target.value)} />
+          {isPieceMode ? (
+            <>
+              <div style={S.label}>3. SCAN EACH PHYSICAL UNIT (barcode dobara scan karein)</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: pieceCount >= matchedRemaining ? "#4CAF7D" : "#F5A623" }}>{pieceCount} / {matchedRemaining}</div>
+                <div style={{ color: "#8A8272", fontSize: 11 }}>Har unit ke liye upar wale barcode field mein dobara scan karein</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={S.label}>3. QUANTITY</div>
+              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, maxWidth: 140 }} value={scanQty} onChange={e => setScanQty(e.target.value)} />
+            </>
+          )}
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
             <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>
@@ -3037,6 +3066,14 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Access save failed", "err"); }
   };
 
+  const setPutawayMode = async (u, mode) => {
+    try {
+      await sb(`/rest/v1/profiles?id=eq.${u.id}`, { method: "PATCH", token, body: { putaway_mode: mode } });
+      showToast(`${u.full_name} → ${mode === "bulk" ? "Bulk" : "Piece-to-Piece"} mode`);
+      load();
+    } catch (e) { showToast("Mode change failed", "err"); }
+  };
+
   const load = useCallback(async () => {
     try {
       const [u, w] = await Promise.all([
@@ -3136,6 +3173,13 @@ function UsersView({ token, profile, showToast }) {
             </div>
             <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {warehouses.find(w => w.id === u.warehouse_id)?.name || (u.role === "admin" ? "All warehouses" : "No warehouse set")}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div style={S.label}>PUTAWAY SCAN MODE</div>
+              <select style={{ ...S.input, fontSize: 12 }} value={u.putaway_mode || "bulk"} onChange={e => setPutawayMode(u, e.target.value)}>
+                <option value="bulk">📦 Bulk — scan once, type qty manually</option>
+                <option value="piece">🔢 Piece-to-Piece — scan every physical unit</option>
+              </select>
             </div>
             <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => editAccessId === u.id ? setEditAccessId(null) : openEditAccess(u)}>
               {editAccessId === u.id ? "✕ Close" : "🔐 Edit Access"}
