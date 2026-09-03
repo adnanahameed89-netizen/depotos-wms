@@ -1334,8 +1334,17 @@ function PutawayView({ token, profile, showToast }) {
             <div style={S.panelTitle}>Matched item</div>
             <span style={{ ...S.badgeSm, color: isPieceMode ? "#5B9EE8" : "#F5A623", borderColor: isPieceMode ? "#5B9EE8" : "#F5A623" }}>{isPieceMode ? "🔢 Piece-to-Piece" : "📦 Bulk"}</span>
           </div>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 16 }}>{matchedProduct.barcode}</div>
-          <div style={{ color: "#2B2620", fontSize: 14 }}>{matchedProduct.name}</div>
+          <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6 }}>
+            {matchedProduct.image_url ? (
+              <img src={matchedProduct.image_url} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+            ) : (
+              <div style={{ width: 70, height: 70, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 20, flexShrink: 0 }}>📦</div>
+            )}
+            <div>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 16 }}>{matchedProduct.barcode}</div>
+              <div style={{ color: "#2B2620", fontSize: 14 }}>{matchedProduct.name}</div>
+            </div>
+          </div>
           <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>
             GRN: {grnNumberFor(matchedTask)} · Required: {matchedTask.qty} · Put away so far: {matchedTask.qty_completed || 0} · Remaining: {matchedRemaining}
           </div>
@@ -2019,7 +2028,7 @@ function OrdersView({ token, profile, showToast }) {
           )}
         </div>
 
-        {openOrder.status === "incomplete" && (
+        {(openOrder.status === "incomplete" || openShortages.length > 0) && (
           <div style={{ ...S.panel, borderColor: "#E5484D" }}>
             <div style={{ ...S.panelTitle, color: "#E5484D" }}>⚠ Shortage report — kam quantity available thi</div>
             <table>
@@ -2039,7 +2048,7 @@ function OrdersView({ token, profile, showToast }) {
                 })}
               </tbody>
             </table>
-            {canEditIncomplete && (
+            {canEditIncomplete && openOrder.status === "incomplete" && (
               <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={retryReserve}>🔄 Retry reserve (after correction/restock)</button>
             )}
           </div>
@@ -2361,6 +2370,40 @@ function PickingView({ token, profile, showToast }) {
 
   const allToteScanned = consolidated.length > 0 && consolidated.every(g => g.scanned >= g.required);
 
+  const reportNotFound = async (group) => {
+    const remaining = group.required - group.scanned;
+    if (remaining <= 0) return;
+    try {
+      const altRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${group.product_id}&bin_id=neq.${group.bin_id}&on_hand=gt.0&select=*`, { token });
+      const alt = (altRows || []).sort((a, b) => b.on_hand - a.on_hand)[0];
+      const openRefs = group.refs.filter(r => r.allocated < r.qty_required);
+
+      if (alt) {
+        const existingIdx = consolidated.findIndex(g2 => g2.bin_id === alt.bin_id && g2.product_id === group.product_id);
+        if (existingIdx >= 0) {
+          consolidated[existingIdx].required += remaining;
+          consolidated[existingIdx].refs = [...consolidated[existingIdx].refs, ...openRefs];
+        } else {
+          consolidated.push({ bin_id: alt.bin_id, product_id: group.product_id, required: remaining, scanned: 0, refs: openRefs.map(r => ({ ...r })) });
+        }
+        group.required = group.scanned; // close out this location — fully relocated
+        setConsolidated([...consolidated]);
+        showToast(`📍 Product doosri location par mila — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein`);
+      } else {
+        for (const ref of openRefs) {
+          const short = ref.qty_required - ref.allocated;
+          if (short > 0) {
+            await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: ref.order_id, product_id: group.product_id, qty_required: ref.qty_required, qty_available: ref.allocated, not_available_qty: short } });
+            await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: ref.order_id, user_id: profile.id, action: "pick_shortage_reported", metadata: { product_id: group.product_id, short_qty: short } } });
+          }
+        }
+        group.required = group.scanned; // let tote completion proceed without this shortfall
+        setConsolidated([...consolidated]);
+        showToast("⚠ Koi aur location nahi mili — shortage record ho gaya, Admin ko Incomplete Orders mein nazar aayega", "err");
+      }
+    } catch (e) { showToast("Report failed", "err"); }
+  };
+
   const completeTotePicking = async () => {
     try {
       for (const g of consolidated) {
@@ -2472,11 +2515,14 @@ function PickingView({ token, profile, showToast }) {
             const done = g.scanned >= g.required;
             return (
               <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
                   <span style={{ flex: 1, color: "#2B2620", fontSize: 13 }}>{p?.name}</span>
                   <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#6B6355", borderColor: done ? "#4CAF7D" : "#E0D8C5" }}>{g.scanned} / {g.required}</span>
+                  {!done && (
+                    <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D", padding: "4px 8px", fontSize: 11 }} onClick={() => reportNotFound(g)}>❌ Not found here</button>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 100 }}>
                   {g.refs.map((r, j) => (
@@ -2576,6 +2622,7 @@ function PackingView({ token, profile, showToast }) {
   const [totes, setTotes] = useState([]);
   const [openTote, setOpenTote] = useState(null);
   const [openTask, setOpenTask] = useState(null);
+  const [lastScannedProduct, setLastScannedProduct] = useState(null);
   const [requiredLines, setRequiredLines] = useState([]);
   const [scans, setScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
@@ -2603,6 +2650,7 @@ function PackingView({ token, profile, showToast }) {
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProducts(prev => ({ ...prev, ...newProducts }));
     setScans({});
+    setLastScannedProduct(null);
     setOpenTask(task);
   };
 
@@ -2652,6 +2700,7 @@ function PackingView({ token, profile, showToast }) {
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
     setScans({ ...scans, [p.id]: current + 1 });
+    setLastScannedProduct(p);
     showToast(`Scanned: ${p.barcode}`);
   };
 
@@ -2701,6 +2750,20 @@ function PackingView({ token, profile, showToast }) {
             <button style={S.primaryBtnSm} onClick={() => scanBarcode()}>Scan</button>
           </div>
         </div>
+        {lastScannedProduct && (
+          <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center" }}>
+            {lastScannedProduct.image_url ? (
+              <img src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+            ) : (
+              <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
+            )}
+            <div>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>LAST SCANNED — VERIFY PRODUCT</div>
+              <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, marginTop: 4 }}>{lastScannedProduct.name}</div>
+              <div style={{ color: "#F5A623", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>{lastScannedProduct.barcode}</div>
+            </div>
+          </div>
+        )}
         <div style={S.panel}>
           <div style={S.panelTitle}>Progress</div>
           {requiredLines.map(l => {
