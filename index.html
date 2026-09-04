@@ -2861,9 +2861,16 @@ function PackingView({ token, profile, showToast }) {
     setRequiredLines(lines || []);
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProducts(prev => ({ ...prev, ...newProducts }));
-    setScans({});
+    let restoredScans = {};
+    if (task.scans) {
+      try { restoredScans = JSON.parse(task.scans); } catch (e) {}
+    }
+    setScans(restoredScans);
     setLastScannedProduct(null);
     setOpenTask(task);
+    if (Object.keys(restoredScans).length > 0) {
+      showToast("Pichli progress restore ho gayi — wahin se continue karein");
+    }
   };
 
   const openByOrderNumber = (codeArg) => {
@@ -2900,7 +2907,7 @@ function PackingView({ token, profile, showToast }) {
     } catch (e) { showToast("Tote open nahi ho saki", "err"); }
   };
 
-  const scanBarcode = (codeArg) => {
+  const scanBarcode = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
@@ -2911,9 +2918,13 @@ function PackingView({ token, profile, showToast }) {
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
-    setScans({ ...scans, [p.id]: current + 1 });
+    const newScans = { ...scans, [p.id]: current + 1 };
+    setScans(newScans);
     setLastScannedProduct(p);
     showToast(`Scanned: ${p.barcode}`);
+    try {
+      await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { scans: JSON.stringify(newScans) } });
+    } catch (e) { /* progress still visible locally even if this save fails */ }
   };
 
   const allScanned = requiredLines.length > 0 && requiredLines.every(l => (scans[l.product_id] || 0) >= l.qty);
@@ -3787,9 +3798,11 @@ function ReportsView({ token, profile, showToast }) {
   const [rawEvents, setRawEvents] = useState([]);
   const [teamComparison, setTeamComparison] = useState([]);
   const [hourlyData, setHourlyData] = useState([]);
-  const [timelineUserId, setTimelineUserId] = useState("");
-  const [timelineDate, setTimelineDate] = useState(new Date().toISOString().slice(0, 10));
+  const [perfDate, setPerfDate] = useState(new Date().toISOString().slice(0, 10));
   const [staffHours, setStaffHours] = useState([]);
+  const [pickTasksRaw, setPickTasksRaw] = useState([]);
+  const [packTasksRaw, setPackTasksRaw] = useState([]);
+  const [pickLinesRaw, setPickLinesRaw] = useState([]);
   const [execSummary, setExecSummary] = useState(null);
 
   useEffect(() => {
@@ -3805,7 +3818,6 @@ function ReportsView({ token, profile, showToast }) {
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
         setProfiles(profMap);
         setRawEvents(events || []);
-        if (!timelineUserId && profs && profs.length) setTimelineUserId(profs[0].id);
 
         const pickDurByUser = {};
         for (const pt of pickTasks || []) {
@@ -3867,6 +3879,7 @@ function ReportsView({ token, profile, showToast }) {
         ]);
         const pickTaskIds = (pickTasksAll || []).map(t => t.id);
         const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+        setPickTasksRaw(pickTasksAll || []); setPackTasksRaw(packTasksAll || []); setPickLinesRaw(pickLines || []);
         const pickQtyByUser = {};
         for (const t of pickTasksAll || []) {
           if (!t.assigned_to) continue;
@@ -3912,16 +3925,34 @@ function ReportsView({ token, profile, showToast }) {
 
         // ---- Executive / Customer Fulfillment summary ----
         const todayStr = new Date().toDateString();
+        const yestStr = new Date(Date.now() - 86400000).toDateString();
         const dispatchedOrders = (allOrders || []).filter(o => o.status === "dispatched" || o.status === "handed_over");
         const shippedToday = dispatchedOrders.filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === todayStr).length;
+        const shippedYesterday = dispatchedOrders.filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === yestStr).length;
+        const receivedToday = (allOrders || []).filter(o => o.received_at && new Date(o.received_at).toDateString() === todayStr).length;
+        const receivedYesterday = (allOrders || []).filter(o => o.received_at && new Date(o.received_at).toDateString() === yestStr).length;
+        const pendingCount = (allOrders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned"].includes(o.status)).length;
         const sameDayCount = dispatchedOrders.filter(o => o.received_at && o.dispatched_at && new Date(o.received_at).toDateString() === new Date(o.dispatched_at).toDateString()).length;
         const onTimeRate = dispatchedOrders.length ? Math.round((sameDayCount / dispatchedOrders.length) * 100) : null;
         const incompleteCount = (allOrders || []).filter(o => o.status === "incomplete").length;
         const totalOrders = (allOrders || []).length;
         const fulfillmentRate = totalOrders ? Math.round(((totalOrders - incompleteCount) / totalOrders) * 100) : null;
+
+        const shortageOrderIds = new Set((await sb(`/rest/v1/order_shortage_lines?select=order_id`, { token }) || []).map(s => s.order_id));
+        const dispatchedWithoutShortage = dispatchedOrders.filter(o => !shortageOrderIds.has(o.id)).length;
+        const orderAccuracy = dispatchedOrders.length ? Math.round((dispatchedWithoutShortage / dispatchedOrders.length) * 100) : null;
+
+        const allGrnLines = await sb(`/rest/v1/grn_lines?select=qty_expected`, { token });
+        const allRpo = await sb(`/rest/v1/rtv_returns?select=short_qty`, { token });
+        const totalGrnQty = (allGrnLines || []).reduce((s, l) => s + (l.qty_expected || 0), 0);
+        const totalRpoQty = (allRpo || []).reduce((s, r) => s + (r.short_qty || 0), 0);
+        const inboundAccuracy = totalGrnQty ? Math.round(((totalGrnQty - totalRpoQty) / totalGrnQty) * 100) : null;
+
         setExecSummary({
-          shippedToday, totalOrders, dispatchedTotal: dispatchedOrders.length,
-          onTimeRate, incompleteCount, fulfillmentRate, avgCycleHours: avgHours
+          shippedToday, shippedYesterday, receivedToday, receivedYesterday, pendingCount,
+          totalOrders, dispatchedTotal: dispatchedOrders.length,
+          onTimeRate, incompleteCount, fulfillmentRate, avgCycleHours: avgHours,
+          orderAccuracy, inboundAccuracy
         });
       } catch (e) { showToast("Load failed", "err"); }
       setLoading(false);
@@ -3940,27 +3971,35 @@ function ReportsView({ token, profile, showToast }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
             <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F5A623" }}>{execSummary.shippedToday}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Orders Shipped Today</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Dispatched Today <span style={{ color: "#8A8272" }}>(Yesterday: {execSummary.shippedYesterday})</span></div>
             </div>
             <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.fulfillmentRate != null ? `${execSummary.fulfillmentRate}%` : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Fulfillment Rate (non-incomplete)</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.receivedToday}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Received Today <span style={{ color: "#8A8272" }}>(Yesterday: {execSummary.receivedYesterday})</span></div>
             </div>
             <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.onTimeRate != null ? `${execSummary.onTimeRate}%` : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Same-Day Dispatch Rate</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.avgCycleHours != null ? execSummary.avgCycleHours.toFixed(1) + "h" : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Order Cycle Time</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#B084F5" }}>{execSummary.pendingCount}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Pending (in progress)</div>
             </div>
             <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{execSummary.incompleteCount}</div>
               <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Incomplete / Short Orders</div>
             </div>
             <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.totalOrders}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Total Orders (all time)</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.avgCycleHours != null ? execSummary.avgCycleHours.toFixed(1) + "h" : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Order Cycle Time (Received → Dispatched){execSummary.avgCycleHours != null && execSummary.avgCycleHours > 24 && <span style={{ color: "#E5484D" }}> ⚠ &gt;24h</span>}</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.fulfillmentRate != null ? `${execSummary.fulfillmentRate}%` : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Fulfillment Rate</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.orderAccuracy != null ? `${execSummary.orderAccuracy}%` : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Order Accuracy (no shortage)</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.inboundAccuracy != null ? `${execSummary.inboundAccuracy}%` : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Inbound/GRN Accuracy (vs RPO)</div>
             </div>
           </div>
         </div>
@@ -4057,35 +4096,63 @@ function ReportsView({ token, profile, showToast }) {
       </div>
 
       <div style={S.panel}>
-        <div style={S.panelTitle}>User daily timeline — kis ne kab kya kiya (gap analysis)</div>
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-          <select style={{ ...S.input, minWidth: 180 }} value={timelineUserId} onChange={e => setTimelineUserId(e.target.value)}>
-            {Object.values(profiles).map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
-          </select>
-          <input type="date" style={{ ...S.input, maxWidth: 170 }} value={timelineDate} onChange={e => setTimelineDate(e.target.value)} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <div style={S.panelTitle}>Daily Performance — Picker &amp; Packer individual (date-wise)</div>
+          <input type="date" style={{ ...S.input, maxWidth: 170 }} value={perfDate} onChange={e => setPerfDate(e.target.value)} />
         </div>
         {(() => {
-          const dayEvents = rawEvents
-            .filter(ev => ev.user_id === timelineUserId && new Date(ev.created_at).toISOString().slice(0, 10) === timelineDate)
-            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-          if (dayEvents.length === 0) return <EmptyNote text="Is user ki is din koi activity nahi mili." />;
+          const dayStr = new Date(perfDate).toDateString();
           const rows = [];
-          for (let i = 0; i < dayEvents.length; i++) {
-            rows.push({ type: "event", ev: dayEvents[i] });
-            if (i < dayEvents.length - 1) {
-              const gapMin = (new Date(dayEvents[i + 1].created_at) - new Date(dayEvents[i].created_at)) / 60000;
-              if (gapMin > 15) rows.push({ type: "gap", mins: Math.round(gapMin) });
-            }
+          const pickByUser = {};
+          for (const t of pickTasksRaw) {
+            if (!t.assigned_to || !t.completed_at || new Date(t.completed_at).toDateString() !== dayStr) continue;
+            const qty = pickLinesRaw.filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+            const hrs = t.assigned_at ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
+            if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
+            pickByUser[t.assigned_to].orders += 1; pickByUser[t.assigned_to].pcs += qty; pickByUser[t.assigned_to].hrs += hrs;
           }
-          return rows.map((r, i) => r.type === "gap" ? (
-            <div key={i} style={{ padding: "6px 0", fontSize: 11, color: "#8A8272", fontStyle: "italic" }}>— No recorded WMS activity ({r.mins} min gap) —</div>
-          ) : (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8" }}>
-              <span style={{ color: "#2B2620", fontSize: 13 }}>{r.ev.action} <span style={{ color: "#6B6355" }}>({categorizeEvent(r.ev)})</span></span>
-              <span style={{ color: "#8A8272", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.ev.created_at)}</span>
-            </div>
-          ));
+          for (const [userId, d] of Object.entries(pickByUser)) {
+            rows.push({ userId, name: profiles[userId]?.full_name || "Unknown", role: "Picker", orders: d.orders, pcs: d.pcs, hrs: d.hrs, pcsPerHour: d.hrs > 0.05 ? Math.round(d.pcs / d.hrs) : 0 });
+          }
+          const packByUser = {};
+          for (const t of packTasksRaw) {
+            if (!t.assigned_to || !t.completed_at || new Date(t.completed_at).toDateString() !== dayStr) continue;
+            let qty = 0;
+            try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+            if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0, times: [] };
+            packByUser[t.assigned_to].orders += 1; packByUser[t.assigned_to].pcs += qty;
+            packByUser[t.assigned_to].times.push(new Date(t.completed_at));
+          }
+          for (const ev of rawEvents) {
+            if (!ev.user_id || categorizeEvent(ev) !== "Pack" || new Date(ev.created_at).toDateString() !== dayStr) continue;
+            if (packByUser[ev.user_id]) packByUser[ev.user_id].times.push(new Date(ev.created_at));
+          }
+          for (const [userId, d] of Object.entries(packByUser)) {
+            const times = d.times.sort((a, b) => a - b);
+            const hrs = times.length > 1 ? (times[times.length - 1] - times[0]) / 3600000 : 0;
+            rows.push({ userId, name: profiles[userId]?.full_name || "Unknown", role: "Packer", orders: d.orders, pcs: d.pcs, hrs, pcsPerHour: hrs > 0.05 ? Math.round(d.pcs / hrs) : 0 });
+          }
+          rows.sort((a, b) => b.pcs - a.pcs);
+          const topPcs = rows.length ? rows[0].pcs : 0;
+          return rows.length === 0 ? <EmptyNote text="Is date ki koi completed activity nahi mili." /> : (
+            <table>
+              <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th><th style={S.th}>Orders/Jobs</th><th style={S.th}>PCS Handled</th><th style={S.th}>Active Time</th><th style={S.th}>PCS/Hour</th></tr></thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td style={S.td}>{r.name} {r.pcs === topPcs && topPcs > 0 && <span title="Top performer">🏆</span>}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{r.orders}</td>
+                    <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{r.pcs}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{r.hrs.toFixed(1)}h</td>
+                    <td style={{ ...S.td, color: "#F5A623", fontWeight: 700 }}>{r.pcsPerHour}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
         })()}
+        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Packer/Put Away "Active Time" ek estimate hai (us din ki pehli aur aakhri related activity ke darmiyan) — Picker ka time exact task-duration se hai.</div>
       </div>
 
       <div style={S.panel}>
