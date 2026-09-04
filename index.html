@@ -1134,6 +1134,7 @@ function PutawayView({ token, profile, showToast }) {
   const [grns, setGrns] = useState({});
   const [returnLines, setReturnLines] = useState({});
   const [returnsMap, setReturnsMap] = useState({});
+  const [teamTasks, setTeamTasks] = useState([]);
   const [binChoice, setBinChoice] = useState({});
   const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
 
@@ -1146,7 +1147,12 @@ function PutawayView({ token, profile, showToast }) {
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
       setUnassignedTasks(u || []); setMyAllTasks(mine || []); setBins(b || []); setStaff(s || []);
-      const allTasks = [...(u || []), ...(mine || [])];
+      let team = [];
+      if (["admin", "warehouse_lead", "supervisor"].includes(profile.role)) {
+        team = await sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=not.is.null&select=*&order=id.asc`, { token }) || [];
+        setTeamTasks(team);
+      }
+      const allTasks = [...(u || []), ...(mine || []), ...team];
       setProducts(await fetchProductsByIds(token, allTasks.map(x => x.product_id)));
       const glIds = [...new Set(allTasks.map(x => x.grn_line_id).filter(Boolean))];
       if (glIds.length) {
@@ -1172,7 +1178,7 @@ function PutawayView({ token, profile, showToast }) {
         }
       }
     } catch (e) { showToast("Load failed", "err"); }
-  }, [token, profile.warehouse_id, profile.id]);
+  }, [token, profile.warehouse_id, profile.id, profile.role]);
   useEffect(() => { load(); }, [load]);
 
   const grnNumberFor = (task) => {
@@ -1210,7 +1216,23 @@ function PutawayView({ token, profile, showToast }) {
   const matchedProduct = matchedTask ? products[matchedTask.product_id] : null;
   const matchedRemaining = matchedTask ? matchedTask.qty - (matchedTask.qty_completed || 0) : 0;
 
-  const scanProduct = (codeArg) => {
+  const commitPutaway = async (task, binId, qty) => {
+    try {
+      await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty);
+      const newCompleted = (task.qty_completed || 0) + qty;
+      const done = newCompleted >= task.qty;
+      await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, {
+        method: "PATCH", token,
+        body: done
+          ? { qty_completed: newCompleted, status: "completed", bin_id: binId, completed_at: new Date().toISOString() }
+          : { qty_completed: newCompleted, bin_id: binId }
+      });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: binId, qty, mode: putawayMode } } });
+      return { done, newCompleted };
+    } catch (e) { showToast("Putaway failed", "err"); return null; }
+  };
+
+  const scanProduct = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : scanBarcodeInput).trim();
     setScanBarcodeInput("");
     if (!code) return;
@@ -1218,11 +1240,21 @@ function PutawayView({ token, profile, showToast }) {
     const product = Object.values(products).find(p => cleanCode(p.barcode) === c || cleanCode(p.sku) === c);
     if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
 
-    // Piece-to-Piece mode: re-scanning the SAME product that's already matched increments the count by 1
-    if (isPieceMode && matchedTask && matchedTask.product_id === product.id) {
-      if (pieceCount >= matchedRemaining) { showToast("Required quantity already scan ho chuki", "err"); return; }
-      setPieceCount(c2 => c2 + 1);
-      showToast(`✓ Piece ${pieceCount + 1} / ${matchedRemaining}`);
+    // Piece-to-Piece mode: re-scanning the SAME matched product (location already set) auto-records 1 more unit immediately
+    if (isPieceMode && matchedTask && matchedTask.product_id === product.id && matchedBinId) {
+      if (matchedRemaining <= 0) { showToast("Required quantity already complete", "err"); return; }
+      const result = await commitPutaway(matchedTask, matchedBinId, 1);
+      if (result) {
+        if (result.done) {
+          showToast("✓ Putaway complete");
+          setMatchedTaskId(null); setMatchedBinId(""); setPieceCount(0);
+          load();
+        } else {
+          matchedTask.qty_completed = result.newCompleted;
+          setMyAllTasks([...myAllTasks]);
+          showToast(`✓ 1 pc recorded — ${matchedTask.qty - result.newCompleted} remaining — agla piece scan karein`);
+        }
+      }
       return;
     }
 
@@ -1233,17 +1265,34 @@ function PutawayView({ token, profile, showToast }) {
     setPieceCount(0);
     setScanQty(String(candidates[0].qty - (candidates[0].qty_completed || 0)));
     setShortageOpen(false);
-    showToast(`✓ Matched: ${product.barcode} — GRN ${grnNumberFor(candidates[0])} (${isPieceMode ? "Piece-to-Piece mode" : "Bulk mode"})`);
+    showToast(`✓ Matched: ${product.barcode} — GRN ${grnNumberFor(candidates[0])} — ab location scan karein`);
   };
 
-  const scanLocation = (codeArg) => {
+  const scanLocation = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : scanLocationInput).trim();
     setScanLocationInput("");
     if (!code) return;
     const bin = bins.find(b => b.code.toLowerCase() === code.trim().toLowerCase());
     if (!bin) { showToast("Location nahi mili — Bin Master check karein", "err"); return; }
     setMatchedBinId(bin.id);
-    showToast(`📍 Location set: ${bin.code}`);
+
+    if (isPieceMode && matchedTask) {
+      // Piece mode: location scan immediately records the first unit — no separate confirm step
+      const result = await commitPutaway(matchedTask, bin.id, 1);
+      if (result) {
+        if (result.done) {
+          showToast("✓ Putaway complete");
+          setMatchedTaskId(null); setMatchedBinId("");
+          load();
+        } else {
+          matchedTask.qty_completed = result.newCompleted;
+          setMyAllTasks([...myAllTasks]);
+          showToast(`📍 ${bin.code} — ✓ 1 pc recorded — agle piece ke liye sirf product barcode dobara scan karein`);
+        }
+      }
+    } else {
+      showToast(`📍 Location set: ${bin.code} — ab quantity likh kar Enter dabayein`);
+    }
   };
 
   const confirmPutaway = async () => {
@@ -1252,21 +1301,12 @@ function PutawayView({ token, profile, showToast }) {
     const qty = isPieceMode ? pieceCount : Number(scanQty);
     if (!qty || qty <= 0) { showToast(isPieceMode ? "Kam se kam 1 piece scan karein" : "Valid qty enter karein", "err"); return; }
     if (qty > matchedRemaining) { showToast(`EXCESS QTY NOT ALLOWED — max ${matchedRemaining}`, "err"); return; }
-    try {
-      await addOnHand(token, profile.warehouse_id, matchedTask.product_id, matchedBinId, qty);
-      const newCompleted = (matchedTask.qty_completed || 0) + qty;
-      const done = newCompleted >= matchedTask.qty;
-      await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
-        method: "PATCH", token,
-        body: done
-          ? { qty_completed: newCompleted, status: "completed", bin_id: matchedBinId, completed_at: new Date().toISOString() }
-          : { qty_completed: newCompleted, bin_id: matchedBinId }
-      });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: matchedBinId, qty, mode: putawayMode } } });
-      showToast(done ? "✓ Putaway complete" : `✓ ${qty} pcs put away — ${matchedTask.qty - newCompleted} remaining`);
+    const result = await commitPutaway(matchedTask, matchedBinId, qty);
+    if (result) {
+      showToast(result.done ? "✓ Putaway complete" : `✓ ${qty} pcs put away — ${matchedTask.qty - result.newCompleted} remaining`);
       setMatchedTaskId(null); setMatchedBinId(""); setScanQty(""); setPieceCount(0);
       load();
-    } catch (e) { showToast("Putaway failed", "err"); }
+    }
   };
 
   const reportShortage = async () => {
@@ -1336,7 +1376,7 @@ function PutawayView({ token, profile, showToast }) {
           </div>
           <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 6 }}>
             {matchedProduct.image_url ? (
-              <img src={matchedProduct.image_url} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+              <ZoomableImage src={matchedProduct.image_url} alt="" style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
             ) : (
               <div style={{ width: 70, height: 70, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 20, flexShrink: 0 }}>📦</div>
             )}
@@ -1364,21 +1404,22 @@ function PutawayView({ token, profile, showToast }) {
 
           {isPieceMode ? (
             <>
-              <div style={S.label}>3. SCAN EACH PHYSICAL UNIT (barcode dobara scan karein)</div>
+              <div style={S.label}>3. AUTO-RECORDING — HAR UNIT KE LIYE PRODUCT BARCODE SCAN KAREIN</div>
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: pieceCount >= matchedRemaining ? "#4CAF7D" : "#F5A623" }}>{pieceCount} / {matchedRemaining}</div>
-                <div style={{ color: "#8A8272", fontSize: 11 }}>Har unit ke liye upar wale barcode field mein dobara scan karein</div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: matchedRemaining <= 0 ? "#4CAF7D" : "#F5A623" }}>{matchedTask.qty_completed || 0} / {matchedTask.qty}</div>
+                <div style={{ color: "#8A8272", fontSize: 11 }}>{matchedBinId ? "Location set hai — ab sirf upar barcode field mein har piece scan karein, khud record hota jayega" : "Location scan karte hi 1st piece record ho jayega"}</div>
               </div>
             </>
           ) : (
             <>
-              <div style={S.label}>3. QUANTITY</div>
-              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, maxWidth: 140 }} value={scanQty} onChange={e => setScanQty(e.target.value)} />
+              <div style={S.label}>3. QUANTITY (type kar ke Enter dabayein — auto-save)</div>
+              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, maxWidth: 140 }} value={scanQty} onChange={e => setScanQty(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && confirmPutaway()} />
             </>
           )}
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
-            <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>
+            {!isPieceMode && <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>}
             <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Physical item nahi mila (RTV)</button>
             <button style={S.secondaryBtnSm} onClick={() => { setMatchedTaskId(null); setMatchedBinId(""); setShortageOpen(false); }}>Cancel</button>
           </div>
@@ -1388,6 +1429,35 @@ function PutawayView({ token, profile, showToast }) {
               <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={reportShortage}>Report RTV</button>
             </div>
           )}
+        </div>
+      )}
+
+      {canAssign && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Team Put Away Overview — sab officers ki assigned jobs ({teamTasks.length} lines pending)</div>
+          <table>
+            <thead><tr><th style={S.th}>Officer</th><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Reference</th><th style={S.th}>Required</th><th style={S.th}>Put Away</th><th style={S.th}>Remaining</th></tr></thead>
+            <tbody>
+              {teamTasks.map(t => {
+                const p = products[t.product_id];
+                const completed = t.qty_completed || 0;
+                const remaining = t.qty - completed;
+                const officer = staff.find(s => s.id === t.assigned_to);
+                return (
+                  <tr key={t.id}>
+                    <td style={{ ...S.td, color: "#2B2620" }}>{officer?.full_name || "—"}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                    <td style={S.td}>{p?.name || "—"}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{grnNumberFor(t)}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{t.qty}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{completed}</td>
+                    <td style={{ ...S.td, color: remaining > 0 ? "#E5484D" : "#4CAF7D" }}>{remaining}</td>
+                  </tr>
+                );
+              })}
+              {teamTasks.length === 0 && <tr><td colSpan={7}><EmptyNote text="Koi assigned putaway job pending nahi hai." /></td></tr>}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -1650,6 +1720,7 @@ function OrdersView({ token, profile, showToast }) {
   const [openLines, setOpenLines] = useState([]);
   const [openEvents, setOpenEvents] = useState([]);
   const [openShortages, setOpenShortages] = useState([]);
+  const [orderTimingSummary, setOrderTimingSummary] = useState(null);
   const [editTracking, setEditTracking] = useState("");
   const [editCourier, setEditCourier] = useState("");
   const [editQty, setEditQty] = useState({});
@@ -1943,6 +2014,30 @@ function OrdersView({ token, profile, showToast }) {
     history.sort((a, b) => new Date(a.ts) - new Date(b.ts));
     setOpenEvents(history);
 
+    const fmtDur = (ms) => {
+      if (ms == null || ms < 0) return null;
+      const mins = Math.round(ms / 60000);
+      if (mins < 60) return `${mins} min`;
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return `${h}h ${m}m`;
+    };
+    const pt = (pickTasks || [])[0];
+    const pk = (packTasks || [])[0];
+    const ls = (loadSheets || [])[0];
+    setOrderTimingSummary({
+      pickerName: pt?.assigned_to ? (profiles[pt.assigned_to]?.full_name || "—") : null,
+      pickAssignedAt: pt?.assigned_at || null,
+      pickCompletedAt: pt?.completed_at || null,
+      pickDuration: (pt?.assigned_at && pt?.completed_at) ? fmtDur(new Date(pt.completed_at) - new Date(pt.assigned_at)) : null,
+      packerName: pk?.assigned_to ? (profiles[pk.assigned_to]?.full_name || "—") : null,
+      packCompletedAt: pk?.completed_at || null,
+      packDuration: (pt?.completed_at && pk?.completed_at) ? fmtDur(new Date(pk.completed_at) - new Date(pt.completed_at)) : null,
+      dispatcherName: ls?.created_by ? (profiles[ls.created_by]?.full_name || "—") : null,
+      dispatchedAt: order.dispatched_at || null,
+      loadSheetNumber: ls?.load_sheet_number || null,
+      totalDuration: (order.received_at && order.dispatched_at) ? fmtDur(new Date(order.dispatched_at) - new Date(order.received_at)) : null
+    });
+
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProductCache(prev => ({ ...prev, ...newProducts }));
     setEditTracking(order.external_order_id);
@@ -2076,6 +2171,36 @@ function OrdersView({ token, profile, showToast }) {
             </tbody>
           </table>
         </div>
+
+        {orderTimingSummary && (
+          <div style={S.panel}>
+            <div style={S.panelTitle}>Timing summary — kisne kitne time mein kya kiya</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+              <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+                <div style={S.label}>🚶 PICKER</div>
+                <div style={{ color: "#2B2620", fontSize: 14, fontWeight: 600 }}>{orderTimingSummary.pickerName || "Not assigned yet"}</div>
+                {orderTimingSummary.pickDuration && <div style={{ color: "#F5A623", fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderTimingSummary.pickDuration}</div>}
+                {orderTimingSummary.pickCompletedAt && <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Completed: {fmtTime(orderTimingSummary.pickCompletedAt)}</div>}
+              </div>
+              <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+                <div style={S.label}>🏷 PACKER</div>
+                <div style={{ color: "#2B2620", fontSize: 14, fontWeight: 600 }}>{orderTimingSummary.packerName || "Not assigned yet"}</div>
+                {orderTimingSummary.packDuration && <div style={{ color: "#F5A623", fontSize: 18, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderTimingSummary.packDuration}</div>}
+                {orderTimingSummary.packCompletedAt && <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Completed: {fmtTime(orderTimingSummary.packCompletedAt)}</div>}
+              </div>
+              <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+                <div style={S.label}>🚚 DISPATCHER</div>
+                <div style={{ color: "#2B2620", fontSize: 14, fontWeight: 600 }}>{orderTimingSummary.dispatcherName || "Not dispatched yet"}</div>
+                {orderTimingSummary.dispatchedAt && <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 4 }}>{fmtTime(orderTimingSummary.dispatchedAt)}</div>}
+                {orderTimingSummary.loadSheetNumber && <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Load Sheet: {orderTimingSummary.loadSheetNumber}</div>}
+              </div>
+            </div>
+            {orderTimingSummary.totalDuration && (
+              <div style={{ marginTop: 12, color: "#6B6355", fontSize: 12 }}>Total lead time (received → dispatched): <b style={{ color: "#2B2620" }}>{orderTimingSummary.totalDuration}</b></div>
+            )}
+          </div>
+        )}
+
         <div style={S.panel}>
           <div style={S.panelTitle}>Order history — kisne kya kiya, kab</div>
           {openEvents.length === 0 ? <EmptyNote text="Abhi tak koi activity nahi hui." /> : openEvents.map((ev, i) => (
@@ -2346,7 +2471,42 @@ function PickingView({ token, profile, showToast }) {
     const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
     setConsolidated(list);
     setLastScannedProduct(null);
+    setCompletedOrderIds({});
     setOpenTote(tote);
+  };
+
+  const activeGroup = consolidated.find(g => g.scanned < g.required);
+
+  const [completedOrderIds, setCompletedOrderIds] = useState({});
+
+  const buildLineStatus = () => {
+    const lineStatus = {};
+    for (const g of consolidated) {
+      for (const ref of g.refs) {
+        lineStatus[ref.line_id] = { orderId: ref.order_id, allocated: ref.allocated, qty_required: ref.qty_required, resolved: g.required === g.scanned };
+      }
+    }
+    return lineStatus;
+  };
+
+  const finalizeOrderPicking = async (orderId, lineStatus) => {
+    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    const task = toteTasks.find(t => t.order_id === orderId);
+    if (!task || completedOrderIds[orderId]) return;
+    try {
+      const lines = taskLines[task.id] || [];
+      for (const l of lines) {
+        const st = lineStatus[l.id];
+        await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: st ? st.allocated : 0 } });
+      }
+      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: openTote.id } });
+      await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "picking" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "completed" } });
+      setCompletedOrderIds(prev => ({ ...prev, [orderId]: true }));
+      const order = orders[orderId];
+      showToast(`✅ Order ${order?.external_order_id || ""} — picking complete, Packing ke liye chala gaya`);
+    } catch (e) { showToast("Order finalize failed", "err"); }
   };
 
   const scanToteBarcode = (codeArg) => {
@@ -2356,16 +2516,31 @@ function PickingView({ token, profile, showToast }) {
     const c = cleanCode(code);
     const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
     if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
-    const group = consolidated.find(g => g.product_id === p.id && g.scanned < g.required);
-    if (!group) { showToast("Yeh product is tote mein nahi hai ya already complete — WRONG ITEM", "err"); return; }
-    const ref = group.refs.find(r => r.allocated < r.qty_required);
+    if (!activeGroup) { showToast("Is tote ki saari locations complete ho chuki hain", "err"); return; }
+    if (p.id !== activeGroup.product_id) {
+      showToast(`❌ Pehle current location complete karein — Bin ${bins[activeGroup.bin_id]?.code || "?"}`, "err");
+      return;
+    }
+    const ref = activeGroup.refs.find(r => r.allocated < r.qty_required);
     if (!ref) { showToast("Allocation error — dobara try karein", "err"); return; }
     ref.allocated += 1;
-    group.scanned += 1;
+    activeGroup.scanned += 1;
     setConsolidated([...consolidated]);
     setLastScannedProduct(p);
     const order = orders[ref.order_id];
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
+
+    // Check if THIS order's picking is now fully done — if so, send it to Packing right away
+    const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
+    if (task) {
+      const lines = taskLines[task.id] || [];
+      const lineStatus = buildLineStatus();
+      const orderDone = lines.length > 0 && lines.every(l => {
+        const st = lineStatus[l.id];
+        return st && (st.allocated >= st.qty_required || st.resolved);
+      });
+      if (orderDone) finalizeOrderPicking(ref.order_id, lineStatus);
+    }
   };
 
   const allToteScanned = consolidated.length > 0 && consolidated.every(g => g.scanned >= g.required);
@@ -2390,33 +2565,41 @@ function PickingView({ token, profile, showToast }) {
         setConsolidated([...consolidated]);
         showToast(`📍 Product doosri location par mila — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein`);
       } else {
+        const affectedOrders = new Set();
         for (const ref of openRefs) {
           const short = ref.qty_required - ref.allocated;
           if (short > 0) {
             await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: ref.order_id, product_id: group.product_id, qty_required: ref.qty_required, qty_available: ref.allocated, not_available_qty: short } });
             await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: ref.order_id, user_id: profile.id, action: "pick_shortage_reported", metadata: { product_id: group.product_id, short_qty: short } } });
+            affectedOrders.add(ref.order_id);
           }
         }
-        group.required = group.scanned; // let tote completion proceed without this shortfall
+        group.required = group.scanned; // let this location's shortfall resolve without blocking
         setConsolidated([...consolidated]);
         showToast("⚠ Koi aur location nahi mili — shortage record ho gaya, Admin ko Incomplete Orders mein nazar aayega", "err");
+        // shortage-resolved orders may now be "done" (with a shortfall) — check and send to packing
+        const lineStatus = buildLineStatus();
+        for (const orderId of affectedOrders) {
+          const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === orderId);
+          if (!task) continue;
+          const lines = taskLines[task.id] || [];
+          const orderDone = lines.length > 0 && lines.every(l => {
+            const st = lineStatus[l.id];
+            return st && (st.allocated >= st.qty_required || st.resolved);
+          });
+          if (orderDone) finalizeOrderPicking(orderId, lineStatus);
+        }
       }
     } catch (e) { showToast("Report failed", "err"); }
   };
 
   const completeTotePicking = async () => {
     try {
-      for (const g of consolidated) {
-        for (const ref of g.refs) {
-          await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: ref.allocated } });
-        }
-      }
+      const lineStatus = buildLineStatus();
       const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
       for (const t of toteTasks) {
-        await sb(`/rest/v1/pick_tasks?id=eq.${t.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-        await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: t.order_id, status: "pending", tote_id: openTote.id } });
-        await sb(`/rest/v1/sales_orders?id=eq.${t.order_id}`, { method: "PATCH", token, body: { status: "picking" } });
-        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: t.id, user_id: profile.id, action: "completed" } });
+        if (completedOrderIds[t.order_id]) continue; // already finalized as it completed early
+        await finalizeOrderPicking(t.order_id, lineStatus);
       }
       await sb(`/rest/v1/totes?id=eq.${openTote.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
       showToast("Tote fully picked — ready for packer");
@@ -2452,7 +2635,7 @@ function PickingView({ token, profile, showToast }) {
         </div>
 
         <div style={S.panel}>
-          <div style={S.panelTitle}>Scan product at each location (koi bhi sequence mein)</div>
+          <div style={S.panelTitle}>Scan product — system aapko sequence mein guide karega</div>
           <div style={{ display: "flex", gap: 10 }}>
             <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
@@ -2461,18 +2644,42 @@ function PickingView({ token, profile, showToast }) {
             <button style={S.primaryBtnSm} onClick={() => scanToteBarcode()}>Scan</button>
           </div>
         </div>
-        {lastScannedProduct && (
-          <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center" }}>
-            {lastScannedProduct.image_url ? (
-              <img src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
-            ) : (
-              <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
-            )}
-            <div>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>LAST SCANNED — VERIFY PRODUCT</div>
-              <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, marginTop: 4 }}>{lastScannedProduct.name}</div>
-              <div style={{ color: "#F5A623", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>{lastScannedProduct.barcode}</div>
+
+        {activeGroup ? (
+          <div style={{ ...S.panel, borderColor: "#F5A623", borderWidth: 2 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div style={S.panelTitle}>📍 CURRENT STOP</div>
+              <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>Stop {consolidated.filter(g => g.scanned >= g.required).length + 1} / {consolidated.length}</span>
             </div>
+            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 32, fontWeight: 700, color: "#F5A623" }}>{bins[activeGroup.bin_id]?.code || "no bin!"}</div>
+              {products[activeGroup.product_id]?.image_url ? (
+                <ZoomableImage src={products[activeGroup.product_id].image_url} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: 64, height: 64, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 18, flexShrink: 0 }}>📦</div>
+              )}
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 13 }}>{products[activeGroup.product_id]?.barcode}</div>
+                <div style={{ color: "#2B2620", fontSize: 14 }}>{products[activeGroup.product_id]?.name}</div>
+              </div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{activeGroup.scanned} / {activeGroup.required}</div>
+            </div>
+            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D", marginTop: 12 }} onClick={() => reportNotFound(activeGroup)}>❌ Not found here</button>
+          </div>
+        ) : consolidated.length > 0 && (
+          <div style={{ ...S.panel, borderColor: "#4CAF7D" }}>
+            <div style={{ color: "#4CAF7D", fontSize: 15, fontFamily: "'Space Grotesk', sans-serif" }}>✅ Saari locations complete — neeche "Complete tote picking" dabayein</div>
+          </div>
+        )}
+
+        {lastScannedProduct && (
+          <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", padding: 12 }}>
+            {lastScannedProduct.image_url ? (
+              <ZoomableImage src={lastScannedProduct.image_url} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, border: "1px solid #E0D8C5", flexShrink: 0 }} />
+            ) : (
+              <div style={{ width: 44, height: 44, borderRadius: 6, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 14, flexShrink: 0 }}>📦</div>
+            )}
+            <div style={{ color: "#6B6355", fontSize: 11 }}>Last scanned: <span style={{ color: "#2B2620" }}>{lastScannedProduct.barcode} — {lastScannedProduct.name}</span></div>
           </div>
         )}
         {pickViewMode === "order" ? (
@@ -2508,25 +2715,23 @@ function PickingView({ token, profile, showToast }) {
           </div>
         ) : (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Pick list — location-wise (ek bin ek hi baar visit karein)</div>
-          {consolidated.map((g, i) => {
+          <div style={S.panelTitle}>Pending to pick (route order)</div>
+          {consolidated.filter(g => g.scanned < g.required).map((g, i) => {
             const p = products[g.product_id];
             const bin = bins[g.bin_id];
-            const done = g.scanned >= g.required;
+            const isActive = activeGroup === g;
             return (
-              <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid #EFE8D8", opacity: isActive ? 1 : 0.45 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <span style={{ color: "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90 }}>📍 {bin?.code || "no bin!"}</span>
+                  <span style={{ width: 20 }}>{isActive ? "📍" : "🔒"}</span>
+                  <span style={{ color: isActive ? "#F5A623" : "#5B9EE8", fontFamily: "'IBM Plex Mono', monospace", width: 90, fontWeight: isActive ? 700 : 400 }}>{bin?.code || "no bin!"}</span>
                   <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", width: 100 }}>{p?.barcode}</span>
                   <span style={{ flex: 1, color: "#2B2620", fontSize: 13 }}>{p?.name}</span>
-                  <span style={{ ...S.badgeSm, color: done ? "#4CAF7D" : "#6B6355", borderColor: done ? "#4CAF7D" : "#E0D8C5" }}>{g.scanned} / {g.required}</span>
-                  {!done && (
-                    <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D", padding: "4px 8px", fontSize: 11 }} onClick={() => reportNotFound(g)}>❌ Not found here</button>
-                  )}
+                  <span style={{ ...S.badgeSm, color: "#6B6355", borderColor: "#E0D8C5" }}>{g.scanned} / {g.required}</span>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 100 }}>
-                  {g.refs.map((r, j) => (
-                    <span key={j} style={{ fontSize: 10, color: r.allocated >= r.qty_required ? "#4CAF7D" : "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 4, paddingLeft: 118 }}>
+                  {g.refs.filter(r => r.allocated < r.qty_required).map((r, j) => (
+                    <span key={j} style={{ fontSize: 10, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
                       Bin#{r.toteBin || "?"}: {r.allocated}/{r.qty_required}
                     </span>
                   ))}
@@ -2534,7 +2739,7 @@ function PickingView({ token, profile, showToast }) {
               </div>
             );
           })}
-          {consolidated.length === 0 && <EmptyNote text="Is tote mein koi item nahi hai." />}
+          {consolidated.filter(g => g.scanned < g.required).length === 0 && <EmptyNote text="Saari locations complete ho chuki hain — 'Complete tote picking' dabayein." />}
         </div>
         )}
         {allToteScanned && consolidated.length > 0 && (
@@ -2753,7 +2958,7 @@ function PackingView({ token, profile, showToast }) {
         {lastScannedProduct && (
           <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center" }}>
             {lastScannedProduct.image_url ? (
-              <img src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} onError={e => { e.target.style.display = "none"; }} />
+              <ZoomableImage src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
             ) : (
               <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
             )}
@@ -4203,6 +4408,21 @@ function CameraScanModal({ onScan, onClose }) {
         <div style={{ color: "#6B6355", fontSize: 11, marginTop: 10, textAlign: "center" }}>Camera ko barcode ke upar point karein</div>
       </div>
     </div>
+  );
+}
+function ZoomableImage({ src, alt, style }) {
+  const [zoomed, setZoomed] = useState(false);
+  if (!src) return null;
+  return (
+    <>
+      <img src={src} alt={alt || ""} style={{ ...style, cursor: "zoom-in" }} onClick={() => setZoomed(true)} onError={e => { e.target.style.display = "none"; }} />
+      {zoomed && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.88)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }} onClick={() => setZoomed(false)}>
+          <img src={src} alt={alt || ""} style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 10, boxShadow: "0 10px 40px rgba(0,0,0,0.5)" }} />
+          <button style={{ position: "absolute", top: 20, right: 24, background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 40, height: 40, borderRadius: "50%", fontSize: 18, cursor: "pointer" }} onClick={() => setZoomed(false)}>✕</button>
+        </div>
+      )}
+    </>
   );
 }
 function CameraScanButton({ onScan, label }) {
