@@ -2480,6 +2480,8 @@ function PickingView({ token, profile, showToast }) {
   const [barcodeInput, setBarcodeInput] = useState("");
   const [lastScannedProduct, setLastScannedProduct] = useState(null);
   const [pickViewMode, setPickViewMode] = useState("location");
+  const [showDamageInput, setShowDamageInput] = useState(false);
+  const [damageQtyInput, setDamageQtyInput] = useState("");
   const canBatch = ["admin", "supervisor", "warehouse_lead"].includes(profile.role);
 
   const load = useCallback(async () => {
@@ -2621,6 +2623,25 @@ function PickingView({ token, profile, showToast }) {
 
   const allToteScanned = consolidated.length > 0 && consolidated.every(g => g.scanned >= g.required);
 
+  const markDamaged = async (group, qtyRaw) => {
+    const qty = Number(qtyRaw);
+    const remaining = group.required - group.scanned;
+    if (!qty || qty <= 0 || qty > remaining) { showToast(`Valid quantity enter karein (max ${remaining})`, "err"); return; }
+    try {
+      const invRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${group.product_id}&bin_id=eq.${group.bin_id}&select=*`, { token });
+      const invRow = invRows && invRows[0];
+      if (invRow) {
+        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty) } });
+      }
+      const firstOrderId = group.refs[0]?.order_id || null;
+      await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: group.product_id, bin_id: group.bin_id, qty, found_at_stage: "picking", reported_by: profile.id, order_id: firstOrderId } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "inventory", entity_id: group.product_id, user_id: profile.id, action: "damage_marked_picking", metadata: { qty, bin_id: group.bin_id, tote_id: openTote.id } } });
+      showToast(`⚠ ${qty} pcs damaged mark ho gaye — Bin ${bins[group.bin_id]?.code || "?"}`);
+      setShowDamageInput(false); setDamageQtyInput("");
+      await reportNotFound(group);
+    } catch (e) { showToast("Damage marking failed", "err"); }
+  };
+
   const reportNotFound = async (group) => {
     const remaining = group.required - group.scanned;
     if (remaining <= 0) return;
@@ -2740,7 +2761,16 @@ function PickingView({ token, profile, showToast }) {
               </div>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{activeGroup.scanned} / {activeGroup.required}</div>
             </div>
-            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D", marginTop: 12 }} onClick={() => reportNotFound(activeGroup)}>❌ Not found here</button>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportNotFound(activeGroup)}>❌ Not found here</button>
+              <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={() => setShowDamageInput(s => !s)}>⚠ Mark Damaged</button>
+            </div>
+            {showDamageInput && (
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <input type="number" min={1} max={activeGroup.required - activeGroup.scanned} style={{ ...S.input, width: 140 }} placeholder={`Qty (max ${activeGroup.required - activeGroup.scanned})`} value={damageQtyInput} onChange={e => setDamageQtyInput(e.target.value)} />
+                <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={() => markDamaged(activeGroup, damageQtyInput)}>Confirm Damage</button>
+              </div>
+            )}
           </div>
         ) : consolidated.length > 0 && (
           <div style={{ ...S.panel, borderColor: "#4CAF7D" }}>
@@ -2910,17 +2940,23 @@ function PackingView({ token, profile, showToast }) {
   const [orderScanInput, setOrderScanInput] = useState("");
   const [toteScanInput, setToteScanInput] = useState("");
   const [binNumMap, setBinNumMap] = useState({});
+  const [bins, setBins] = useState([]);
+  const [showDamageInput, setShowDamageInput] = useState(false);
+  const [damageQty, setDamageQty] = useState("");
+  const [damageBinId, setDamageBinId] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [t, o, tt] = await Promise.all([
+      const [t, o, tt, b] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token })
+        sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
       setTotes(tt || []);
+      setBins(b || []);
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
@@ -2974,6 +3010,30 @@ function PackingView({ token, profile, showToast }) {
       setBinNumMap(Object.fromEntries((pickTasks || []).map(pt => [pt.order_id, pt.tote_bin_number])));
       setOpenTote({ ...row, locked_by: profile.id });
     } catch (e) { showToast("Tote open nahi ho saki", "err"); }
+  };
+
+  const markPackDamaged = async () => {
+    if (!lastScannedProduct) { showToast("Pehle product scan karein jise damaged mark karna hai", "err"); return; }
+    const qty = Number(damageQty);
+    if (!qty || qty <= 0) { showToast("Valid quantity enter karein", "err"); return; }
+    if (!damageBinId) { showToast("Damage bin location select karein", "err"); return; }
+    const line = requiredLines.find(l => l.product_id === lastScannedProduct.id);
+    if (!line) { showToast("Yeh product is order mein nahi hai", "err"); return; }
+    try {
+      const invRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${lastScannedProduct.id}&select=*&order=on_hand.desc&limit=1`, { token });
+      const invRow = invRows && invRows[0];
+      if (invRow) {
+        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty) } });
+      }
+      await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: lastScannedProduct.id, bin_id: damageBinId, qty, found_at_stage: "packing", reported_by: profile.id, order_id: openTask.order_id } });
+      await adjustReserved(token, profile.warehouse_id, lastScannedProduct.id, -qty);
+      await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: openTask.order_id, product_id: lastScannedProduct.id, qty_required: line.qty, qty_available: Math.max(0, line.qty - qty), not_available_qty: qty } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openTask.order_id, user_id: profile.id, action: "damage_marked_packing", metadata: { product_id: lastScannedProduct.id, qty, bin_id: damageBinId } } });
+      const newRequired = Math.max(scans[lastScannedProduct.id] || 0, line.qty - qty);
+      setRequiredLines(prev => prev.map(l => l.product_id === lastScannedProduct.id ? { ...l, qty: newRequired } : l));
+      showToast(`⚠ ${qty} pcs damaged mark ho gaye — order ki required qty adjust ho gayi`);
+      setShowDamageInput(false); setDamageQty(""); setDamageBinId("");
+    } catch (e) { showToast("Damage marking failed", "err"); }
   };
 
   const scanBarcode = async (codeArg) => {
@@ -3043,17 +3103,30 @@ function PackingView({ token, profile, showToast }) {
           </div>
         </div>
         {lastScannedProduct && (
-          <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center" }}>
-            {lastScannedProduct.image_url ? (
-              <ZoomableImage src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
-            ) : (
-              <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
-            )}
-            <div>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>LAST SCANNED — VERIFY PRODUCT</div>
-              <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, marginTop: 4 }}>{lastScannedProduct.name}</div>
-              <div style={{ color: "#F5A623", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>{lastScannedProduct.barcode}</div>
+          <div style={S.panel}>
+            <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+              {lastScannedProduct.image_url ? (
+                <ZoomableImage src={lastScannedProduct.image_url} alt="" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
+              ) : (
+                <div style={{ width: 90, height: 90, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 24, flexShrink: 0 }}>📦</div>
+              )}
+              <div>
+                <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>LAST SCANNED — VERIFY PRODUCT</div>
+                <div style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, marginTop: 4 }}>{lastScannedProduct.name}</div>
+                <div style={{ color: "#F5A623", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", marginTop: 2 }}>{lastScannedProduct.barcode}</div>
+              </div>
             </div>
+            <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5", marginTop: 10 }} onClick={() => setShowDamageInput(s => !s)}>⚠ Mark Damaged</button>
+            {showDamageInput && (
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <input type="number" min={1} style={{ ...S.input, width: 100 }} placeholder="Qty" value={damageQty} onChange={e => setDamageQty(e.target.value)} />
+                <select style={{ ...S.input, minWidth: 150 }} value={damageBinId} onChange={e => setDamageBinId(e.target.value)}>
+                  <option value="">Damage bin location</option>
+                  {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+                </select>
+                <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={markPackDamaged}>Confirm Damage</button>
+              </div>
+            )}
           </div>
         )}
         <div style={S.panel}>
@@ -3867,438 +3940,167 @@ function categorizeEvent(ev) {
 const CATEGORIES = ["GRN", "Put Away", "Pick", "Pack", "Dispatch", "Returns"];
 
 function ReportsView({ token, profile, showToast }) {
-  const [loading, setLoading] = useState(true);
-  const [staffCounts, setStaffCounts] = useState([]);
-  const [leadTime, setLeadTime] = useState({ avgHours: null, samples: 0 });
-  const [profiles, setProfiles] = useState({});
-  const [pickDurations, setPickDurations] = useState([]);
-  const [rawEvents, setRawEvents] = useState([]);
-  const [teamComparison, setTeamComparison] = useState([]);
-  const [hourlyData, setHourlyData] = useState([]);
-  const [perfDate, setPerfDate] = useState(new Date().toISOString().slice(0, 10));
-  const [staffHours, setStaffHours] = useState([]);
-  const [pickTasksRaw, setPickTasksRaw] = useState([]);
-  const [packTasksRaw, setPackTasksRaw] = useState([]);
-  const [pickLinesRaw, setPickLinesRaw] = useState([]);
-  const [execSummary, setExecSummary] = useState(null);
+  const [reportType, setReportType] = useState("inventory_ledger");
+  const [dateFrom, setDateFrom] = useState(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
+  const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const [events, profs, orders, pickTasks] = await Promise.all([
-          sb(`/rest/v1/event_log?select=*&order=created_at.desc&limit=2000`, { token }),
-          sb(`/rest/v1/profiles?select=*`, { token }),
-          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.dispatched&select=*`, { token }),
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token })
-        ]);
-        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
-        setProfiles(profMap);
-        setRawEvents(events || []);
+  const REPORT_OPTIONS = [
+    { key: "inventory_bin_ledger", label: "Inventory Bin Ledger", dateScoped: false },
+    { key: "inventory_ledger", label: "Inventory Ledger", dateScoped: false },
+    { key: "order_dump", label: "Order Dump Report", dateScoped: true },
+    { key: "grn_report", label: "GRN Report", dateScoped: true },
+    { key: "user_productivity", label: "User-wise Productivity Report", dateScoped: true }
+  ];
+  const currentOption = REPORT_OPTIONS.find(o => o.key === reportType);
 
-        const pickDurByUser = {};
-        for (const pt of pickTasks || []) {
-          if (!pt.assigned_at || !pt.completed_at || !pt.assigned_to) continue;
-          const mins = (new Date(pt.completed_at) - new Date(pt.assigned_at)) / 60000;
-          if (!pickDurByUser[pt.assigned_to]) pickDurByUser[pt.assigned_to] = [];
-          pickDurByUser[pt.assigned_to].push(mins);
-        }
-        const pickAvg = Object.entries(pickDurByUser).map(([userId, arr]) => ({
-          userId, name: profMap[userId]?.full_name || "Unknown",
-          avgMins: arr.reduce((a, b) => a + b, 0) / arr.length, count: arr.length
-        })).sort((a, b) => a.avgMins - b.avgMins);
-        setPickDurations(pickAvg);
+  const rangeISO = () => ({
+    fromISO: new Date(dateFrom + "T00:00:00").toISOString(),
+    toISO: new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000).toISOString()
+  });
 
-        const counts = {};
-        const catCounts = {};
-        for (const ev of events || []) {
-          if (!ev.user_id) continue;
-          if (!counts[ev.user_id]) counts[ev.user_id] = {};
-          counts[ev.user_id][ev.action] = (counts[ev.user_id][ev.action] || 0) + 1;
-          const cat = categorizeEvent(ev);
-          if (!catCounts[ev.user_id]) catCounts[ev.user_id] = Object.fromEntries(CATEGORIES.map(c => [c, 0]));
-          if (catCounts[ev.user_id][cat] !== undefined) catCounts[ev.user_id][cat] += 1;
-        }
-        const rows = Object.entries(counts).map(([userId, actions]) => ({
-          userId, name: profMap[userId]?.full_name || "Unknown", role: profMap[userId]?.role,
-          total: Object.values(actions).reduce((a, b) => a + b, 0), actions
-        })).sort((a, b) => b.total - a.total);
-        setStaffCounts(rows);
+  const runInventoryBinLedger = async () => {
+    const [inv, bins, products] = await Promise.all([
+      sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&on_hand=gt.0&select=*`, { token }),
+      sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+      sb(`/rest/v1/products?select=*`, { token })
+    ]);
+    const binMap = Object.fromEntries((bins || []).map(b => [b.id, b]));
+    const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+    const rows = (inv || []).map(r => [
+      binMap[r.bin_id]?.code || "Unassigned", prodMap[r.product_id]?.barcode || "—", prodMap[r.product_id]?.name || "—", r.on_hand
+    ]);
+    exportCSV("inventory-bin-ledger.csv", ["Bin Code", "Barcode", "Product Name", "On Hand Qty"], rows);
+  };
 
-        const teamRows = Object.entries(catCounts).map(([userId, cats]) => ({
-          userId, name: profMap[userId]?.full_name || "Unknown", role: profMap[userId]?.role, cats,
-          total: Object.values(cats).reduce((a, b) => a + b, 0)
-        })).sort((a, b) => b.total - a.total);
-        setTeamComparison(teamRows);
+  const runInventoryLedger = async () => {
+    const [inv, reserved, products] = await Promise.all([
+      sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+      sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+      sb(`/rest/v1/products?select=*`, { token })
+    ]);
+    const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+    const reservedMap = Object.fromEntries((reserved || []).map(r => [r.product_id, r.reserved]));
+    const onHandByProduct = {};
+    for (const r of inv || []) onHandByProduct[r.product_id] = (onHandByProduct[r.product_id] || 0) + r.on_hand;
+    const rows = Object.entries(onHandByProduct).map(([productId, onHand]) => {
+      const res = reservedMap[productId] || 0;
+      return [prodMap[productId]?.barcode || "—", prodMap[productId]?.name || "—", onHand, res, onHand - res];
+    });
+    exportCSV("inventory-ledger.csv", ["Barcode", "Product Name", "On Hand Total", "Reserved", "Available"], rows);
+  };
 
-        const today = new Date().toDateString();
-        const hourBuckets = Array.from({ length: 24 }, (_, h) => ({ hour: h, ...Object.fromEntries(CATEGORIES.map(c => [c, 0])) }));
-        for (const ev of events || []) {
-          const d = new Date(ev.created_at);
-          if (d.toDateString() !== today) continue;
-          const cat = categorizeEvent(ev);
-          if (hourBuckets[d.getHours()][cat] !== undefined) hourBuckets[d.getHours()][cat] += 1;
-        }
-        setHourlyData(hourBuckets.filter(h => CATEGORIES.some(c => h[c] > 0)));
+  const runOrderDump = async () => {
+    const { fromISO, toISO } = rangeISO();
+    const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
+    if (!orders || orders.length === 0) { showToast("Is date range mein koi order nahi mila", "err"); return; }
+    const orderIds = orders.map(o => o.id);
+    const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${orderIds.join(",")})&select=*`, { token });
+    const productIds = [...new Set((lines || []).map(l => l.product_id))];
+    const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+    const linesByOrder = {};
+    for (const l of lines || []) { (linesByOrder[l.order_id] = linesByOrder[l.order_id] || []).push(l); }
+    const rows = [];
+    for (const o of orders) {
+      const ols = linesByOrder[o.id] || [];
+      if (ols.length === 0) { rows.push([o.external_order_id, o.raw_data?.customer_order_number || o.raw_data?.customer || "—", o.courier, o.status, fmtTime(o.received_at), o.dispatched_at ? fmtTime(o.dispatched_at) : "—", "—", "—", "—"]); continue; }
+      for (const l of ols) {
+        rows.push([o.external_order_id, o.raw_data?.customer_order_number || o.raw_data?.customer || "—", o.courier, o.status, fmtTime(o.received_at), o.dispatched_at ? fmtTime(o.dispatched_at) : "—", prodMap[l.product_id]?.barcode || "—", prodMap[l.product_id]?.name || "—", l.qty]);
+      }
+    }
+    exportCSV("order-dump-report.csv", ["Tracking", "Customer/Order No", "Courier", "Status", "Received Date", "Dispatched Date", "Barcode", "Product Name", "Qty"], rows);
+  };
 
-        const durations = (orders || [])
-          .filter(o => o.received_at && o.dispatched_at)
-          .map(o => (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000);
-        const avgHours = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
-        setLeadTime({ avgHours, samples: durations.length });
+  const runGrnReport = async () => {
+    const { fromISO, toISO } = rangeISO();
+    const grns = await sb(`/rest/v1/grn?created_at=gte.${fromISO}&created_at=lt.${toISO}&select=*`, { token });
+    if (!grns || grns.length === 0) { showToast("Is date range mein koi GRN nahi mila", "err"); return; }
+    const grnIds = grns.map(g => g.id);
+    const lines = await sb(`/rest/v1/grn_lines?grn_id=in.(${grnIds.join(",")})&select=*`, { token });
+    const productIds = [...new Set((lines || []).map(l => l.product_id))];
+    const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+    const grnMap = Object.fromEntries(grns.map(g => [g.id, g]));
+    const rows = (lines || []).map(l => {
+      const g = grnMap[l.grn_id];
+      return [g?.grn_number || "—", g?.po_number || "—", g?.source || "—", g?.status || "—", prodMap[l.product_id]?.barcode || "—", prodMap[l.product_id]?.name || "—", l.qty_expected, l.qty_received || 0, g ? fmtTime(g.created_at) : "—"];
+    });
+    exportCSV("grn-report.csv", ["GRN Number", "PO Number", "Source", "Status", "Barcode", "Product Name", "Qty Expected", "Qty Received", "Created Date"], rows);
+  };
 
-        // ---- Staff Hours & PCS/hour (management productivity report) ----
-        const [pickTasksAll, packTasksAll, putawayAll, allOrders] = await Promise.all([
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
-          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token }),
-          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
-        ]);
-        const pickTaskIds = (pickTasksAll || []).map(t => t.id);
-        const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
-        setPickTasksRaw(pickTasksAll || []); setPackTasksRaw(packTasksAll || []); setPickLinesRaw(pickLines || []);
-        const pickQtyByUser = {};
-        for (const t of pickTasksAll || []) {
-          if (!t.assigned_to) continue;
-          const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-          pickQtyByUser[t.assigned_to] = (pickQtyByUser[t.assigned_to] || 0) + qty;
-        }
-        const packQtyByUser = {};
-        for (const t of packTasksAll || []) {
-          if (!t.assigned_to) continue;
-          let qty = 0;
-          try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-          packQtyByUser[t.assigned_to] = (packQtyByUser[t.assigned_to] || 0) + qty;
-        }
-        const putawayQtyByUser = {};
-        for (const t of putawayAll || []) {
-          if (!t.assigned_to) continue;
-          putawayQtyByUser[t.assigned_to] = (putawayQtyByUser[t.assigned_to] || 0) + (t.qty_completed || 0);
-        }
-        const byUserDate = {};
-        for (const ev of events || []) {
-          if (!ev.user_id) continue;
-          const key = `${ev.user_id}|${new Date(ev.created_at).toDateString()}`;
-          if (!byUserDate[key]) byUserDate[key] = [];
-          byUserDate[key].push(new Date(ev.created_at));
-        }
-        const hoursByUser = {};
-        for (const key in byUserDate) {
-          const userId = key.split("|")[0];
-          const times = byUserDate[key].sort((a, b) => a - b);
-          const spanHrs = (times[times.length - 1] - times[0]) / 3600000;
-          hoursByUser[userId] = (hoursByUser[userId] || 0) + spanHrs;
-        }
-        const hoursReport = Object.keys(profMap).map(userId => {
-          const hrs = hoursByUser[userId] || 0;
-          const totalPcs = (pickQtyByUser[userId] || 0) + (packQtyByUser[userId] || 0) + (putawayQtyByUser[userId] || 0);
-          return {
-            userId, name: profMap[userId].full_name, role: profMap[userId].role,
-            hours: hrs, pcsPicked: pickQtyByUser[userId] || 0, pcsPacked: packQtyByUser[userId] || 0,
-            pcsPutAway: putawayQtyByUser[userId] || 0, totalPcs, pcsPerHour: hrs > 0.05 ? Math.round(totalPcs / hrs) : 0
-          };
-        }).filter(r => r.hours > 0 || r.totalPcs > 0).sort((a, b) => b.totalPcs - a.totalPcs);
-        setStaffHours(hoursReport);
+  const runUserProductivity = async () => {
+    const { fromISO, toISO } = rangeISO();
+    const [profs, pickTasksAll, packTasksAll, putawayAll] = await Promise.all([
+      sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+      sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+      sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+      sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token })
+    ]);
+    const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+    const pickTaskIds = (pickTasksAll || []).map(t => t.id);
+    const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+    const agg = {};
+    const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0 }; return agg[uid]; };
+    for (const t of pickTasksAll || []) {
+      if (!t.assigned_to) continue;
+      const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+      const hrs = (t.assigned_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
+      const u = ensure(t.assigned_to); u.pcsPicked += qty; u.hrs += hrs;
+    }
+    for (const t of packTasksAll || []) {
+      if (!t.assigned_to) continue;
+      let qty = 0;
+      try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+      ensure(t.assigned_to).pcsPacked += qty;
+    }
+    for (const t of putawayAll || []) {
+      if (!t.assigned_to) continue;
+      ensure(t.assigned_to).pcsPutAway += (t.qty_completed || 0);
+    }
+    const rows = Object.entries(agg).map(([userId, d]) => {
+      const total = d.pcsPicked + d.pcsPacked + d.pcsPutAway;
+      return [profMap[userId]?.full_name || "Unknown", profMap[userId]?.role || "—", d.pcsPicked, d.pcsPacked, d.pcsPutAway, total, d.hrs.toFixed(1), d.hrs > 0.05 ? Math.round(total / d.hrs) : 0];
+    });
+    if (rows.length === 0) { showToast("Is date range mein koi completed activity nahi mili", "err"); return; }
+    exportCSV("user-productivity-report.csv", ["Staff", "Role", "PCS Picked", "PCS Packed", "PCS Put Away", "Total PCS", "Hours Worked", "PCS/Hour"], rows);
+  };
 
-        // ---- Executive / Customer Fulfillment summary ----
-        const todayStr = new Date().toDateString();
-        const yestStr = new Date(Date.now() - 86400000).toDateString();
-        const dispatchedOrders = (allOrders || []).filter(o => o.status === "dispatched" || o.status === "handed_over");
-        const shippedToday = dispatchedOrders.filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === todayStr).length;
-        const shippedYesterday = dispatchedOrders.filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === yestStr).length;
-        const receivedToday = (allOrders || []).filter(o => o.received_at && new Date(o.received_at).toDateString() === todayStr).length;
-        const receivedYesterday = (allOrders || []).filter(o => o.received_at && new Date(o.received_at).toDateString() === yestStr).length;
-        const pendingCount = (allOrders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned"].includes(o.status)).length;
-        const sameDayCount = dispatchedOrders.filter(o => o.received_at && o.dispatched_at && new Date(o.received_at).toDateString() === new Date(o.dispatched_at).toDateString()).length;
-        const onTimeRate = dispatchedOrders.length ? Math.round((sameDayCount / dispatchedOrders.length) * 100) : null;
-        const incompleteCount = (allOrders || []).filter(o => o.status === "incomplete").length;
-        const totalOrders = (allOrders || []).length;
-        const fulfillmentRate = totalOrders ? Math.round(((totalOrders - incompleteCount) / totalOrders) * 100) : null;
-
-        const shortageOrderIds = new Set((await sb(`/rest/v1/order_shortage_lines?select=order_id`, { token }) || []).map(s => s.order_id));
-        const dispatchedWithoutShortage = dispatchedOrders.filter(o => !shortageOrderIds.has(o.id)).length;
-        const orderAccuracy = dispatchedOrders.length ? Math.round((dispatchedWithoutShortage / dispatchedOrders.length) * 100) : null;
-
-        const allGrnLines = await sb(`/rest/v1/grn_lines?select=qty_expected`, { token });
-        const allRpo = await sb(`/rest/v1/rtv_returns?select=short_qty`, { token });
-        const totalGrnQty = (allGrnLines || []).reduce((s, l) => s + (l.qty_expected || 0), 0);
-        const totalRpoQty = (allRpo || []).reduce((s, r) => s + (r.short_qty || 0), 0);
-        const inboundAccuracy = totalGrnQty ? Math.round(((totalGrnQty - totalRpoQty) / totalGrnQty) * 100) : null;
-
-        setExecSummary({
-          shippedToday, shippedYesterday, receivedToday, receivedYesterday, pendingCount,
-          totalOrders, dispatchedTotal: dispatchedOrders.length,
-          onTimeRate, incompleteCount, fulfillmentRate, avgCycleHours: avgHours,
-          orderAccuracy, inboundAccuracy
-        });
-      } catch (e) { showToast("Load failed", "err"); }
-      setLoading(false);
-    })();
-  }, [token, profile.warehouse_id]);
-
-  const maxTotal = Math.max(1, ...staffCounts.map(r => r.total));
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      if (reportType === "inventory_bin_ledger") await runInventoryBinLedger();
+      else if (reportType === "inventory_ledger") await runInventoryLedger();
+      else if (reportType === "order_dump") await runOrderDump();
+      else if (reportType === "grn_report") await runGrnReport();
+      else if (reportType === "user_productivity") await runUserProductivity();
+    } catch (e) { showToast(`Export failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+    setExporting(false);
+  };
 
   return (
     <div>
       <SectionTitle title="Reports" />
-
-      {execSummary && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Executive Summary — Customer Fulfillment</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F5A623" }}>{execSummary.shippedToday}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Dispatched Today <span style={{ color: "#8A8272" }}>(Yesterday: {execSummary.shippedYesterday})</span></div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.receivedToday}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Received Today <span style={{ color: "#8A8272" }}>(Yesterday: {execSummary.receivedYesterday})</span></div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#B084F5" }}>{execSummary.pendingCount}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Pending (in progress)</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{execSummary.incompleteCount}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Incomplete / Short Orders</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.avgCycleHours != null ? execSummary.avgCycleHours.toFixed(1) + "h" : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Order Cycle Time (Received → Dispatched){execSummary.avgCycleHours != null && execSummary.avgCycleHours > 24 && <span style={{ color: "#E5484D" }}> ⚠ &gt;24h</span>}</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.fulfillmentRate != null ? `${execSummary.fulfillmentRate}%` : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Fulfillment Rate</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.orderAccuracy != null ? `${execSummary.orderAccuracy}%` : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Order Accuracy (no shortage)</div>
-            </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.inboundAccuracy != null ? `${execSummary.inboundAccuracy}%` : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Inbound/GRN Accuracy (vs RPO)</div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={S.panelTitle}>Staff Hours &amp; Productivity — hours worked, pcs handled, pcs/hour</div>
-          {staffHours.length > 0 && (
-            <button style={S.secondaryBtnSm} onClick={() => exportCSV("staff-hours-productivity.csv", ["Staff", "Role", "Hours Worked", "PCS Picked", "PCS Packed", "PCS Put Away", "Total PCS", "PCS/Hour"], staffHours.map(r => [r.name, r.role, r.hours.toFixed(1), r.pcsPicked, r.pcsPacked, r.pcsPutAway, r.totalPcs, r.pcsPerHour]))}>⬇ Export CSV</button>
+        <div style={S.panelTitle}>Generate Report</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <select style={{ ...S.input, minWidth: 240 }} value={reportType} onChange={e => setReportType(e.target.value)}>
+            {REPORT_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+          {currentOption?.dateScoped && (
+            <>
+              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+              <span style={{ color: "#8A8272" }}>to</span>
+              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            </>
           )}
+          <button style={S.primaryBtnSm} onClick={handleExport} disabled={exporting}>{exporting ? "Generating…" : "⬇ Export CSV"}</button>
         </div>
-        {staffHours.length === 0 ? <EmptyNote text="Abhi tak koi completed activity nahi hui." /> : (
-          <table>
-            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th><th style={S.th}>Hours Worked</th><th style={S.th}>PCS Picked</th><th style={S.th}>PCS Packed</th><th style={S.th}>PCS Put Away</th><th style={S.th}>Total PCS</th><th style={S.th}>PCS/Hour</th></tr></thead>
-            <tbody>
-              {staffHours.map(r => (
-                <tr key={r.userId}>
-                  <td style={S.td}>{r.name}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
-                  <td style={{ ...S.td, color: "#2B2620" }}>{r.hours.toFixed(1)}h</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPicked}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPacked}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPutAway}</td>
-                  <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{r.totalPcs}</td>
-                  <td style={{ ...S.td, color: "#F5A623", fontWeight: 700 }}>{r.pcsPerHour}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ "Hours worked" ek estimate hai (din ki pehli aur aakhri WMS activity ke darmiyan ka waqt) — exact clock-in/out system se nahi liya gaya.</div>
-      </div>
-
-      <div style={S.statGrid} className="depotos-statgrid">
-        <div style={S.statCard}>
-          <span style={{ fontSize: 16 }}>⏱</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>
-            {leadTime.avgHours !== null ? leadTime.avgHours.toFixed(1) + "h" : "—"}
-          </div>
-          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Avg warehouse lead-time (receive → dispatch)</div>
+        <div style={{ color: "#8A8272", fontSize: 11, marginTop: 10 }}>
+          {reportType === "inventory_bin_ledger" && "Bin-wise on-hand stock — current snapshot."}
+          {reportType === "inventory_ledger" && "Product-wise aggregate stock (on hand, reserved, available) — current snapshot."}
+          {reportType === "order_dump" && "Full line-item level order export for the selected date range (based on Received Date)."}
+          {reportType === "grn_report" && "GRN + line-item detail for the selected date range (based on GRN Created Date)."}
+          {reportType === "user_productivity" && "Staff-wise PCS handled (Picked/Packed/Put Away), hours worked, and PCS/Hour for the selected date range."}
         </div>
-        <div style={S.statCard}>
-          <span style={{ fontSize: 16 }}>📦</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>{leadTime.samples}</div>
-          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Dispatched orders measured</div>
-        </div>
-        <div style={S.statCard}>
-          <span style={{ fontSize: 16 }}>👥</span>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 10 }}>{staffCounts.length}</div>
-          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Active staff (logged actions)</div>
-        </div>
-      </div>
-
-      <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={S.panelTitle}>Team comparison — process-wise breakdown</div>
-          {teamComparison.length > 0 && (
-            <button style={S.secondaryBtnSm} onClick={() => exportCSV("team-comparison.csv", ["Staff", "Role", ...CATEGORIES, "Total"], teamComparison.map(r => [r.name, r.role, ...CATEGORIES.map(c => r.cats[c]), r.total]))}>⬇ Export CSV</button>
-          )}
-        </div>
-        {teamComparison.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
-          <table>
-            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th>{CATEGORIES.map(c => <th key={c} style={S.th}>{c}</th>)}<th style={S.th}>Total</th></tr></thead>
-            <tbody>
-              {teamComparison.map(r => (
-                <tr key={r.userId}>
-                  <td style={S.td}>{r.name}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
-                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: r.cats[c] > 0 ? "#2B2620" : "#8A8272" }}>{r.cats[c]}</td>)}
-                  <td style={{ ...S.td, color: "#F5A623", fontWeight: 600 }}>{r.total}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Hourly productivity — today</div>
-        {hourlyData.length === 0 ? <EmptyNote text="Aaj tak koi activity nahi hui." /> : (
-          <table>
-            <thead><tr><th style={S.th}>Hour</th>{CATEGORIES.map(c => <th key={c} style={S.th}>{c}</th>)}</tr></thead>
-            <tbody>
-              {hourlyData.map(h => (
-                <tr key={h.hour}>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#5B9EE8" }}>{String(h.hour).padStart(2, "0")}:00</td>
-                  {CATEGORIES.map(c => <td key={c} style={{ ...S.td, color: h[c] > 0 ? "#2B2620" : "#8A8272" }}>{h[c] || 0}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-          <div style={S.panelTitle}>Daily Performance — Picker &amp; Packer individual (date-wise)</div>
-          <input type="date" style={{ ...S.input, maxWidth: 170 }} value={perfDate} onChange={e => setPerfDate(e.target.value)} />
-        </div>
-        {(() => {
-          const dayStr = new Date(perfDate).toDateString();
-          const rows = [];
-          const pickByUser = {};
-          for (const t of pickTasksRaw) {
-            if (!t.assigned_to || !t.completed_at || new Date(t.completed_at).toDateString() !== dayStr) continue;
-            const qty = pickLinesRaw.filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-            const hrs = t.assigned_at ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
-            if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
-            pickByUser[t.assigned_to].orders += 1; pickByUser[t.assigned_to].pcs += qty; pickByUser[t.assigned_to].hrs += hrs;
-          }
-          for (const [userId, d] of Object.entries(pickByUser)) {
-            rows.push({ userId, name: profiles[userId]?.full_name || "Unknown", role: "Picker", orders: d.orders, pcs: d.pcs, hrs: d.hrs, pcsPerHour: d.hrs > 0.05 ? Math.round(d.pcs / d.hrs) : 0 });
-          }
-          const packByUser = {};
-          for (const t of packTasksRaw) {
-            if (!t.assigned_to || !t.completed_at || new Date(t.completed_at).toDateString() !== dayStr) continue;
-            let qty = 0;
-            try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-            if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0, times: [] };
-            packByUser[t.assigned_to].orders += 1; packByUser[t.assigned_to].pcs += qty;
-            packByUser[t.assigned_to].times.push(new Date(t.completed_at));
-          }
-          for (const ev of rawEvents) {
-            if (!ev.user_id || categorizeEvent(ev) !== "Pack" || new Date(ev.created_at).toDateString() !== dayStr) continue;
-            if (packByUser[ev.user_id]) packByUser[ev.user_id].times.push(new Date(ev.created_at));
-          }
-          for (const [userId, d] of Object.entries(packByUser)) {
-            const times = d.times.sort((a, b) => a - b);
-            const hrs = times.length > 1 ? (times[times.length - 1] - times[0]) / 3600000 : 0;
-            rows.push({ userId, name: profiles[userId]?.full_name || "Unknown", role: "Packer", orders: d.orders, pcs: d.pcs, hrs, pcsPerHour: hrs > 0.05 ? Math.round(d.pcs / hrs) : 0 });
-          }
-          rows.sort((a, b) => b.pcs - a.pcs);
-          const topPcs = rows.length ? rows[0].pcs : 0;
-          return rows.length === 0 ? <EmptyNote text="Is date ki koi completed activity nahi mili." /> : (
-            <table>
-              <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th><th style={S.th}>Orders/Jobs</th><th style={S.th}>PCS Handled</th><th style={S.th}>Active Time</th><th style={S.th}>PCS/Hour</th></tr></thead>
-              <tbody>
-                {rows.map((r, i) => (
-                  <tr key={i}>
-                    <td style={S.td}>{r.name} {r.pcs === topPcs && topPcs > 0 && <span title="Top performer">🏆</span>}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{r.orders}</td>
-                    <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{r.pcs}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{r.hrs.toFixed(1)}h</td>
-                    <td style={{ ...S.td, color: "#F5A623", fontWeight: 700 }}>{r.pcsPerHour}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          );
-        })()}
-        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Packer/Put Away "Active Time" ek estimate hai (us din ki pehli aur aakhri related activity ke darmiyan) — Picker ka time exact task-duration se hai.</div>
-      </div>
-
-      <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={S.panelTitle}>Avg picking time per staff (assign → complete)</div>
-          {pickDurations.length > 0 && (
-            <button style={S.secondaryBtnSm} onClick={() => exportCSV("picking-time-report.csv", ["Staff", "Orders Picked", "Avg Time (min)"], pickDurations.map(r => [r.name, r.count, r.avgMins.toFixed(1)]))}>⬇ Export CSV</button>
-          )}
-        </div>
-        {pickDurations.length === 0 ? <EmptyNote text="Abhi koi completed pick task nahi hai time-tracking ke liye." /> : (
-          <table>
-            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Orders picked</th><th style={S.th}>Avg time</th></tr></thead>
-            <tbody>
-              {pickDurations.map(r => (
-                <tr key={r.userId}>
-                  <td style={S.td}>{r.name}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.count}</td>
-                  <td style={{ ...S.td, color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace" }}>{r.avgMins.toFixed(1)} min</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={S.panelTitle}>Staff productivity (actions logged)</div>
-          {staffCounts.length > 0 && (
-            <button style={S.secondaryBtnSm} onClick={() => exportCSV("staff-productivity-report.csv", ["Staff", "Role", "Total Actions"], staffCounts.map(r => [r.name, r.role, r.total]))}>⬇ Export CSV</button>
-          )}
-        </div>
-        {loading ? <EmptyNote text="Loading…" /> : staffCounts.length === 0 ? <EmptyNote text="No activity logged yet." /> : (
-          <div>
-            {staffCounts.map(r => (
-              <div key={r.userId} style={{ padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ color: "#2B2620", fontSize: 13 }}>{r.name} <span style={{ color: "#8A8272", fontSize: 11 }}>({r.role})</span></span>
-                  <span style={{ color: "#F5A623", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{r.total} actions</span>
-                </div>
-                <div style={{ background: "#F4EFE6", borderRadius: 4, height: 6, overflow: "hidden" }}>
-                  <div style={{ width: `${(r.total / maxTotal) * 100}%`, background: "#F5A623", height: "100%" }} />
-                </div>
-                <div style={{ marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {Object.entries(r.actions).map(([action, count]) => (
-                    <span key={action} style={{ fontSize: 10, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{action}: {count}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div style={S.panel}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={S.panelTitle}>Full activity log (audit export)</div>
-          {rawEvents.length > 0 && (
-            <button style={S.secondaryBtnSm} onClick={() => exportCSV("activity-log.csv",
-              ["Date/Time", "Staff", "Role", "Action", "Entity Type", "Entity ID"],
-              rawEvents.map(ev => [fmtTime(ev.created_at), profiles[ev.user_id]?.full_name || "System", profiles[ev.user_id]?.role || "—", ev.action, ev.entity_type, ev.entity_id])
-            )}>⬇ Export CSV ({rawEvents.length} events)</button>
-          )}
-        </div>
-        <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Last {rawEvents.length} events (GRN, Putaway, Orders, Picking, Packing, Dispatch, Returns) — user, action, timestamp ke sath.</div>
-      </div>
-
-      <div style={{ fontSize: 11, color: "#8A8272" }}>
-        ⚠ Last-mile lead-time (dispatch ke baad courier ke paas) abhi track nahi ho sakta — yeh sirf M&P/Postex ke apne system mein hota hai. Unka API integrate hone ke baad yeh add hoga.
       </div>
     </div>
   );
