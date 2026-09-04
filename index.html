@@ -121,7 +121,7 @@ function App() {
       <div style={S.main}>
         <TopBar profile={profile} onMenuClick={() => setSidebarOpen(true)} />
         <div style={S.content} className="depotos-content">
-          {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} />}
+          {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} showToast={showToast} />}
           {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
@@ -249,65 +249,82 @@ function Toast({ toast }) {
 }
 
 /* ================= DASHBOARD ================= */
-function DashboardView({ token, profile, setView }) {
-  const [stats, setStats] = useState({ openGrns: 0, pendingPutaway: 0, products: 0 });
-  const [orderStats, setOrderStats] = useState(null);
-  const [kpi, setKpi] = useState({ dispatchedUnitsToday: 0, avgLeadTimeToday: null, avgLeadTimeYesterday: null });
-  const [throughput, setThroughput] = useState([]);
+function DashboardView({ token, profile, setView, showToast }) {
+  const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0 });
+  const [fulfillmentKpis, setFulfillmentKpis] = useState({ totalOrders: 0, dispatched: 0, pending: 0, avgBucketSize: 0, avgFulfillmentHrs: null });
+  const [kpi24, setKpi24] = useState({ onTime: 0, delayed: 0, rate: null });
+  const [holidays, setHolidays] = useState([]);
+  const [newHolidayDate, setNewHolidayDate] = useState("");
+  const [newHolidayName, setNewHolidayName] = useState("");
+  const [showHolidayManager, setShowHolidayManager] = useState(false);
+  const [teamProductivity, setTeamProductivity] = useState([]);
   const [productivity, setProductivity] = useState([]);
-  const [activeShipments, setActiveShipments] = useState([]);
   const [refreshTick, setRefreshTick] = useState(0);
-  const chartRef = useRef(null);
-  const chartInstance = useRef(null);
+  const [dateFrom, setDateFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
+  const [snapshot, setSnapshot] = useState(null);
+  const isAdmin = profile.role === "admin";
+
+  const isHoliday = (date, holidayDates) => holidayDates.has(date.toDateString());
+
+  const effectiveDaysBetween = (start, end, holidayDates) => {
+    let days = Math.floor((new Date(end.toDateString()) - new Date(start.toDateString())) / 86400000);
+    const cursor = new Date(start);
+    for (let i = 0; i < days; i++) {
+      cursor.setDate(cursor.getDate() + 1);
+      if (isHoliday(cursor, holidayDates)) days--;
+    }
+    return days;
+  };
 
   useEffect(() => {
     const loadDashboard = async () => {
       try {
-        const [grns, putaway, products, orders] = await Promise.all([
-          sb(`/rest/v1/grn?status=neq.completed&select=id`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.pending&select=id`, { token }),
-          sb(`/rest/v1/products?select=id`, { token }),
-          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=status`, { token })
+        const [grns, putawayPending, orders, holidayRows] = await Promise.all([
+          sb(`/rest/v1/grn?select=status`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.pending&select=qty,qty_completed`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/holidays?select=*&order=holiday_date.asc`, { token })
         ]);
-        setStats({ openGrns: grns?.length || 0, pendingPutaway: putaway?.length || 0, products: products?.length || 0 });
-        const STAGES = ["received", "queued", "picking", "packed", "dispatched"];
-        const counts = Object.fromEntries(STAGES.map(s => [s, (orders || []).filter(o => o.status === s).length]));
-        setOrderStats({ total: (orders || []).length, counts });
+        setHolidays(holidayRows || []);
+        const holidayDates = new Set((holidayRows || []).map(h => new Date(h.holiday_date).toDateString()));
 
-        // ---- KPIs: dispatched units today + lead time today vs yesterday ----
-        const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6); sevenDaysAgo.setHours(0, 0, 0, 0);
-        const dispatchedRecent = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.dispatched&dispatched_at=gte.${sevenDaysAgo.toISOString()}&select=*`, { token });
-        const todayStr = new Date().toDateString();
-        const yestStr = new Date(Date.now() - 86400000).toDateString();
-        const todayOrders = (dispatchedRecent || []).filter(o => new Date(o.dispatched_at).toDateString() === todayStr);
-        const yestOrders = (dispatchedRecent || []).filter(o => new Date(o.dispatched_at).toDateString() === yestStr);
+        const grnPending = (grns || []).filter(g => g.status !== "completed").length;
+        const grnComplete = (grns || []).filter(g => g.status === "completed").length;
+        const pcsPendingPutaway = (putawayPending || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0);
+        const ordersCompleted = (orders || []).filter(o => ["dispatched", "handed_over"].includes(o.status)).length;
+        const ordersPending = (orders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned", "incomplete"].includes(o.status)).length;
+        setOverall({ grnPending, grnComplete, pcsPendingPutaway, ordersCompleted, ordersPending });
 
-        let unitsToday = 0;
-        if (todayOrders.length) {
-          const ids = todayOrders.map(o => o.id);
-          const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
-          unitsToday = (lines || []).reduce((s, l) => s + l.qty, 0);
+        const dispatchedWithDates = (orders || []).filter(o => o.received_at && o.dispatched_at);
+        let onTime = 0, delayed = 0;
+        for (const o of dispatchedWithDates) {
+          const effDays = effectiveDaysBetween(new Date(o.received_at), new Date(o.dispatched_at), holidayDates);
+          if (effDays <= 1) onTime++; else delayed++;
         }
-        const leadHrs = (arr) => {
-          const vals = arr.filter(o => o.received_at && o.dispatched_at).map(o => (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000);
-          return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-        };
-        setKpi({ dispatchedUnitsToday: unitsToday, avgLeadTimeToday: leadHrs(todayOrders), avgLeadTimeYesterday: leadHrs(yestOrders) });
+        const total24 = onTime + delayed;
+        setKpi24({ onTime, delayed, rate: total24 ? Math.round((onTime / total24) * 100) : null });
 
-        // ---- 7-day throughput (dispatched order count per day) ----
-        const days = [];
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date(); d.setDate(d.getDate() - i);
-          days.push({ label: d.toLocaleDateString(undefined, { weekday: "short" }), dateStr: d.toDateString() });
+        // ---- Order Fulfillment KPIs (all-time): Total Orders, Avg Bucket Size, Avg Fulfillment Lead Time ----
+        const avgFulfillmentHrs = dispatchedWithDates.length
+          ? dispatchedWithDates.reduce((s, o) => s + (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000, 0) / dispatchedWithDates.length
+          : null;
+        const allOrderIds = (orders || []).map(o => o.id);
+        let avgBucketAllTime = 0;
+        if (allOrderIds.length) {
+          const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${allOrderIds.join(",")})&select=order_id,qty`, { token });
+          const totalQtyAll = (allLines || []).reduce((s, l) => s + l.qty, 0);
+          avgBucketAllTime = Math.round((totalQtyAll / allOrderIds.length) * 10) / 10;
         }
-        const byDay = Object.fromEntries(days.map(d => [d.dateStr, 0]));
-        for (const o of dispatchedRecent || []) {
-          const ds = new Date(o.dispatched_at).toDateString();
-          if (byDay[ds] !== undefined) byDay[ds]++;
-        }
-        setThroughput(days.map(d => ({ label: d.label, value: byDay[d.dateStr] })));
+        setFulfillmentKpis({
+          totalOrders: (orders || []).length,
+          dispatched: ordersCompleted,
+          pending: ordersPending,
+          avgBucketSize: avgBucketAllTime,
+          avgFulfillmentHrs
+        });
 
-        // ---- User productivity today (actions/hr) ----
+        // ---- User productivity today (actions/hr) — unchanged ----
         const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
         const [events, profs] = await Promise.all([
           sb(`/rest/v1/event_log?created_at=gte.${todayStart.toISOString()}&select=*`, { token }),
@@ -327,22 +344,36 @@ function DashboardView({ token, profile, setView }) {
         }).sort((a, b) => b.actions - a.actions).slice(0, 8);
         setProductivity(prod);
 
-        // ---- Active shipments (picking / ready / needs amendment) ----
-        const active = (orders || []).filter(o => ["picking", "packed", "rtd", "incomplete", "queued"].includes(o.status));
-        const activeFull = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(picking,packed,rtd,incomplete,queued)&select=*&order=received_at.desc&limit=6`, { token });
-        const shipRows = [];
-        for (const o of activeFull || []) {
-          let subtitle = "";
-          if (o.status === "incomplete") {
-            const short = await sb(`/rest/v1/order_shortage_lines?order_id=eq.${o.id}&select=*&limit=1`, { token });
-            const prod = short && short[0] ? (await fetchProductsByIds(token, [short[0].product_id]))[short[0].product_id] : null;
-            subtitle = `Shortage: ${prod?.barcode || prod?.name || "—"}`;
-          } else if (o.status === "picking") subtitle = "Picking in progress";
-          else if (o.status === "queued") subtitle = "Queued for picking";
-          else subtitle = "Ready for dispatch";
-          shipRows.push({ ...o, subtitle });
+        // ---- Team Productivity — best performer (total pcs, total time, pcs/hr) ----
+        const [pickTasksAll, packTasksAll, putawayDone] = await Promise.all([
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token })
+        ]);
+        const pickTaskIds = (pickTasksAll || []).map(t => t.id);
+        const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+        const byUserAgg = {};
+        const ensure = (uid) => { if (!byUserAgg[uid]) byUserAgg[uid] = { pcs: 0, hrs: 0, role: profMap[uid]?.role || "—", name: profMap[uid]?.full_name || "Unknown" }; return byUserAgg[uid]; };
+        for (const t of pickTasksAll || []) {
+          if (!t.assigned_to) continue;
+          const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+          const hrs = (t.assigned_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
+          const u = ensure(t.assigned_to); u.pcs += qty; u.hrs += hrs;
         }
-        setActiveShipments(shipRows);
+        for (const t of packTasksAll || []) {
+          if (!t.assigned_to) continue;
+          let qty = 0;
+          try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+          const u = ensure(t.assigned_to); u.pcs += qty;
+        }
+        for (const t of putawayDone || []) {
+          if (!t.assigned_to) continue;
+          const u = ensure(t.assigned_to); u.pcs += (t.qty_completed || 0);
+        }
+        const teamRows = Object.entries(byUserAgg)
+          .map(([userId, d]) => ({ userId, name: d.name, role: d.role, pcs: d.pcs, hrs: d.hrs, pcsPerHour: d.hrs > 0.05 ? Math.round(d.pcs / d.hrs) : 0 }))
+          .filter(r => r.pcs > 0).sort((a, b) => b.pcs - a.pcs).slice(0, 10);
+        setTeamProductivity(teamRows);
       } catch (e) {}
     };
     loadDashboard();
@@ -351,53 +382,56 @@ function DashboardView({ token, profile, setView }) {
   }, [token, profile.warehouse_id, refreshTick]);
 
   useEffect(() => {
-    if (!chartRef.current || throughput.length === 0 || typeof Chart === "undefined") return;
-    if (chartInstance.current) chartInstance.current.destroy();
-    chartInstance.current = new Chart(chartRef.current.getContext("2d"), {
-      type: "line",
-      data: {
-        labels: throughput.map(t => t.label),
-        datasets: [{
-          data: throughput.map(t => t.value),
-          borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.15)",
-          fill: true, tension: 0.35, pointBackgroundColor: "#F5A623", pointRadius: 4
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } },
-          y: { ticks: { color: "#6B6355", precision: 0 }, grid: { color: "#EFE8D8" }, beginAtZero: true }
+    (async () => {
+      try {
+        const fromISO = new Date(dateFrom + "T00:00:00").toISOString();
+        const toISO = new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000).toISOString();
+        const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
+        if (!orders || orders.length === 0) { setSnapshot({ count: 0, avgBucket: 0, avgSaleValue: 0, avgLead: null }); return; }
+        const orderIds = orders.map(o => o.id);
+        const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${orderIds.join(",")})&select=*`, { token });
+        const productIds = [...new Set((lines || []).map(l => l.product_id))];
+        const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+        let totalQty = 0, totalValue = 0;
+        for (const l of lines || []) {
+          totalQty += l.qty;
+          totalValue += (prodMap[l.product_id]?.sales_price || 0) * l.qty;
         }
-      }
-    });
-    return () => { if (chartInstance.current) chartInstance.current.destroy(); };
-  }, [throughput]);
+        const dispatchedInRange = orders.filter(o => o.received_at && o.dispatched_at);
+        const avgLead = dispatchedInRange.length
+          ? dispatchedInRange.reduce((s, o) => s + (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000, 0) / dispatchedInRange.length
+          : null;
+        setSnapshot({
+          count: orders.length,
+          avgBucket: Math.round((totalQty / orders.length) * 10) / 10,
+          avgSaleValue: Math.round(totalValue / orders.length),
+          avgLead
+        });
+      } catch (e) {}
+    })();
+  }, [token, profile.warehouse_id, dateFrom, dateTo, refreshTick]);
 
-  const STAGE_META = [
-    { key: "received", label: "New", color: "#6B6355", icon: "🧾" },
-    { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
-    { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
-    { key: "rtd", label: "RTD (Packed)", color: "#B084F5", icon: "📦" },
-    { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
-    { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
-  ];
-  const leadDelta = (kpi.avgLeadTimeToday != null && kpi.avgLeadTimeYesterday) ? ((kpi.avgLeadTimeToday - kpi.avgLeadTimeYesterday) / kpi.avgLeadTimeYesterday * 100) : null;
-  const AVATAR_COLORS = ["#F5A623", "#5B9EE8", "#4CAF7D", "#B084F5", "#E5484D", "#F5A623"];
-
-  const initials = profile.full_name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
-  const SHIP_META = {
-    incomplete: { bar: "#E5484D", label: "AMEND", labelColor: "#E5484D" },
-    picking: { bar: "#F5A623", label: "PICKING", labelColor: "#F5A623" },
-    queued: { bar: "#5B9EE8", label: "QUEUED", labelColor: "#5B9EE8" },
-    packed: { bar: "#1D4D3E", label: "READY", labelColor: "#4CAF7D" },
-    rtd: { bar: "#1D4D3E", label: "READY", labelColor: "#4CAF7D" }
+  const addHoliday = async () => {
+    if (!newHolidayDate) return;
+    try {
+      await sb(`/rest/v1/holidays`, { method: "POST", token, body: { holiday_date: newHolidayDate, name: newHolidayName.trim() || null } });
+      setNewHolidayDate(""); setNewHolidayName("");
+      showToast("Holiday added"); setRefreshTick(t => t + 1);
+    } catch (e) { showToast("Holiday already exists ya save fail hua", "err"); }
   };
+  const removeHoliday = async (h) => {
+    try {
+      await sb(`/rest/v1/holidays?id=eq.${h.id}`, { method: "DELETE", token });
+      showToast("Holiday removed"); setRefreshTick(t => t + 1);
+    } catch (e) { showToast("Remove failed", "err"); }
+  };
+
+  const AVATAR_COLORS = ["#F5A623", "#5B9EE8", "#4CAF7D", "#B084F5", "#E5484D", "#F5A623"];
+  const initials = profile.full_name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
 
   return (
     <div>
-      <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL WAREHOUSING</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
@@ -407,86 +441,150 @@ function DashboardView({ token, profile, setView }) {
           <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 14 }}>{initials}</div>
         </div>
       </div>
-      <div style={{ color: "#8A8272", fontSize: 10, marginTop: -12, marginBottom: 16 }}>Auto-refreshes every 30s</div>
+      <div style={{ color: "#8A8272", fontSize: 10, marginBottom: 16 }}>Auto-refreshes every 30s</div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
-        <div style={{ background: "#D9A441", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("receiving")}>
-          <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING GRN</div>
-          <div style={{ color: "#1A1206", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{stats.openGrns}</div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Order Fulfillment KPIs</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
+          <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL ORDERS</div>
+            <div style={{ color: "#2B2620", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.totalOrders}</div>
+          </div>
+          <div style={{ background: "#4CAF7D", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCHED</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.dispatched}</div>
+          </div>
+          <div style={{ background: "#5B9EE8", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.pending}</div>
+          </div>
+          <div style={{ background: "#D9A441", borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG ORDER BUCKET SIZE</div>
+            <div style={{ color: "#1A1206", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.avgBucketSize} <span style={{ fontSize: 12, fontWeight: 400 }}>units/order</span></div>
+          </div>
+          <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG FULFILLMENT LEAD TIME (24H KPI)</div>
+            <div style={{ color: fulfillmentKpis.avgFulfillmentHrs != null && fulfillmentKpis.avgFulfillmentHrs > 24 ? "#F5A6A6" : "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>
+              {fulfillmentKpis.avgFulfillmentHrs != null ? `${fulfillmentKpis.avgFulfillmentHrs.toFixed(1)}h` : "—"}
+            </div>
+          </div>
         </div>
-        <div style={{ background: "#A6472F", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("putaway")}>
-          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PUT AWAY</div>
-          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{stats.pendingPutaway}</div>
-        </div>
-        <div style={{ background: "#1D4D3E", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("picking")}>
-          <div style={{ color: "#8FCBB4", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PICKING</div>
-          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.picking || 0}</div>
-        </div>
-        <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("dispatch")}>
-          <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCH</div>
-          <div style={{ color: "#FFFFFF", fontSize: 30, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{orderStats?.counts?.dispatched || 0}</div>
-        </div>
+        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 10 }}>Target: received order dispatch within 24 hours, warna "Delayed" count hoga (Pakistan holidays exclude).</div>
       </div>
 
       <div style={S.panel}>
-        <div style={{ ...S.panelTitle, textAlign: "center" }}>Quick Workflows</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-          {[
-            { icon: "📷", label: "Scan Inbound", view: "receiving" },
-            { icon: "🧰", label: "Inventory", view: "inventory" },
-            { icon: "🛒", label: "Picking Jobs", view: "picking" },
-            { icon: "🚚", label: "Load Sheets", view: "dispatch" }
-          ].map(w => (
-            <button key={w.view} onClick={() => setView(w.view)} style={{ background: "#FFFFFF", border: "1px solid #E0D8C5", borderRadius: 8, padding: "16px 12px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-              <span style={{ fontSize: 18 }}>{w.icon}</span>
-              <span style={{ color: "#2B2620", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, textAlign: "left" }}>{w.label}</span>
-            </button>
-          ))}
+        <div style={S.panelTitle}>Overall Snapshot — GRN to Dispatch</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
+          <div style={{ background: "#D9A441", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("receiving")}>
+            <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>GRN PENDING</div>
+            <div style={{ color: "#1A1206", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.grnPending}</div>
+          </div>
+          <div style={{ background: "#1D4D3E", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("receiving")}>
+            <div style={{ color: "#8FCBB4", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>GRN COMPLETE</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.grnComplete}</div>
+          </div>
+          <div style={{ background: "#A6472F", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("putaway")}>
+            <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PCS PENDING PUTAWAY</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.pcsPendingPutaway}</div>
+          </div>
+          <div style={{ background: "#5B9EE8", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "#0D2A47", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ORDERS PENDING</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.ordersPending}</div>
+          </div>
+          <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ORDERS COMPLETED</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.ordersCompleted}</div>
+          </div>
         </div>
       </div>
 
       <div style={S.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={S.panelTitle}>Active Shipments</div>
-          <span style={{ color: "#F5A623", fontSize: 12, cursor: "pointer" }} onClick={() => setView("orders")}>VIEW ALL</span>
+          <div style={S.panelTitle}>24hr Dispatch KPI — Received → Dispatch (Pakistan holidays excluded)</div>
+          {isAdmin && <button style={S.secondaryBtnSm} onClick={() => setShowHolidayManager(s => !s)}>📅 Manage Holidays</button>}
         </div>
-        {activeShipments.length === 0 ? <EmptyNote text="Koi active shipment nahi hai." /> : activeShipments.map(o => {
-          const meta = SHIP_META[o.status] || { bar: "#6B6355", label: o.status.toUpperCase(), labelColor: "#6B6355" };
-          return (
-            <div key={o.id} onClick={() => setView("orders")} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: "1px solid #EFE8D8", cursor: "pointer" }}>
-              <div style={{ width: 4, height: 34, borderRadius: 2, background: meta.bar, flexShrink: 0 }} />
-              <div style={{ flex: 1 }}>
-                <div style={{ color: "#2B2620", fontSize: 13, fontWeight: 600, fontFamily: "'Space Grotesk', sans-serif" }}>Order #{o.external_order_id} · {o.courier}</div>
-                <div style={{ color: o.status === "incomplete" ? "#E5484D" : "#6B6355", fontSize: 11, marginTop: 2 }}>{o.subtitle}</div>
-              </div>
-              <span style={{ color: meta.labelColor, fontSize: 11, fontWeight: 700, letterSpacing: 0.5 }}>{meta.label}</span>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
+          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{kpi24.onTime}</div>
+            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>On-Time (within 24h)</div>
+          </div>
+          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{kpi24.delayed}</div>
+            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Delayed</div>
+          </div>
+          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F5A623" }}>{kpi24.rate != null ? `${kpi24.rate}%` : "—"}</div>
+            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>24hr On-Time Rate</div>
+          </div>
+        </div>
+        {showHolidayManager && isAdmin && (
+          <div style={{ marginTop: 16, borderTop: "1px solid #E0D8C5", paddingTop: 14 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+              <input type="date" style={{ ...S.input, maxWidth: 160 }} value={newHolidayDate} onChange={e => setNewHolidayDate(e.target.value)} />
+              <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Holiday name (e.g. Eid-ul-Fitr)" value={newHolidayName} onChange={e => setNewHolidayName(e.target.value)} />
+              <button style={S.primaryBtnSm} onClick={addHoliday}>+ Add</button>
             </div>
-          );
-        })}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 16 }}>
-        <div style={{ background: "#F5A623", borderRadius: 12, padding: "20px 22px" }}>
-          <div style={{ color: "#5A3D0A", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>TOTAL DISPATCH</div>
-          <div style={{ color: "#1A1206", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>{kpi.dispatchedUnitsToday.toLocaleString()}</div>
-          <div style={{ color: "#5A3D0A", fontSize: 11, marginTop: 4 }}>Units Today</div>
-        </div>
-        <div style={{ background: "#1D4D3E", borderRadius: 12, padding: "20px 22px" }}>
-          <div style={{ color: "#8FCBB4", fontSize: 11, letterSpacing: 1, fontWeight: 600 }}>AVG LEAD TIME</div>
-          <div style={{ color: "#2B2620", fontSize: 34, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 6 }}>
-            {kpi.avgLeadTimeToday != null ? `${kpi.avgLeadTimeToday.toFixed(1)}h` : "—"}
+            {holidays.map(h => (
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8", fontSize: 12 }}>
+                <span style={{ color: "#2B2620" }}>{h.name || "Holiday"} <span style={{ color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>— {h.holiday_date}</span></span>
+                <span style={{ color: "#E5484D", cursor: "pointer" }} onClick={() => removeHoliday(h)}>✕ Remove</span>
+              </div>
+            ))}
+            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Eid ki dates chand dekhne pe depend karti hain — har saal manually add karni hongi.</div>
           </div>
-          <div style={{ color: leadDelta == null ? "#8FCBB4" : leadDelta <= 0 ? "#8FCBB4" : "#F5A6A6", fontSize: 11, marginTop: 4 }}>
-            {leadDelta == null ? "No comparison yet" : `${leadDelta <= 0 ? "▼" : "▲"} ${Math.abs(leadDelta).toFixed(0)}% vs yesterday`}
-          </div>
-        </div>
+        )}
       </div>
 
       <div style={S.panel}>
-        <div style={S.panelTitle}>Daily Throughput — dispatched orders (last 7 days)</div>
-        <div style={{ height: 220, position: "relative" }}>
-          <canvas ref={chartRef}></canvas>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+          <div style={S.panelTitle}>Today's Snapshot (filterable)</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            <span style={{ color: "#8A8272" }}>to</span>
+            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+          </div>
         </div>
+        {snapshot ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#2B2620" }}>{snapshot.count}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Orders Received</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#5B9EE8" }}>{snapshot.avgBucket}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Bucket Size (units/order)</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{snapshot.avgSaleValue.toLocaleString()}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Sale Value/Order</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#F5A623" }}>{snapshot.avgLead != null ? snapshot.avgLead.toFixed(1) + "h" : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Average Lead Time</div>
+            </div>
+          </div>
+        ) : <EmptyNote text="Loading…" />}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Team Productivity — best performer (total pcs, hours, pcs/hr)</div>
+        {teamProductivity.length === 0 ? <EmptyNote text="Abhi tak koi completed activity nahi hui." /> : (
+          <table>
+            <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Role</th><th style={S.th}>Total PCS</th><th style={S.th}>Hours</th><th style={S.th}>PCS/Hour</th></tr></thead>
+            <tbody>
+              {teamProductivity.map((r, i) => (
+                <tr key={r.userId}>
+                  <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
+                  <td style={S.td}>{r.name}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{ROLE_LABEL_GLOBAL[r.role] || r.role}</td>
+                  <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{r.pcs}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.hrs.toFixed(1)}h</td>
+                  <td style={{ ...S.td, color: "#F5A623", fontWeight: 700 }}>{r.pcsPerHour}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       <div style={S.panel}>
@@ -506,35 +604,6 @@ function DashboardView({ token, profile, setView }) {
             </div>
           </div>
         ))}
-      </div>
-
-      <div style={S.statGrid} className="depotos-statgrid">
-        <StatCard icon="⬇" label="Open GRNs" value={stats.openGrns} color="#F5A623" onClick={() => setView("receiving")} />
-        <StatCard icon="📍" label="Pending putaway" value={stats.pendingPutaway} color="#5B9EE8" onClick={() => setView("putaway")} />
-        <StatCard icon="📦" label="Products catalogued" value={stats.products} color="#4CAF7D" onClick={() => setView("products")} />
-      </div>
-      {orderStats && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Order fulfillment snapshot ({orderStats.total} total)</div>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGE_META.length}, 1fr)`, gap: 10 }}>
-            {STAGE_META.map(s => (
-              <div key={s.key} onClick={() => setView("orders")} style={{ ...S.statCard, cursor: "pointer" }}>
-                <span style={{ fontSize: 15 }}>{s.icon}</span>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: s.color, marginTop: 8 }}>{orderStats.counts[s.key] || 0}</div>
-                <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Standard flow (locked)</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <FlowStep label="1. Receiving" /> <span style={{color:"#8A8272"}}>→</span>
-          <FlowStep label="2. Putaway (bin-wise)" /> <span style={{color:"#8A8272"}}>→</span>
-          <FlowStep label="3. Available for orders" />
-        </div>
-        <div style={{ marginTop: 12, fontSize: 12, color: "#6B6355" }}>⚡ Exception: urgent stock can skip putaway → direct to packing-ready.</div>
       </div>
     </div>
   );
@@ -3145,17 +3214,24 @@ function DispatchView({ token, profile, showToast }) {
     return `${prefix}${String(maxSerial + 1).padStart(5, "0")}`;
   };
 
+  const [creatingLoadSheet, setCreatingLoadSheet] = useState(false);
+
   const createLoadSheet = async () => {
+    if (creatingLoadSheet) return; // guard against double-click/double-submit
     const ids = Object.keys(selected).filter(k => selected[k]);
     if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
+    setCreatingLoadSheet(true);
     try {
       const byCourier = {};
       for (const id of ids) {
         const o = orders.find(x => x.id === id);
+        // defensive re-check: skip if this order was already dispatched (e.g. stale selection)
+        if (!o || ["dispatched", "handed_over"].includes(o.status)) continue;
         const c = o?.courier || "Other";
         if (!byCourier[c]) byCourier[c] = [];
         byCourier[c].push(id);
       }
+      if (Object.keys(byCourier).length === 0) { showToast("Selected orders already dispatch ho chuke hain", "err"); setCreatingLoadSheet(false); return; }
       const generated = [];
       for (const [courierName, orderIds] of Object.entries(byCourier)) {
         const lsNumber = await nextLoadSheetNumber(courierName);
@@ -3174,6 +3250,7 @@ function DispatchView({ token, profile, showToast }) {
       showToast(`Load sheet(s) created: ${generated.join(" · ")}`);
       setSelected({}); load();
     } catch (e) { showToast("Load sheet creation failed", "err"); }
+    setCreatingLoadSheet(false);
   };
 
   return (
@@ -3209,7 +3286,7 @@ function DispatchView({ token, profile, showToast }) {
           </div>
         )}
         <div style={{ display: "flex", gap: 10, marginTop: 14, alignItems: "center" }}>
-          <button style={S.primaryBtnSm} onClick={createLoadSheet}>🚚 Create load sheet(s) — auto courier-wise</button>
+          <button style={S.primaryBtnSm} onClick={createLoadSheet} disabled={creatingLoadSheet}>{creatingLoadSheet ? "Creating…" : "🚚 Create load sheet(s) — auto courier-wise"}</button>
           <span style={{ color: "#8A8272", fontSize: 11 }}>Verified orders alag-alag courier ke hon to system khud alag load sheets bana dega</span>
         </div>
       </div>
