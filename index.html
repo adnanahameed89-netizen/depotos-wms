@@ -135,6 +135,7 @@ function App() {
           {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={profile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -187,12 +188,12 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "packing", label: "Packing", icon: "🏷" },
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
-  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, returns: { label: "Returns", icon: "↩" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -4405,6 +4406,114 @@ function ToteMasterView({ token, profile, showToast }) {
           </div>
         ))}
         {totes.length === 0 && <EmptyNote text="Koi tote nahi hai — upar se add karein." />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= DAMAGE MANAGEMENT (Admin / Warehouse Lead) ================= */
+function DamageView({ token, profile, showToast }) {
+  const [rows, setRows] = useState([]);
+  const [products, setProducts] = useState({});
+  const [bins, setBins] = useState({});
+  const [staff, setStaff] = useState({});
+  const [orders, setOrders] = useState({});
+  const [tab, setTab] = useState("pending");
+  const [selected, setSelected] = useState({});
+  const [busy, setBusy] = useState(false);
+  const canProcess = ["admin", "warehouse_lead"].includes(profile.role);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&order=reported_at.desc`, { token });
+      setRows(d || []);
+      const [prods, binList, profs] = await Promise.all([
+        fetchProductsByIds(token, [...new Set((d || []).map(r => r.product_id))]),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/profiles?select=*`, { token })
+      ]);
+      setProducts(prods);
+      setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
+      setStaff(Object.fromEntries((profs || []).map(p => [p.id, p])));
+      const orderIds = [...new Set((d || []).map(r => r.order_id).filter(Boolean))];
+      if (orderIds.length) {
+        const os = await sb(`/rest/v1/sales_orders?id=in.(${orderIds.join(",")})&select=*`, { token });
+        setOrders(Object.fromEntries((os || []).map(o => [o.id, o])));
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const pending = rows.filter(r => !r.processed);
+  const processed = rows.filter(r => r.processed);
+  const visible = tab === "pending" ? pending : processed;
+
+  const generateStr = async () => {
+    const ids = Object.keys(selected).filter(k => selected[k]);
+    if (ids.length === 0) { showToast("Kam se kam ek row select karein", "err"); return; }
+    setBusy(true);
+    try {
+      const strNumber = `STR-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
+      for (const id of ids) {
+        await sb(`/rest/v1/damage_inventory?id=eq.${id}`, { method: "PATCH", token, body: { str_number: strNumber, processed: true, processed_by: profile.id, processed_at: new Date().toISOString() } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "damage_inventory", entity_id: ids[0], user_id: profile.id, action: "str_generated", metadata: { str_number: strNumber, count: ids.length } } });
+      showToast(`${strNumber} generated for ${ids.length} item(s)`);
+      setSelected({}); load();
+    } catch (e) { showToast("STR generation failed", "err"); }
+    setBusy(false);
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Damage Inventory" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button onClick={() => setTab("pending")} style={{ ...S.pill, ...(tab === "pending" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Pending STR ({pending.length})</button>
+        <button onClick={() => setTab("processed")} style={{ ...S.pill, ...(tab === "processed" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Processed ({processed.length})</button>
+      </div>
+
+      {tab === "pending" && canProcess && pending.length > 0 && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Selected ({Object.values(selected).filter(Boolean).length}) — generate STR</div>
+          <button style={S.primaryBtnSm} onClick={generateStr} disabled={busy}>{busy ? "Generating…" : "📋 Generate STR for selected"}</button>
+        </div>
+      )}
+
+      <div style={S.panel}>
+        <table>
+          <thead>
+            <tr>
+              {tab === "pending" && canProcess && <th style={S.th}></th>}
+              <th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>Qty</th>
+              <th style={S.th}>Stage</th><th style={S.th}>Reported By</th><th style={S.th}>Reported At</th>
+              <th style={S.th}>Order Ref</th>{tab === "processed" && <th style={S.th}>STR #</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map(r => {
+              const p = products[r.product_id];
+              const bin = bins[r.bin_id];
+              const order = r.order_id ? orders[r.order_id] : null;
+              return (
+                <tr key={r.id}>
+                  {tab === "pending" && canProcess && (
+                    <td style={S.td}><input type="checkbox" checked={!!selected[r.id]} onChange={e => setSelected({ ...selected, [r.id]: e.target.checked })} /></td>
+                  )}
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                  <td style={S.td}>{p?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "—"}</td>
+                  <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.qty}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: "#B084F5", borderColor: "#B084F5" }}>{r.found_at_stage || "returns"}</span></td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{staff[r.reported_by]?.full_name || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.reported_at)}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{order?.external_order_id || "—"}</td>
+                  {tab === "processed" && <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#4CAF7D" }}>{r.str_number}</td>}
+                </tr>
+              );
+            })}
+            {visible.length === 0 && <tr><td colSpan={9}><EmptyNote text="Koi record nahi hai." /></td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
