@@ -256,11 +256,12 @@ function DashboardView({ token, profile, setView }) {
   const [throughput, setThroughput] = useState([]);
   const [productivity, setProductivity] = useState([]);
   const [activeShipments, setActiveShipments] = useState([]);
+  const [refreshTick, setRefreshTick] = useState(0);
   const chartRef = useRef(null);
   const chartInstance = useRef(null);
 
   useEffect(() => {
-    (async () => {
+    const loadDashboard = async () => {
       try {
         const [grns, putaway, products, orders] = await Promise.all([
           sb(`/rest/v1/grn?status=neq.completed&select=id`, { token }),
@@ -343,8 +344,11 @@ function DashboardView({ token, profile, setView }) {
         }
         setActiveShipments(shipRows);
       } catch (e) {}
-    })();
-  }, [token, profile.warehouse_id]);
+    };
+    loadDashboard();
+    const interval = setInterval(loadDashboard, 30000);
+    return () => clearInterval(interval);
+  }, [token, profile.warehouse_id, refreshTick]);
 
   useEffect(() => {
     if (!chartRef.current || throughput.length === 0 || typeof Chart === "undefined") return;
@@ -375,8 +379,7 @@ function DashboardView({ token, profile, setView }) {
     { key: "received", label: "New", color: "#6B6355", icon: "🧾" },
     { key: "queued", label: "Queued", color: "#5B9EE8", icon: "🛒" },
     { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
-    { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
-    { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
+    { key: "rtd", label: "RTD (Packed)", color: "#B084F5", icon: "📦" },
     { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
     { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
   ];
@@ -399,8 +402,12 @@ function DashboardView({ token, profile, setView }) {
           <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL WAREHOUSING</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
         </div>
-        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 14 }}>{initials}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <button onClick={() => setRefreshTick(t => t + 1)} title="Refresh now" style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 34, height: 34, borderRadius: "50%", fontSize: 15, cursor: "pointer" }}>🔄</button>
+          <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 14 }}>{initials}</div>
+        </div>
       </div>
+      <div style={{ color: "#8A8272", fontSize: 10, marginTop: -12, marginBottom: 16 }}>Auto-refreshes every 30s</div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
         <div style={{ background: "#D9A441", borderRadius: 10, padding: "16px 18px", cursor: "pointer" }} onClick={() => setView("receiving")}>
@@ -2944,7 +2951,7 @@ function PackingView({ token, profile, showToast }) {
     const order = orders[openTask.order_id];
     return (
       <div>
-        <SectionTitle title={`Packing — ${order?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back</button>} />
+        <SectionTitle title={`Packing — ${order?.external_order_id}${binNumMap[openTask.order_id] ? ` · Bin #${binNumMap[openTask.order_id]}` : ""}`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTask(null)}>← Back</button>} />
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan each item to verify</div>
           <div style={{ display: "flex", gap: 10 }}>
@@ -3782,6 +3789,8 @@ function ReportsView({ token, profile, showToast }) {
   const [hourlyData, setHourlyData] = useState([]);
   const [timelineUserId, setTimelineUserId] = useState("");
   const [timelineDate, setTimelineDate] = useState(new Date().toISOString().slice(0, 10));
+  const [staffHours, setStaffHours] = useState([]);
+  const [execSummary, setExecSummary] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -3848,6 +3857,72 @@ function ReportsView({ token, profile, showToast }) {
           .map(o => (new Date(o.dispatched_at) - new Date(o.received_at)) / 3600000);
         const avgHours = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
         setLeadTime({ avgHours, samples: durations.length });
+
+        // ---- Staff Hours & PCS/hour (management productivity report) ----
+        const [pickTasksAll, packTasksAll, putawayAll, allOrders] = await Promise.all([
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        ]);
+        const pickTaskIds = (pickTasksAll || []).map(t => t.id);
+        const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+        const pickQtyByUser = {};
+        for (const t of pickTasksAll || []) {
+          if (!t.assigned_to) continue;
+          const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+          pickQtyByUser[t.assigned_to] = (pickQtyByUser[t.assigned_to] || 0) + qty;
+        }
+        const packQtyByUser = {};
+        for (const t of packTasksAll || []) {
+          if (!t.assigned_to) continue;
+          let qty = 0;
+          try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+          packQtyByUser[t.assigned_to] = (packQtyByUser[t.assigned_to] || 0) + qty;
+        }
+        const putawayQtyByUser = {};
+        for (const t of putawayAll || []) {
+          if (!t.assigned_to) continue;
+          putawayQtyByUser[t.assigned_to] = (putawayQtyByUser[t.assigned_to] || 0) + (t.qty_completed || 0);
+        }
+        const byUserDate = {};
+        for (const ev of events || []) {
+          if (!ev.user_id) continue;
+          const key = `${ev.user_id}|${new Date(ev.created_at).toDateString()}`;
+          if (!byUserDate[key]) byUserDate[key] = [];
+          byUserDate[key].push(new Date(ev.created_at));
+        }
+        const hoursByUser = {};
+        for (const key in byUserDate) {
+          const userId = key.split("|")[0];
+          const times = byUserDate[key].sort((a, b) => a - b);
+          const spanHrs = (times[times.length - 1] - times[0]) / 3600000;
+          hoursByUser[userId] = (hoursByUser[userId] || 0) + spanHrs;
+        }
+        const hoursReport = Object.keys(profMap).map(userId => {
+          const hrs = hoursByUser[userId] || 0;
+          const totalPcs = (pickQtyByUser[userId] || 0) + (packQtyByUser[userId] || 0) + (putawayQtyByUser[userId] || 0);
+          return {
+            userId, name: profMap[userId].full_name, role: profMap[userId].role,
+            hours: hrs, pcsPicked: pickQtyByUser[userId] || 0, pcsPacked: packQtyByUser[userId] || 0,
+            pcsPutAway: putawayQtyByUser[userId] || 0, totalPcs, pcsPerHour: hrs > 0.05 ? Math.round(totalPcs / hrs) : 0
+          };
+        }).filter(r => r.hours > 0 || r.totalPcs > 0).sort((a, b) => b.totalPcs - a.totalPcs);
+        setStaffHours(hoursReport);
+
+        // ---- Executive / Customer Fulfillment summary ----
+        const todayStr = new Date().toDateString();
+        const dispatchedOrders = (allOrders || []).filter(o => o.status === "dispatched" || o.status === "handed_over");
+        const shippedToday = dispatchedOrders.filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === todayStr).length;
+        const sameDayCount = dispatchedOrders.filter(o => o.received_at && o.dispatched_at && new Date(o.received_at).toDateString() === new Date(o.dispatched_at).toDateString()).length;
+        const onTimeRate = dispatchedOrders.length ? Math.round((sameDayCount / dispatchedOrders.length) * 100) : null;
+        const incompleteCount = (allOrders || []).filter(o => o.status === "incomplete").length;
+        const totalOrders = (allOrders || []).length;
+        const fulfillmentRate = totalOrders ? Math.round(((totalOrders - incompleteCount) / totalOrders) * 100) : null;
+        setExecSummary({
+          shippedToday, totalOrders, dispatchedTotal: dispatchedOrders.length,
+          onTimeRate, incompleteCount, fulfillmentRate, avgCycleHours: avgHours
+        });
       } catch (e) { showToast("Load failed", "err"); }
       setLoading(false);
     })();
@@ -3858,6 +3933,68 @@ function ReportsView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Reports" />
+
+      {execSummary && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Executive Summary — Customer Fulfillment</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14 }}>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F5A623" }}>{execSummary.shippedToday}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Orders Shipped Today</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{execSummary.fulfillmentRate != null ? `${execSummary.fulfillmentRate}%` : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Fulfillment Rate (non-incomplete)</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#5B9EE8" }}>{execSummary.onTimeRate != null ? `${execSummary.onTimeRate}%` : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Same-Day Dispatch Rate</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.avgCycleHours != null ? execSummary.avgCycleHours.toFixed(1) + "h" : "—"}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Order Cycle Time</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{execSummary.incompleteCount}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Incomplete / Short Orders</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{execSummary.totalOrders}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Total Orders (all time)</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={S.panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={S.panelTitle}>Staff Hours &amp; Productivity — hours worked, pcs handled, pcs/hour</div>
+          {staffHours.length > 0 && (
+            <button style={S.secondaryBtnSm} onClick={() => exportCSV("staff-hours-productivity.csv", ["Staff", "Role", "Hours Worked", "PCS Picked", "PCS Packed", "PCS Put Away", "Total PCS", "PCS/Hour"], staffHours.map(r => [r.name, r.role, r.hours.toFixed(1), r.pcsPicked, r.pcsPacked, r.pcsPutAway, r.totalPcs, r.pcsPerHour]))}>⬇ Export CSV</button>
+          )}
+        </div>
+        {staffHours.length === 0 ? <EmptyNote text="Abhi tak koi completed activity nahi hui." /> : (
+          <table>
+            <thead><tr><th style={S.th}>Staff</th><th style={S.th}>Role</th><th style={S.th}>Hours Worked</th><th style={S.th}>PCS Picked</th><th style={S.th}>PCS Packed</th><th style={S.th}>PCS Put Away</th><th style={S.th}>Total PCS</th><th style={S.th}>PCS/Hour</th></tr></thead>
+            <tbody>
+              {staffHours.map(r => (
+                <tr key={r.userId}>
+                  <td style={S.td}>{r.name}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.role}</td>
+                  <td style={{ ...S.td, color: "#2B2620" }}>{r.hours.toFixed(1)}h</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPicked}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPacked}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.pcsPutAway}</td>
+                  <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{r.totalPcs}</td>
+                  <td style={{ ...S.td, color: "#F5A623", fontWeight: 700 }}>{r.pcsPerHour}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ "Hours worked" ek estimate hai (din ki pehli aur aakhri WMS activity ke darmiyan ka waqt) — exact clock-in/out system se nahi liya gaya.</div>
+      </div>
+
       <div style={S.statGrid} className="depotos-statgrid">
         <div style={S.statCard}>
           <span style={{ fontSize: 16 }}>⏱</span>
