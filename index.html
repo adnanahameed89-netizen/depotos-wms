@@ -368,6 +368,8 @@ function DashboardView({ token, profile, setView, showToast }) {
           let qty = 0;
           try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
           const u = ensure(t.assigned_to); u.pcs += qty;
+          const hrs = (t.started_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.started_at)) / 3600000 : 0;
+          u.hrs += hrs;
         }
         for (const t of putawayDone || []) {
           if (!t.assigned_to) continue;
@@ -3193,12 +3195,15 @@ function PackingView({ token, profile, showToast }) {
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
+    const isFirstScan = Object.keys(scans).length === 0;
     const newScans = { ...scans, [p.id]: current + 1 };
     setScans(newScans);
     setLastScannedProduct(p);
     showToast(`Scanned: ${p.barcode}`);
     try {
-      await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { scans: JSON.stringify(newScans) } });
+      const body = { scans: JSON.stringify(newScans) };
+      if (isFirstScan && !openTask.started_at) body.started_at = new Date().toISOString();
+      await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body });
     } catch (e) { /* progress still visible locally even if this save fails */ }
   };
 
@@ -4172,20 +4177,51 @@ function ReportsView({ token, profile, showToast }) {
           };
         }));
       } else if (key === "order_dump") {
-        const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
+        const [orders, pickTasksAll, packTasksAll, profs] = await Promise.all([
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token }),
+          sb(`/rest/v1/pick_tasks?select=order_id,assigned_to`, { token }),
+          sb(`/rest/v1/pack_tasks?select=order_id,assigned_to`, { token }),
+          sb(`/rest/v1/profiles?select=*`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+        const pickerByOrder = Object.fromEntries((pickTasksAll || []).map(t => [t.order_id, profMap[t.assigned_to]?.full_name || "—"]));
+        const packerByOrder = Object.fromEntries((packTasksAll || []).map(t => [t.order_id, profMap[t.assigned_to]?.full_name || "—"]));
         setRows((orders || []).map(o => ({
           "Order #": o.external_order_id, "Courier": o.courier, "Status": o.status,
+          "Picker": pickerByOrder[o.id] || "—", "Packer": packerByOrder[o.id] || "—",
           "Received At": fmtTime(o.received_at), "Dispatched At": o.dispatched_at ? fmtTime(o.dispatched_at) : "—"
         })));
       } else if (key === "grn_report") {
-        const [grns, lines] = await Promise.all([
+        const [grns, lines, putawayAllForGrn, profsForGrn] = await Promise.all([
           sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token }),
-          sb(`/rest/v1/grn_lines?select=*`, { token })
+          sb(`/rest/v1/grn_lines?select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?select=*`, { token }),
+          sb(`/rest/v1/profiles?select=*`, { token })
         ]);
+        const grnProfMap = Object.fromEntries((profsForGrn || []).map(p => [p.id, p]));
         setRows((grns || []).map(g => {
           const gl = (lines || []).filter(l => l.grn_id === g.id);
           const totalQty = gl.reduce((s, l) => s + l.qty_expected, 0);
-          return { "GRN #": g.grn_number, "PO #": g.po_number || "—", "Source": g.source || "—", "Status": g.status, "Lines": gl.length, "Total Qty": totalQty, "Created": fmtTime(g.created_at) };
+          const glIds = new Set(gl.map(l => l.id));
+          const pwTasks = (putawayAllForGrn || []).filter(t => glIds.has(t.grn_line_id));
+          const officerNames = [...new Set(pwTasks.filter(t => t.assigned_to).map(t => grnProfMap[t.assigned_to]?.full_name || "—"))];
+          const allDone = pwTasks.length > 0 && pwTasks.every(t => t.status === "completed");
+          let duration = "—";
+          if (allDone) {
+            const starts = pwTasks.filter(t => t.assigned_at).map(t => new Date(t.assigned_at));
+            const ends = pwTasks.filter(t => t.completed_at).map(t => new Date(t.completed_at));
+            if (starts.length && ends.length) {
+              const hrs = (Math.max(...ends) - Math.min(...starts)) / 3600000;
+              duration = `${hrs.toFixed(1)}h`;
+            }
+          } else if (pwTasks.length > 0) {
+            duration = "In Progress";
+          }
+          return {
+            "GRN #": g.grn_number, "PO #": g.po_number || "—", "Source": g.source || "—", "Status": g.status,
+            "Lines": gl.length, "Total Qty": totalQty, "Put Away By": officerNames.join(", ") || "—",
+            "Put Away Duration": duration, "Created": fmtTime(g.created_at)
+          };
         }));
       } else if (key === "user_productivity") {
         const [profs, pickTasksAll, packTasksAll, putawayAll] = await Promise.all([
@@ -4198,27 +4234,38 @@ function ReportsView({ token, profile, showToast }) {
         const pickTaskIds = (pickTasksAll || []).map(t => t.id);
         const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
         const agg = {};
-        const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0 }; return agg[uid]; };
+        const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0, firstAt: null, lastAt: null }; return agg[uid]; };
+        const track = (u, startVal, endVal) => {
+          if (startVal && (!u.firstAt || new Date(startVal) < u.firstAt)) u.firstAt = new Date(startVal);
+          if (endVal && (!u.lastAt || new Date(endVal) > u.lastAt)) u.lastAt = new Date(endVal);
+        };
         for (const t of pickTasksAll || []) {
           if (!t.assigned_to) continue;
           const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
           const hrs = (t.assigned_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
           const u = ensure(t.assigned_to); u.pcsPicked += qty; u.hrs += hrs;
+          track(u, t.assigned_at, t.completed_at);
         }
         for (const t of packTasksAll || []) {
           if (!t.assigned_to) continue;
           let qty = 0;
           try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-          ensure(t.assigned_to).pcsPacked += qty;
+          const u = ensure(t.assigned_to); u.pcsPacked += qty;
+          const hrs = (t.started_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.started_at)) / 3600000 : 0;
+          u.hrs += hrs;
+          track(u, t.started_at, t.completed_at);
         }
         for (const t of putawayAll || []) {
           if (!t.assigned_to) continue;
-          ensure(t.assigned_to).pcsPutAway += (t.qty_completed || 0);
+          const u = ensure(t.assigned_to); u.pcsPutAway += (t.qty_completed || 0);
+          track(u, t.assigned_at, t.completed_at);
         }
         setRows(Object.entries(agg).map(([uid, d]) => {
           const total = d.pcsPicked + d.pcsPacked + d.pcsPutAway;
           return {
             "Staff": profMap[uid]?.full_name || "Unknown", "Role": profMap[uid]?.role || "—",
+            "First Activity": d.firstAt ? fmtTime(d.firstAt.toISOString()) : "—",
+            "Last Activity": d.lastAt ? fmtTime(d.lastAt.toISOString()) : "—",
             "Hours Worked": d.hrs.toFixed(1), "PCS Picked": d.pcsPicked, "PCS Packed": d.pcsPacked,
             "PCS Put Away": d.pcsPutAway, "Total PCS": total, "PCS/Hour": d.hrs > 0.05 ? Math.round(total / d.hrs) : 0
           };
