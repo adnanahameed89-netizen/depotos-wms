@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Mughal Fulfillment Warehouse — Receiving & Putaway</title>
+<title>Mughal Fulfillment Warehouse</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
@@ -164,8 +164,7 @@ function LoginScreen({ onLogin, error }) {
             MUGHAL<span style={{ color: "#F5A623" }}> FULFILLMENT WAREHOUSE</span>
           </span>
         </div>
-        <div style={{ color: "#9098A8", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
-        <div style={darkLabel}>EMAIL</div>
+                <div style={darkLabel}>EMAIL</div>
         <input style={darkInput} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
         <div style={darkLabel}>PASSWORD</div>
         <input style={darkInput} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
