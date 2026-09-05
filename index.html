@@ -126,7 +126,7 @@ function App() {
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
           {view === "inventory" && <InventoryView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "orders" && <OrdersView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "orders" && <OrdersView token={session.token} profile={profile} showToast={showToast} setView={setView} />}
           {view === "picking" && <PickingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "packing" && <PackingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "dispatch" && <DispatchView token={session.token} profile={profile} showToast={showToast} />}
@@ -253,7 +253,7 @@ function Toast({ toast }) {
 
 /* ================= DASHBOARD ================= */
 function DashboardView({ token, profile, setView, showToast }) {
-  const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0 });
+  const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0, returnOrders: 0 });
   const [fulfillmentKpis, setFulfillmentKpis] = useState({ totalOrders: 0, dispatched: 0, pending: 0, avgBucketSize: 0, avgFulfillmentHrs: null });
   const [kpi24, setKpi24] = useState({ onTime: 0, delayed: 0, rate: null });
   const [holidays, setHolidays] = useState([]);
@@ -283,12 +283,13 @@ function DashboardView({ token, profile, setView, showToast }) {
   useEffect(() => {
     const loadDashboard = async () => {
       try {
-        const [grns, putawayPending, orders, holidayRows, unresolvedRtv] = await Promise.all([
+        const [grns, putawayPending, orders, holidayRows, unresolvedRtv, returnsAll] = await Promise.all([
           sb(`/rest/v1/grn?select=status`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.pending&select=qty,qty_completed`, { token }),
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/holidays?select=*&order=holiday_date.asc`, { token }),
-          sb(`/rest/v1/rtv_returns?status=eq.pending&select=short_qty`, { token })
+          sb(`/rest/v1/rtv_returns?status=eq.pending&select=short_qty`, { token }),
+          sb(`/rest/v1/returns?select=id`, { token })
         ]);
         setHolidays(holidayRows || []);
         const holidayDates = new Set((holidayRows || []).map(h => new Date(h.holiday_date).toDateString()));
@@ -299,7 +300,8 @@ function DashboardView({ token, profile, setView, showToast }) {
         const pcsPendingPutaway = (putawayPending || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0) + rtvPendingQty;
         const ordersCompleted = (orders || []).filter(o => ["dispatched", "handed_over"].includes(o.status)).length;
         const ordersPending = (orders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned", "incomplete"].includes(o.status)).length;
-        setOverall({ grnPending, grnComplete, pcsPendingPutaway, ordersCompleted, ordersPending });
+        const returnOrders = (returnsAll || []).length;
+        setOverall({ grnPending, grnComplete, pcsPendingPutaway, ordersCompleted, ordersPending, returnOrders });
 
         const dispatchedWithDates = (orders || []).filter(o => o.received_at && o.dispatched_at);
         let onTime = 0, delayed = 0;
@@ -501,6 +503,10 @@ function DashboardView({ token, profile, setView, showToast }) {
           <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
             <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ORDERS COMPLETED</div>
             <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.ordersCompleted}</div>
+          </div>
+          <div style={{ background: "#B084F5", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("returns")}>
+            <div style={{ color: "#2E1A47", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>RETURN ORDERS</div>
+            <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.returnOrders}</div>
           </div>
         </div>
       </div>
@@ -1911,7 +1917,7 @@ function InventoryView({ token, profile, showToast }) {
 }
 
 /* ================= SALES ORDERS ================= */
-function OrdersView({ token, profile, showToast }) {
+function OrdersView({ token, profile, showToast, setView }) {
   const [orders, setOrders] = useState([]);
   const [productCache, setProductCache] = useState({});
   const [showForm, setShowForm] = useState(false);
@@ -1937,6 +1943,7 @@ function OrdersView({ token, profile, showToast }) {
   const [selectedOrders, setSelectedOrders] = useState({});
   const [totes, setTotes] = useState([]);
   const [pickers, setPickers] = useState([]);
+  const [returnsCount, setReturnsCount] = useState(0);
   const [bulkToteId, setBulkToteId] = useState("");
   const [bulkPickerId, setBulkPickerId] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -1949,6 +1956,8 @@ function OrdersView({ token, profile, showToast }) {
       setProfiles(Object.fromEntries(profs.map(u => [u.id, u])));
       setPickers(profs.filter(u => ["picker", "packer"].includes(u.role) && u.warehouse_id === profile.warehouse_id));
       setTotes(await sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.open&select=*`, { token }) || []);
+      const returnsRows = await sb(`/rest/v1/returns?select=id`, { token });
+      setReturnsCount((returnsRows || []).length);
       const ids = (o || []).map(x => x.id);
       if (ids.length) {
         const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
@@ -2490,8 +2499,7 @@ function OrdersView({ token, profile, showToast }) {
         ];
         const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => o.status === s.key).length]));
         return (
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length + 1}, 1fr)`, gap: 10, marginBottom: 18 }}>
-            <div onClick={() => setStatusFilter(null)}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length + 2}, 1fr)`, gap: 10, marginBottom: 18 }}>            <div onClick={() => setStatusFilter(null)}
               style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === null ? { borderColor: "#F5A623" } : {}) }}>
               <span style={{ fontSize: 16 }}>📋</span>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 8 }}>{orders.length}</div>
@@ -2505,6 +2513,11 @@ function OrdersView({ token, profile, showToast }) {
                 <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{s.label}</div>
               </div>
             ))}
+            <div onClick={() => setView && setView("returns")} style={{ ...S.statCard, cursor: "pointer" }}>
+              <span style={{ fontSize: 16 }}>↩</span>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#B084F5", marginTop: 8 }}>{returnsCount}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Return Orders</div>
+            </div>
           </div>
         );
       })()}
@@ -3869,6 +3882,49 @@ function ReturnsView({ token, profile, showToast }) {
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState(null);
   const canImport = ["admin", "warehouse_lead"].includes(profile.role);
+  const [exportFrom, setExportFrom] = useState(new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
+  const [exportTo, setExportTo] = useState(new Date().toISOString().slice(0, 10));
+  const [exporting, setExporting] = useState(false);
+
+  const exportReturnsCSV = async () => {
+    setExporting(true);
+    try {
+      const fromISO = new Date(exportFrom + "T00:00:00").toISOString();
+      const toISO = new Date(new Date(exportTo + "T00:00:00").getTime() + 86400000).toISOString();
+      const rangeReturns = await sb(`/rest/v1/returns?received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
+      if (!rangeReturns || rangeReturns.length === 0) { showToast("Is date range mein koi return nahi mili", "err"); setExporting(false); return; }
+      const returnIds = rangeReturns.map(r => r.id);
+      const [lines, profs, ordersData] = await Promise.all([
+        sb(`/rest/v1/return_lines?return_id=in.(${returnIds.join(",")})&select=*`, { token }),
+        sb(`/rest/v1/profiles?select=*`, { token }),
+        sb(`/rest/v1/sales_orders?id=in.(${[...new Set(rangeReturns.map(r => r.order_id).filter(Boolean))].join(",") || "00000000-0000-0000-0000-000000000000"}&select=*`, { token })
+      ]);
+      const productIds = [...new Set((lines || []).map(l => l.product_id))];
+      const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+      const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+      const orderMap = Object.fromEntries((ordersData || []).map(o => [o.id, o]));
+      const returnMap = Object.fromEntries(rangeReturns.map(r => [r.id, r]));
+
+      const rows = (lines || []).map(l => {
+        const ret = returnMap[l.return_id];
+        const order = ret ? orderMap[ret.order_id] : null;
+        const p = prodMap[l.product_id];
+        return [
+          order?.raw_data?.customer_order_number || order?.raw_data?.customer || "—",
+          order?.external_order_id || "—",
+          p?.barcode || "—",
+          p?.name || "—",
+          l.qty,
+          profMap[ret?.processed_by]?.full_name || "—",
+          ret?.received_at ? fmtTime(ret.received_at) : "—"
+        ];
+      });
+      exportCSV(`returns-export-${exportFrom}-to-${exportTo}.csv`,
+        ["Customer #", "Tracking #", "Barcode", "Product Name", "Qty", "User Name", "Date/Time"], rows);
+      showToast(`${rows.length} rows exported`);
+    } catch (e) { showToast("Export failed", "err"); }
+    setExporting(false);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -4080,6 +4136,18 @@ function ReturnsView({ token, profile, showToast }) {
           </label>
         ) : null
       } />
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Export processed returns — item-wise (CSV only)</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input type="date" style={{ ...S.input, maxWidth: 160 }} value={exportFrom} onChange={e => setExportFrom(e.target.value)} />
+          <span style={{ color: "#8A8272" }}>to</span>
+          <input type="date" style={{ ...S.input, maxWidth: 160 }} value={exportTo} onChange={e => setExportTo(e.target.value)} />
+          <button style={S.primaryBtnSm} onClick={exportReturnsCSV} disabled={exporting}>{exporting ? "Exporting…" : "⬇ Export CSV"}</button>
+        </div>
+        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>Columns: Customer #, Tracking #, Barcode, Product Name, Qty, User Name, Date/Time — ek row har return line ke liye.</div>
+      </div>
+
       {importReport && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Historical returns — validation report ({importReport.fileName})</div>
