@@ -1582,6 +1582,18 @@ function PutawayView({ token, profile, showToast }) {
 }
 
 /* ================= INVENTORY ================= */
+function computeAgingDays(onHand, putawayRowsAsc) {
+  // putawayRowsAsc: [{qty_completed, completed_at}] sorted oldest-first for this product (and bin, if bin-level)
+  if (!putawayRowsAsc || putawayRowsAsc.length === 0) return null; // no putaway history (e.g. opening stock import) — age unknown
+  let remaining = onHand;
+  for (const row of putawayRowsAsc) {
+    remaining -= row.qty_completed;
+    if (remaining <= 0) return Math.floor((Date.now() - new Date(row.completed_at)) / 86400000);
+  }
+  // on_hand exceeds tracked putaway history — fall back to oldest known batch
+  return Math.floor((Date.now() - new Date(putawayRowsAsc[0].completed_at)) / 86400000);
+}
+
 function InventoryView({ token, profile, showToast }) {
   const [tab, setTab] = useState("ledger");
   const [rows, setRows] = useState([]);
@@ -1591,19 +1603,33 @@ function InventoryView({ token, profile, showToast }) {
   const [query, setQuery] = useState("");
   const [openingReport, setOpeningReport] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [putawayHistory, setPutawayHistory] = useState({}); // product_id -> [{qty_completed, completed_at}] asc
+  const [putawayHistoryByBin, setPutawayHistoryByBin] = useState({}); // "product_id|bin_id" -> [...] asc
   const canImport = ["admin", "warehouse_lead"].includes(profile.role);
 
   const loadAll = useCallback(async () => {
-      const [inv, res, prods, binList] = await Promise.all([
+      const [inv, res, prods, binList, putaway] = await Promise.all([
         sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/products?select=*`, { token }),
-        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
       ]);
       setRows(inv || []);
       setReserved(Object.fromEntries((res || []).map(r => [r.product_id, r.reserved])));
       setProducts(Object.fromEntries((prods || []).map(p => [p.id, p])));
       setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
+      const byProduct = {}, byBin = {};
+      for (const p of putaway || []) {
+        if (!p.qty_completed || !p.completed_at) continue;
+        if (!byProduct[p.product_id]) byProduct[p.product_id] = [];
+        byProduct[p.product_id].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+        const binKey = `${p.product_id}|${p.bin_id}`;
+        if (!byBin[binKey]) byBin[binKey] = [];
+        byBin[binKey].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+      }
+      setPutawayHistory(byProduct);
+      setPutawayHistoryByBin(byBin);
   }, [token, profile.warehouse_id]);
 
   const handleOpeningStockFile = async (e) => {
@@ -1728,10 +1754,12 @@ function InventoryView({ token, profile, showToast }) {
       {tab === "ledger" && (
         <div style={S.panel}>
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th><th style={S.th}>Aging (days)</th></tr></thead>
             <tbody>
               {ledger.map(r => {
                 const p = products[r.productId];
+                const aging = computeAgingDays(r.onHand, putawayHistory[r.productId]);
+                const agingColor = aging == null ? "#8A8272" : aging > 60 ? "#E5484D" : aging > 30 ? "#F5A623" : "#4CAF7D";
                 return (
                   <tr key={r.productId}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
@@ -1739,10 +1767,11 @@ function InventoryView({ token, profile, showToast }) {
                     <td style={{ ...S.td, color: "#6B6355" }}>{r.onHand}</td>
                     <td style={{ ...S.td, color: r.reserved > 0 ? "#E5484D" : "#6B6355" }}>{r.reserved}</td>
                     <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{r.available}</td>
+                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{aging != null ? `${aging}d` : "—"}</td>
                   </tr>
                 );
               })}
-              {ledger.length === 0 && <tr><td colSpan={5}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {ledger.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -1751,18 +1780,21 @@ function InventoryView({ token, profile, showToast }) {
       {tab === "bins" && (
         <div style={S.panel}>
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Reserved against order?</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Reserved against order?</th></tr></thead>
             <tbody>
               {binRows.map((r, i) => {
                 const p = products[r.product_id];
                 const bin = bins[r.bin_id];
                 const productReserved = reserved[r.product_id] || 0;
+                const aging = computeAgingDays(r.on_hand, putawayHistoryByBin[`${r.product_id}|${r.bin_id}`]);
+                const agingColor = aging == null ? "#8A8272" : aging > 60 ? "#E5484D" : aging > 30 ? "#F5A623" : "#4CAF7D";
                 return (
                   <tr key={i}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
                     <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
                     <td style={S.td}>{r.on_hand}</td>
+                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{aging != null ? `${aging}d` : "—"}</td>
                     <td style={S.td}>
                       {productReserved > 0
                         ? <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Yes · {productReserved} reserved (product-wide)</span>
@@ -1771,7 +1803,7 @@ function InventoryView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {binRows.length === 0 && <tr><td colSpan={5}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {binRows.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
           <div style={{ marginTop: 10, fontSize: 11, color: "#8A8272" }}>
@@ -3941,171 +3973,160 @@ function categorizeEvent(ev) {
 const CATEGORIES = ["GRN", "Put Away", "Pick", "Pack", "Dispatch", "Returns"];
 
 function ReportsView({ token, profile, showToast }) {
-  const [reportType, setReportType] = useState("inventory_ledger");
-  const [dateFrom, setDateFrom] = useState(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
-  const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
-  const [exporting, setExporting] = useState(false);
-
-  const REPORT_OPTIONS = [
-    { key: "inventory_bin_ledger", label: "Inventory Bin Ledger", dateScoped: false },
-    { key: "inventory_ledger", label: "Inventory Ledger", dateScoped: false },
-    { key: "order_dump", label: "Order Dump Report", dateScoped: true },
-    { key: "grn_report", label: "GRN Report", dateScoped: true },
-    { key: "user_productivity", label: "User-wise Productivity Report", dateScoped: true }
+  const REPORTS = [
+    { key: "inventory_bin_ledger", label: "Inventory Bin Ledger" },
+    { key: "inventory_ledger", label: "Inventory Ledger" },
+    { key: "order_dump", label: "Order Dump Report" },
+    { key: "grn_report", label: "GRN Report" },
+    { key: "user_productivity", label: "User-wise Productivity Report" }
   ];
-  const currentOption = REPORT_OPTIONS.find(o => o.key === reportType);
+  const [reportType, setReportType] = useState("inventory_ledger");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  const rangeISO = () => ({
-    fromISO: new Date(dateFrom + "T00:00:00").toISOString(),
-    toISO: new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000).toISOString()
-  });
-
-  const runInventoryBinLedger = async () => {
-    const [inv, bins, products] = await Promise.all([
-      sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&on_hand=gt.0&select=*`, { token }),
-      sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-      sb(`/rest/v1/products?select=*`, { token })
-    ]);
-    const binMap = Object.fromEntries((bins || []).map(b => [b.id, b]));
-    const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
-    const rows = (inv || []).map(r => [
-      binMap[r.bin_id]?.code || "Unassigned", prodMap[r.product_id]?.barcode || "—", prodMap[r.product_id]?.name || "—", r.on_hand
-    ]);
-    exportCSV("inventory-bin-ledger.csv", ["Bin Code", "Barcode", "Product Name", "On Hand Qty"], rows);
-  };
-
-  const runInventoryLedger = async () => {
-    const [inv, reserved, products] = await Promise.all([
-      sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-      sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-      sb(`/rest/v1/products?select=*`, { token })
-    ]);
-    const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
-    const reservedMap = Object.fromEntries((reserved || []).map(r => [r.product_id, r.reserved]));
-    const onHandByProduct = {};
-    for (const r of inv || []) onHandByProduct[r.product_id] = (onHandByProduct[r.product_id] || 0) + r.on_hand;
-    const rows = Object.entries(onHandByProduct).map(([productId, onHand]) => {
-      const res = reservedMap[productId] || 0;
-      return [prodMap[productId]?.barcode || "—", prodMap[productId]?.name || "—", onHand, res, onHand - res];
-    });
-    exportCSV("inventory-ledger.csv", ["Barcode", "Product Name", "On Hand Total", "Reserved", "Available"], rows);
-  };
-
-  const runOrderDump = async () => {
-    const { fromISO, toISO } = rangeISO();
-    const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
-    if (!orders || orders.length === 0) { showToast("Is date range mein koi order nahi mila", "err"); return; }
-    const orderIds = orders.map(o => o.id);
-    const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${orderIds.join(",")})&select=*`, { token });
-    const productIds = [...new Set((lines || []).map(l => l.product_id))];
-    const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
-    const linesByOrder = {};
-    for (const l of lines || []) { (linesByOrder[l.order_id] = linesByOrder[l.order_id] || []).push(l); }
-    const rows = [];
-    for (const o of orders) {
-      const ols = linesByOrder[o.id] || [];
-      if (ols.length === 0) { rows.push([o.external_order_id, o.raw_data?.customer_order_number || o.raw_data?.customer || "—", o.courier, o.status, fmtTime(o.received_at), o.dispatched_at ? fmtTime(o.dispatched_at) : "—", "—", "—", "—"]); continue; }
-      for (const l of ols) {
-        rows.push([o.external_order_id, o.raw_data?.customer_order_number || o.raw_data?.customer || "—", o.courier, o.status, fmtTime(o.received_at), o.dispatched_at ? fmtTime(o.dispatched_at) : "—", prodMap[l.product_id]?.barcode || "—", prodMap[l.product_id]?.name || "—", l.qty]);
-      }
-    }
-    exportCSV("order-dump-report.csv", ["Tracking", "Customer/Order No", "Courier", "Status", "Received Date", "Dispatched Date", "Barcode", "Product Name", "Qty"], rows);
-  };
-
-  const runGrnReport = async () => {
-    const { fromISO, toISO } = rangeISO();
-    const grns = await sb(`/rest/v1/grn?created_at=gte.${fromISO}&created_at=lt.${toISO}&select=*`, { token });
-    if (!grns || grns.length === 0) { showToast("Is date range mein koi GRN nahi mila", "err"); return; }
-    const grnIds = grns.map(g => g.id);
-    const lines = await sb(`/rest/v1/grn_lines?grn_id=in.(${grnIds.join(",")})&select=*`, { token });
-    const productIds = [...new Set((lines || []).map(l => l.product_id))];
-    const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
-    const grnMap = Object.fromEntries(grns.map(g => [g.id, g]));
-    const rows = (lines || []).map(l => {
-      const g = grnMap[l.grn_id];
-      return [g?.grn_number || "—", g?.po_number || "—", g?.source || "—", g?.status || "—", prodMap[l.product_id]?.barcode || "—", prodMap[l.product_id]?.name || "—", l.qty_expected, l.qty_received || 0, g ? fmtTime(g.created_at) : "—"];
-    });
-    exportCSV("grn-report.csv", ["GRN Number", "PO Number", "Source", "Status", "Barcode", "Product Name", "Qty Expected", "Qty Received", "Created Date"], rows);
-  };
-
-  const runUserProductivity = async () => {
-    const { fromISO, toISO } = rangeISO();
-    const [profs, pickTasksAll, packTasksAll, putawayAll] = await Promise.all([
-      sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-      sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
-      sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
-      sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token })
-    ]);
-    const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
-    const pickTaskIds = (pickTasksAll || []).map(t => t.id);
-    const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
-    const agg = {};
-    const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0 }; return agg[uid]; };
-    for (const t of pickTasksAll || []) {
-      if (!t.assigned_to) continue;
-      const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-      const hrs = (t.assigned_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
-      const u = ensure(t.assigned_to); u.pcsPicked += qty; u.hrs += hrs;
-    }
-    for (const t of packTasksAll || []) {
-      if (!t.assigned_to) continue;
-      let qty = 0;
-      try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-      ensure(t.assigned_to).pcsPacked += qty;
-    }
-    for (const t of putawayAll || []) {
-      if (!t.assigned_to) continue;
-      ensure(t.assigned_to).pcsPutAway += (t.qty_completed || 0);
-    }
-    const rows = Object.entries(agg).map(([userId, d]) => {
-      const total = d.pcsPicked + d.pcsPacked + d.pcsPutAway;
-      return [profMap[userId]?.full_name || "Unknown", profMap[userId]?.role || "—", d.pcsPicked, d.pcsPacked, d.pcsPutAway, total, d.hrs.toFixed(1), d.hrs > 0.05 ? Math.round(total / d.hrs) : 0];
-    });
-    if (rows.length === 0) { showToast("Is date range mein koi completed activity nahi mili", "err"); return; }
-    exportCSV("user-productivity-report.csv", ["Staff", "Role", "PCS Picked", "PCS Packed", "PCS Put Away", "Total PCS", "Hours Worked", "PCS/Hour"], rows);
-  };
-
-  const handleExport = async () => {
-    setExporting(true);
+  const loadReport = useCallback(async (key) => {
+    setLoading(true);
     try {
-      if (reportType === "inventory_bin_ledger") await runInventoryBinLedger();
-      else if (reportType === "inventory_ledger") await runInventoryLedger();
-      else if (reportType === "order_dump") await runOrderDump();
-      else if (reportType === "grn_report") await runGrnReport();
-      else if (reportType === "user_productivity") await runUserProductivity();
-    } catch (e) { showToast(`Export failed: ${(e.message || "").slice(0, 100)}`, "err"); }
-    setExporting(false);
+      if (key === "inventory_ledger") {
+        const [inv, products, reserved, putaway] = await Promise.all([
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/products?select=*`, { token }),
+          sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.asc`, { token })
+        ]);
+        const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+        const resMap = Object.fromEntries((reserved || []).map(r => [r.product_id, r.reserved]));
+        const putawayByProduct = {};
+        for (const p of putaway || []) {
+          if (!p.qty_completed || !p.completed_at) continue;
+          if (!putawayByProduct[p.product_id]) putawayByProduct[p.product_id] = [];
+          putawayByProduct[p.product_id].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+        }
+        const byProduct = {};
+        for (const row of inv || []) byProduct[row.product_id] = (byProduct[row.product_id] || 0) + row.on_hand;
+        setRows(Object.entries(byProduct).map(([pid, onHand]) => {
+          const p = prodMap[pid]; const res = resMap[pid] || 0;
+          const aging = computeAgingDays(onHand, putawayByProduct[pid]);
+          return { "Barcode": p?.barcode || "—", "Product": p?.name || "—", "On Hand": onHand, "Reserved": res, "Available": onHand - res, "Aging (days)": aging != null ? aging : "—" };
+        }));
+      } else if (key === "inventory_bin_ledger") {
+        const [inv, products, bins, putaway] = await Promise.all([
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/products?select=*`, { token }),
+          sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
+        ]);
+        const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+        const binMap = Object.fromEntries((bins || []).map(b => [b.id, b]));
+        const putawayByBin = {};
+        for (const p of putaway || []) {
+          if (!p.qty_completed || !p.completed_at) continue;
+          const key2 = `${p.product_id}|${p.bin_id}`;
+          if (!putawayByBin[key2]) putawayByBin[key2] = [];
+          putawayByBin[key2].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+        }
+        setRows((inv || []).filter(r => r.on_hand > 0).map(r => {
+          const aging = computeAgingDays(r.on_hand, putawayByBin[`${r.product_id}|${r.bin_id}`]);
+          return {
+            "Bin": binMap[r.bin_id]?.code || "Unassigned", "Barcode": prodMap[r.product_id]?.barcode || "—",
+            "Product": prodMap[r.product_id]?.name || "—", "On Hand": r.on_hand, "Aging (days)": aging != null ? aging : "—"
+          };
+        }));
+      } else if (key === "order_dump") {
+        const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
+        setRows((orders || []).map(o => ({
+          "Order #": o.external_order_id, "Courier": o.courier, "Status": o.status,
+          "Received At": fmtTime(o.received_at), "Dispatched At": o.dispatched_at ? fmtTime(o.dispatched_at) : "—"
+        })));
+      } else if (key === "grn_report") {
+        const [grns, lines] = await Promise.all([
+          sb(`/rest/v1/grn?select=*&order=created_at.desc`, { token }),
+          sb(`/rest/v1/grn_lines?select=*`, { token })
+        ]);
+        setRows((grns || []).map(g => {
+          const gl = (lines || []).filter(l => l.grn_id === g.id);
+          const totalQty = gl.reduce((s, l) => s + l.qty_expected, 0);
+          return { "GRN #": g.grn_number, "PO #": g.po_number || "—", "Source": g.source || "—", "Status": g.status, "Lines": gl.length, "Total Qty": totalQty, "Created": fmtTime(g.created_at) };
+        }));
+      } else if (key === "user_productivity") {
+        const [profs, pickTasksAll, packTasksAll, putawayAll] = await Promise.all([
+          sb(`/rest/v1/profiles?select=*`, { token }),
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+        const pickTaskIds = (pickTasksAll || []).map(t => t.id);
+        const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+        const agg = {};
+        const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0 }; return agg[uid]; };
+        for (const t of pickTasksAll || []) {
+          if (!t.assigned_to) continue;
+          const qty = (pickLines || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+          const hrs = (t.assigned_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 : 0;
+          const u = ensure(t.assigned_to); u.pcsPicked += qty; u.hrs += hrs;
+        }
+        for (const t of packTasksAll || []) {
+          if (!t.assigned_to) continue;
+          let qty = 0;
+          try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+          ensure(t.assigned_to).pcsPacked += qty;
+        }
+        for (const t of putawayAll || []) {
+          if (!t.assigned_to) continue;
+          ensure(t.assigned_to).pcsPutAway += (t.qty_completed || 0);
+        }
+        setRows(Object.entries(agg).map(([uid, d]) => {
+          const total = d.pcsPicked + d.pcsPacked + d.pcsPutAway;
+          return {
+            "Staff": profMap[uid]?.full_name || "Unknown", "Role": profMap[uid]?.role || "—",
+            "Hours Worked": d.hrs.toFixed(1), "PCS Picked": d.pcsPicked, "PCS Packed": d.pcsPacked,
+            "PCS Put Away": d.pcsPutAway, "Total PCS": total, "PCS/Hour": d.hrs > 0.05 ? Math.round(total / d.hrs) : 0
+          };
+        }).sort((a, b) => b["Total PCS"] - a["Total PCS"]));
+      }
+    } catch (e) { showToast("Load failed", "err"); }
+    setLoading(false);
+  }, [token, profile.warehouse_id]);
+
+  useEffect(() => { loadReport(reportType); }, [reportType, loadReport]);
+
+  const exportCurrent = () => {
+    if (rows.length === 0) return;
+    const headers = Object.keys(rows[0]);
+    exportCSV(`${reportType}.csv`, headers, rows.map(r => headers.map(h => r[h])));
   };
 
   return (
     <div>
       <SectionTitle title="Reports" />
       <div style={S.panel}>
-        <div style={S.panelTitle}>Generate Report</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <select style={{ ...S.input, minWidth: 240 }} value={reportType} onChange={e => setReportType(e.target.value)}>
-            {REPORT_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+        <div style={S.panelTitle}>Select report</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <select style={{ ...S.input, minWidth: 260 }} value={reportType} onChange={e => setReportType(e.target.value)}>
+            {REPORTS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
           </select>
-          {currentOption?.dateScoped && (
-            <>
-              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-              <span style={{ color: "#8A8272" }}>to</span>
-              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
-            </>
-          )}
-          <button style={S.primaryBtnSm} onClick={handleExport} disabled={exporting}>{exporting ? "Generating…" : "⬇ Export CSV"}</button>
+          <button style={S.primaryBtnSm} onClick={exportCurrent} disabled={rows.length === 0}>⬇ Export CSV</button>
+          {rows.length > 0 && <span style={{ color: "#6B6355", fontSize: 12 }}>{rows.length} rows</span>}
         </div>
-        <div style={{ color: "#8A8272", fontSize: 11, marginTop: 10 }}>
-          {reportType === "inventory_bin_ledger" && "Bin-wise on-hand stock — current snapshot."}
-          {reportType === "inventory_ledger" && "Product-wise aggregate stock (on hand, reserved, available) — current snapshot."}
-          {reportType === "order_dump" && "Full line-item level order export for the selected date range (based on Received Date)."}
-          {reportType === "grn_report" && "GRN + line-item detail for the selected date range (based on GRN Created Date)."}
-          {reportType === "user_productivity" && "Staff-wise PCS handled (Picked/Packed/Put Away), hours worked, and PCS/Hour for the selected date range."}
-        </div>
+      </div>
+      <div style={S.panel}>
+        {loading ? <EmptyNote text="Loading…" /> : rows.length === 0 ? <EmptyNote text="Is report ke liye koi data nahi mila." /> : (
+          <table>
+            <thead><tr>{Object.keys(rows[0]).map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows.slice(0, 200).map((r, i) => (
+                <tr key={i}>{Object.keys(rows[0]).map(h => <td key={h} style={S.td}>{String(r[h])}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {rows.length > 200 && <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Sirf pehli 200 rows dikhai gayi hain — poora data Export CSV mein milega ({rows.length} total).</div>}
       </div>
     </div>
   );
 }
+
 
 /* ================= BULK IMPORT UTILITIES ================= */
 async function parseSheet(file) {
