@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Mughal Warehousing — Receiving & Putaway</title>
+<title>Mughal Fulfillment Warehouse — Receiving & Putaway</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
@@ -137,6 +137,7 @@ function App() {
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={profile} showToast={showToast} />}
           {view === "pna" && ["admin", "warehouse_lead"].includes(profile.role) && <PnaView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "kpi" && <KPIView token={session.token} profile={profile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -160,7 +161,7 @@ function LoginScreen({ onLogin, error }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <span style={{ fontSize: 22 }}>📦</span>
           <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#E8E6E1" }}>
-            MUGHAL<span style={{ color: "#F5A623" }}> WAREHOUSING</span>
+            MUGHAL<span style={{ color: "#F5A623" }}> FULFILLMENT WAREHOUSE</span>
           </span>
         </div>
         <div style={{ color: "#9098A8", fontSize: 13, marginBottom: 22 }}>Receiving & Putaway console</div>
@@ -187,14 +188,15 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "orders", label: "Sales Orders", icon: "🧾" },
     { id: "picking", label: "Picking", icon: "🛒" },
     { id: "packing", label: "Packing", icon: "🏷" },
-    { id: "dispatch", label: "Dispatch", icon: "🚚" }
+    { id: "dispatch", label: "Dispatch", icon: "🚚" },
+    { id: "kpi", label: "My KPI", icon: "📈" }
   ];
   const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
     : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "pna", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -209,7 +211,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     <div style={S.sidebar} className={`depotos-sidebar${sidebarOpen ? " open" : ""}`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "20px 16px 24px" }}>
         <span style={{ fontSize: 16 }}>📦</span>
-        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>WAREHOUSING</span></span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>FULFILLMENT WAREHOUSE</span></span>
       </div>
       <div style={{ flex: 1, overflowY: "auto" }}>
         {visibleItems.map(it => {
@@ -439,7 +441,7 @@ function DashboardView({ token, profile, setView, showToast }) {
     <div>
       <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL WAREHOUSING</div>
+          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL FULFILLMENT WAREHOUSE</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -4892,6 +4894,320 @@ function PnaView({ token, profile, showToast }) {
 }
 
 /* ================= CHANGE PASSWORD (self-service, all roles) ================= */
+/* ================= KPI — Staff KPI Framework ================= */
+function KPIView({ token, profile, showToast }) {
+  const [targets, setTargets] = useState([]);
+  const [profiles, setProfiles] = useState({});
+  const [scores, setScores] = useState([]);
+  const [receivingCard, setReceivingCard] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const isManager = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
+  const [selectedRole, setSelectedRole] = useState("all");
+
+  const RATING_BANDS = [
+    { min: 90, label: "Excellent", color: "#4CAF7D" },
+    { min: 75, label: "Good", color: "#5B9EE8" },
+    { min: 60, label: "Average", color: "#F5A623" },
+    { min: 0, label: "Below Expectation", color: "#E5484D" }
+  ];
+  const ratingFor = (score) => RATING_BANDS.find(b => score >= b.min);
+
+  const PACKER_TIERS = [
+    { min: 70, label: "Top Performer", tag: "Best of Best", color: "#D9A441" },
+    { min: 55, label: "Exceeds Expectation", tag: "Above Target", color: "#4CAF7D" },
+    { min: 40, label: "Meets Expectation", tag: "Target Met", color: "#5B9EE8" },
+    { min: 0, label: "Needs Improvement", tag: "Below Target", color: "#E5484D" }
+  ];
+  const tierFor = (ordersPerDay) => PACKER_TIERS.find(t => ordersPerDay >= t.min);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [tg, profs, pickTasksAll, pickLinesRaw, packTasksAll, putawayAll, pnaAll, shortageAll,
+          returnsAll, returnLinesAll, loadSheetsAll, ordersAll, holidayRows, grnAll, grnLinesAll, rtvAll] = await Promise.all([
+          sb(`/rest/v1/kpi_targets?select=*`, { token }),
+          sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
+          sb(`/rest/v1/pick_task_lines?select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token }),
+          sb(`/rest/v1/pna_records?select=*`, { token }),
+          sb(`/rest/v1/order_shortage_lines?select=*`, { token }),
+          sb(`/rest/v1/returns?select=*`, { token }),
+          sb(`/rest/v1/return_lines?select=*`, { token }),
+          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/holidays?select=*`, { token }),
+          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/grn_lines?select=*`, { token }),
+          sb(`/rest/v1/rtv_returns?select=*`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
+        setProfiles(profMap);
+        setTargets(tg || []);
+        const targetsByRole = {};
+        for (const t of tg || []) { if (!targetsByRole[t.role]) targetsByRole[t.role] = []; targetsByRole[t.role].push(t); }
+        const holidayDates = new Set((holidayRows || []).map(h => new Date(h.holiday_date).toDateString()));
+        const effDays = (start, end) => {
+          let days = Math.floor((new Date(end.toDateString()) - new Date(start.toDateString())) / 86400000);
+          const cur = new Date(start);
+          for (let i = 0; i < days; i++) { cur.setDate(cur.getDate() + 1); if (holidayDates.has(cur.toDateString())) days--; }
+          return days;
+        };
+
+        // ---- Receiving (warehouse-wide card, not per-individual — no dedicated role in this system) ----
+        const totalGrnLines = (grnLinesAll || []).length;
+        const glIdsWithRtv = new Set((rtvAll || []).map(r => r.grn_line_id));
+        const mismatchedLines = (grnLinesAll || []).filter(l => glIdsWithRtv.has(l.id)).length;
+        setReceivingCard(totalGrnLines > 0 ? {
+          receiving_accuracy: ((totalGrnLines - mismatchedLines) / totalGrnLines) * 100,
+          discrepancy_rate: (mismatchedLines / totalGrnLines) * 100
+        } : null);
+
+        // ---- Per-staff metric accumulators ----
+        const staff = {};
+        const ensure = (uid) => {
+          if (!staff[uid]) staff[uid] = { metrics: {}, ordersPackedByDay: {} };
+          return staff[uid];
+        };
+
+        // Putaway Officer
+        const pwByOfficer = {};
+        for (const t of putawayAll || []) {
+          if (!t.assigned_to) continue;
+          if (!pwByOfficer[t.assigned_to]) pwByOfficer[t.assigned_to] = [];
+          pwByOfficer[t.assigned_to].push(t);
+        }
+        for (const [uid, tasks] of Object.entries(pwByOfficer)) {
+          const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
+          const totalHrs = withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000, 0);
+          const cycleTimes = withTimes.map(t => (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000);
+          const u = ensure(uid);
+          u.metrics.putaway_productivity = totalHrs > 0.05 ? tasks.length / totalHrs : null;
+          u.metrics.putaway_cycle_time = cycleTimes.length ? cycleTimes.reduce((a, b) => a + b, 0) / cycleTimes.length : null;
+        }
+        // Bin-Location Error Rate (approximate attribution: most recent putaway into that bin+product before the PNA was raised)
+        const pwSorted = [...(putawayAll || [])].filter(t => t.bin_id && t.completed_at).sort((a, b) => new Date(a.completed_at) - new Date(b.completed_at));
+        const officerPnaCount = {}, officerPlacementCount = {};
+        for (const t of pwSorted) { if (t.assigned_to) officerPlacementCount[t.assigned_to] = (officerPlacementCount[t.assigned_to] || 0) + 1; }
+        for (const r of pnaAll || []) {
+          const candidates = pwSorted.filter(t => t.bin_id === r.original_bin_id && t.product_id === r.product_id && new Date(t.completed_at) <= new Date(r.reported_at));
+          const attributed = candidates[candidates.length - 1];
+          if (attributed && attributed.assigned_to) officerPnaCount[attributed.assigned_to] = (officerPnaCount[attributed.assigned_to] || 0) + 1;
+        }
+        for (const uid of Object.keys(officerPlacementCount)) {
+          const u = ensure(uid);
+          u.metrics.bin_location_error_rate = ((officerPnaCount[uid] || 0) / officerPlacementCount[uid]) * 100;
+        }
+
+        // Picker
+        const pkByPicker = {};
+        for (const t of pickTasksAll || []) {
+          if (!t.assigned_to) continue;
+          if (!pkByPicker[t.assigned_to]) pkByPicker[t.assigned_to] = [];
+          pkByPicker[t.assigned_to].push(t);
+        }
+        const pickerOrderTotal = {}, pickerShortOrders = {};
+        for (const r of [...(pnaAll || []).map(x => ({ order_id: x.order_id, by: x.reported_by }))]) {
+          if (r.by && r.order_id) { if (!pickerShortOrders[r.by]) pickerShortOrders[r.by] = new Set(); pickerShortOrders[r.by].add(r.order_id); }
+        }
+        for (const [uid, tasks] of Object.entries(pkByPicker)) {
+          const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
+          const totalHrs = withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000, 0);
+          const lineCount = (pickLinesRaw || []).filter(l => tasks.some(t => t.id === l.pick_task_id)).length;
+          const avgAssignMin = withTimes.length ? withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 60000, 0) / withTimes.length : null;
+          const u = ensure(uid);
+          u.metrics.picking_productivity = totalHrs > 0.05 ? lineCount / totalHrs : null;
+          u.metrics.assign_to_pick_time = avgAssignMin;
+          pickerOrderTotal[uid] = tasks.length;
+          u.metrics.short_pick_rate = tasks.length > 0 ? ((pickerShortOrders[uid]?.size || 0) / tasks.length) * 100 : null;
+        }
+
+        // Packer
+        for (const t of packTasksAll || []) {
+          if (!t.assigned_to || !t.completed_at) continue;
+          const u = ensure(t.assigned_to);
+          const day = new Date(t.completed_at).toDateString();
+          u.ordersPackedByDay[day] = (u.ordersPackedByDay[day] || 0) + 1;
+        }
+        for (const uid of Object.keys(staff)) {
+          const days = Object.values(staff[uid].ordersPackedByDay || {});
+          if (days.length > 0) staff[uid].metrics.packing_volume = days.reduce((a, b) => a + b, 0) / days.length;
+        }
+
+        // Dispatcher
+        const lsByDispatcher = {};
+        for (const ls of loadSheetsAll || []) {
+          if (!ls.created_by) continue;
+          if (!lsByDispatcher[ls.created_by]) lsByDispatcher[ls.created_by] = [];
+          lsByDispatcher[ls.created_by].push(ls);
+        }
+        for (const [uid, sheets] of Object.entries(lsByDispatcher)) {
+          const orderIds = sheets.flatMap(s => s.order_ids || []);
+          const relevantOrders = (ordersAll || []).filter(o => orderIds.includes(o.id) && o.received_at && o.dispatched_at);
+          let onTime = 0;
+          for (const o of relevantOrders) { if (effDays(new Date(o.received_at), new Date(o.dispatched_at)) <= 1) onTime++; }
+          const u = ensure(uid);
+          u.metrics.on_time_dispatch = relevantOrders.length ? (onTime / relevantOrders.length) * 100 : null;
+        }
+
+        // Returns Agent
+        const returnsByAgent = {};
+        for (const r of returnsAll || []) {
+          if (!r.processed_by) continue;
+          if (!returnsByAgent[r.processed_by]) returnsByAgent[r.processed_by] = [];
+          returnsByAgent[r.processed_by].push(r);
+        }
+        for (const [uid, list] of Object.entries(returnsByAgent)) {
+          const durations = list.filter(r => r.received_at && r.processed_at).map(r => (new Date(r.processed_at) - new Date(r.received_at)) / 3600000);
+          const u = ensure(uid);
+          u.metrics.returns_processing_time = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+          const damagedLines = (returnLinesAll || []).filter(l => list.some(r => r.id === l.return_id) && l.condition === "damaged");
+          u.metrics.damage_documentation_rate = damagedLines.length ? 100 : null; // logged automatically by design
+        }
+        // Returns Backlog (warehouse-wide, not per-agent — backlog is a queue state, not individual)
+        const pendingReturns = (returnsAll || []).filter(r => r.status === "pending");
+        const oldPending = pendingReturns.filter(r => (Date.now() - new Date(r.received_at)) / 3600000 > 48);
+        const backlogRate = pendingReturns.length ? (oldPending.length / pendingReturns.length) * 100 : 0;
+        for (const uid of Object.keys(returnsByAgent)) ensure(uid).metrics.returns_backlog = backlogRate;
+
+        // Warehouse Lead / Supervisor (warehouse-wide metrics, shown on their own row)
+        const totalPwLines = (putawayAll || []).length;
+        const invAccuracy = totalPwLines > 0 ? (1 - (pnaAll || []).length / totalPwLines) * 100 : null;
+        const dispatchedAll = (ordersAll || []).filter(o => o.received_at && o.dispatched_at);
+        let onTimeAll = 0;
+        for (const o of dispatchedAll) { if (effDays(new Date(o.received_at), new Date(o.dispatched_at)) <= 1) onTimeAll++; }
+        const fulfillment24 = dispatchedAll.length ? (onTimeAll / dispatchedAll.length) * 100 : null;
+        for (const p of profs || []) {
+          if (["warehouse_lead", "supervisor"].includes(p.role)) {
+            const u = ensure(p.id);
+            u.metrics.inventory_accuracy = invAccuracy;
+            u.metrics.fulfillment_24hr = fulfillment24;
+          }
+        }
+
+        // ---- Combine into weighted scores per staff ----
+        const result = [];
+        for (const p of profs || []) {
+          const role = p.role;
+          const roleTargets = targetsByRole[role] || [];
+          if (roleTargets.length === 0) continue;
+          const u = staff[p.id] || { metrics: {} };
+          const metricRows = [];
+          let weightedSum = 0, weightUsed = 0;
+          for (const t of roleTargets) {
+            const val = u.metrics[t.metric_key];
+            let achievementPct = null;
+            if (t.computable && val != null && !isNaN(val)) {
+              if (t.target_direction === "gte") achievementPct = Math.min(100, (val / t.target_value) * 100);
+              else achievementPct = val <= t.target_value ? 100 : Math.max(0, 100 - ((val - t.target_value) / t.target_value) * 100);
+              weightedSum += achievementPct * t.weight;
+              weightUsed += t.weight;
+            }
+            metricRows.push({ ...t, value: val, achievementPct });
+          }
+          const score = weightUsed > 0 ? weightedSum / weightUsed : null;
+          result.push({
+            userId: p.id, name: p.full_name, role,
+            metrics: metricRows, score, rating: score != null ? ratingFor(score) : null,
+            packerTier: role === "packer" && u.metrics.packing_volume != null ? tierFor(u.metrics.packing_volume) : null,
+            packingVolume: u.metrics.packing_volume
+          });
+        }
+        setScores(result.sort((a, b) => (b.score || 0) - (a.score || 0)));
+      } catch (e) { showToast("KPI load failed", "err"); }
+      setLoading(false);
+    })();
+  }, [token, profile.warehouse_id]);
+
+  const visibleScores = isManager
+    ? scores.filter(s => selectedRole === "all" || s.role === selectedRole)
+    : scores.filter(s => s.userId === profile.id);
+
+  const fmtVal = (v, unit) => v == null ? "—" : `${v.toFixed(1)}${unit === "%" ? "%" : " " + unit}`;
+
+  return (
+    <div>
+      <SectionTitle title="Staff KPI Framework" />
+      {loading ? <EmptyNote text="Loading…" /> : (
+        <>
+          {receivingCard && isManager && (
+            <div style={S.panel}>
+              <div style={S.panelTitle}>Receiving / GRN — Warehouse-Wide</div>
+              <div style={{ color: "#8A8272", fontSize: 10, marginBottom: 10 }}>GRN entry is an Admin/Warehouse Lead action in this system, not a dedicated staff role — shown warehouse-wide.</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+                <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: receivingCard.receiving_accuracy >= 98 ? "#4CAF7D" : "#E5484D" }}>{receivingCard.receiving_accuracy.toFixed(1)}%</div>
+                  <div style={{ color: "#6B6355", fontSize: 11 }}>Receiving Accuracy (target ≥98%)</div>
+                </div>
+                <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: receivingCard.discrepancy_rate <= 2 ? "#4CAF7D" : "#E5484D" }}>{receivingCard.discrepancy_rate.toFixed(1)}%</div>
+                  <div style={{ color: "#6B6355", fontSize: 11 }}>Discrepancy Rate (target ≤2%)</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isManager && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+              {["all", "putaway_officer", "picker", "packer", "dispatcher", "returns_agent", "warehouse_lead", "supervisor"].map(r => (
+                <button key={r} onClick={() => setSelectedRole(r)} style={{ ...S.pill, ...(selectedRole === r ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>{ROLE_LABEL_GLOBAL[r] || r}</button>
+              ))}
+            </div>
+          )}
+
+          {visibleScores.map(s => (
+            <div key={s.userId} style={S.panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 16, color: "#2B2620" }}>{s.name}</div>
+                  <div style={{ color: "#6B6355", fontSize: 11 }}>{ROLE_LABEL_GLOBAL[s.role] || s.role}</div>
+                </div>
+                {s.score != null ? (
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 24, fontWeight: 700, color: s.rating.color }}>{s.score.toFixed(0)}</div>
+                    <div style={{ fontSize: 11, color: s.rating.color, fontWeight: 600 }}>{s.rating.label}</div>
+                  </div>
+                ) : <div style={{ color: "#8A8272", fontSize: 12 }}>Not enough data yet</div>}
+              </div>
+
+              {s.packerTier && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#F4EFE6", borderRadius: 8, border: `1px solid ${s.packerTier.color}` }}>
+                  <span style={{ color: s.packerTier.color, fontWeight: 700, fontSize: 12 }}>{s.packerTier.tag}</span>
+                  <span style={{ color: "#6B6355", fontSize: 12, marginLeft: 8 }}>{s.packingVolume.toFixed(1)} orders/day avg — {s.packerTier.label}</span>
+                </div>
+              )}
+
+              <table style={{ marginTop: 10 }}>
+                <thead><tr><th style={S.th}>Metric</th><th style={S.th}>Target</th><th style={S.th}>Actual</th><th style={S.th}>Weight</th><th style={S.th}>Achievement</th></tr></thead>
+                <tbody>
+                  {s.metrics.map(m => (
+                    <tr key={m.metric_key}>
+                      <td style={S.td}>{m.metric_name}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{m.target_direction === "gte" ? "≥" : "≤"}{m.target_value}{m.unit}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>
+                        {!m.computable ? <span style={{ color: "#8A8272", fontStyle: "italic" }}>Not tracked yet</span> : fmtVal(m.value, m.unit)}
+                      </td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{m.weight}%</td>
+                      <td style={S.td}>
+                        {m.achievementPct != null
+                          ? <span style={{ color: m.achievementPct >= 100 ? "#4CAF7D" : m.achievementPct >= 75 ? "#F5A623" : "#E5484D", fontWeight: 600 }}>{m.achievementPct.toFixed(0)}%</span>
+                          : <span style={{ color: "#8A8272" }}>—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+          {visibleScores.length === 0 && <EmptyNote text="Is role ke liye abhi koi KPI data nahi hai." />}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ChangePasswordView({ token, showToast }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
