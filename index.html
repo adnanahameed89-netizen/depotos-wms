@@ -661,13 +661,13 @@ function ProductsView({ token, profile, showToast }) {
     if (!form.barcode.trim() || !form.name.trim()) { showToast("Barcode aur Product name zaroori hain", "err"); return; }
     try {
       const barcode = cleanCode(form.barcode);
-      await sb(`/rest/v1/products`, {
-        method: "POST", token, prefer: "return=representation",
+      await sb(`/rest/v1/products?on_conflict=sku`, {
+        method: "POST", token, prefer: "resolution=merge-duplicates,return=representation",
         body: { sku: barcode, barcode, name: form.name.trim(), category: form.category.trim() || null, department: form.department.trim() || "Default", sales_price: form.sales_price ? Number(form.sales_price) : null, image_url: form.image_url.trim() || null }
       });
       setForm({ barcode: "", name: "", category: "", department: "Default", sales_price: "", image_url: "" });
-      showToast("Product added"); load();
-    } catch (e) { showToast("Could not add — barcode may already exist", "err"); }
+      showToast("Product saved (naya ya existing update)"); load();
+    } catch (e) { showToast("Save failed", "err"); }
   };
 
   const handleCatalogueFile = async (e) => {
