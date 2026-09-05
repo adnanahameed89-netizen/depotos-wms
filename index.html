@@ -281,18 +281,20 @@ function DashboardView({ token, profile, setView, showToast }) {
   useEffect(() => {
     const loadDashboard = async () => {
       try {
-        const [grns, putawayPending, orders, holidayRows] = await Promise.all([
+        const [grns, putawayPending, orders, holidayRows, unresolvedRtv] = await Promise.all([
           sb(`/rest/v1/grn?select=status`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.pending&select=qty,qty_completed`, { token }),
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/holidays?select=*&order=holiday_date.asc`, { token })
+          sb(`/rest/v1/holidays?select=*&order=holiday_date.asc`, { token }),
+          sb(`/rest/v1/rtv_returns?status=eq.pending&select=short_qty`, { token })
         ]);
         setHolidays(holidayRows || []);
         const holidayDates = new Set((holidayRows || []).map(h => new Date(h.holiday_date).toDateString()));
 
         const grnPending = (grns || []).filter(g => g.status !== "completed").length;
         const grnComplete = (grns || []).filter(g => g.status === "completed").length;
-        const pcsPendingPutaway = (putawayPending || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0);
+        const rtvPendingQty = (unresolvedRtv || []).reduce((s, r) => s + (r.short_qty || 0), 0);
+        const pcsPendingPutaway = (putawayPending || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0) + rtvPendingQty;
         const ordersCompleted = (orders || []).filter(o => ["dispatched", "handed_over"].includes(o.status)).length;
         const ordersPending = (orders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned", "incomplete"].includes(o.status)).length;
         setOverall({ grnPending, grnComplete, pcsPendingPutaway, ordersCompleted, ordersPending });
@@ -790,6 +792,8 @@ function ReceivingView({ token, profile, showToast }) {
   const [grnLineStats, setGrnLineStats] = useState({});
   const [grnStatus, setGrnStatus] = useState({}); // grn_id -> {status, totalQty, putawayQty}
   const [rpoRecords, setRpoRecords] = useState([]);
+  const [selectedRpos, setSelectedRpos] = useState({});
+  const [rpoBusy, setRpoBusy] = useState(false);
   const [statusTab, setStatusTab] = useState("all");
   const [selectedGrns, setSelectedGrns] = useState({});
   const [staff, setStaff] = useState([]);
@@ -865,6 +869,22 @@ function ReceivingView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+
+  const shipSelectedRpos = async () => {
+    const ids = Object.keys(selectedRpos).filter(k => selectedRpos[k]);
+    if (ids.length === 0) { showToast("Kam se kam ek RPO select karein", "err"); return; }
+    setRpoBusy(true);
+    try {
+      for (const id of ids) {
+        await sb(`/rest/v1/rtv_returns?id=eq.${id}`, { method: "PATCH", token, body: { status: "shipped", shipped_by: profile.id, shipped_at: new Date().toISOString() } });
+        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "rtv_return", entity_id: id, user_id: profile.id, action: "shipped_to_vendor" } });
+      }
+      showToast(`${ids.length} RPO(s) marked shipped`);
+      setSelectedRpos({});
+      load();
+    } catch (e) { showToast("Ship action failed", "err"); }
+    setRpoBusy(false);
+  };
 
   const bulkAssignPutaway = async () => {
     const ids = Object.keys(selectedGrns).filter(k => selectedGrns[k]);
@@ -1135,12 +1155,27 @@ function ReceivingView({ token, profile, showToast }) {
 
       {statusTab === "rpo" ? (
         <div style={S.panel}>
-          <div style={S.panelTitle}>RPO / Shortage transactions — physical vs GRN qty mismatch</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={S.panelTitle}>RPO / Shortage transactions — physical vs GRN qty mismatch</div>
+            {canManageGrn && (
+              <button style={S.primaryBtnSm} onClick={shipSelectedRpos} disabled={rpoBusy}>
+                {rpoBusy ? "Processing…" : `✓ Mark as Shipped (${Object.values(selectedRpos).filter(Boolean).length})`}
+              </button>
+            )}
+          </div>
           <table>
-            <thead><tr><th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Expected</th><th style={S.th}>Short</th><th style={S.th}>Reason</th><th style={S.th}>By</th><th style={S.th}>Date</th></tr></thead>
+            <thead><tr>
+              {canManageGrn && <th style={S.th}><input type="checkbox" onChange={e => setSelectedRpos(Object.fromEntries(rpoRecords.filter(r => r.status !== "shipped").map(r => [r.id, e.target.checked])))} /></th>}
+              <th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Expected</th><th style={S.th}>Short</th><th style={S.th}>Reason</th><th style={S.th}>By</th><th style={S.th}>Date</th><th style={S.th}>Status</th>
+            </tr></thead>
             <tbody>
               {rpoRecords.map(r => (
                 <tr key={r.id}>
+                  {canManageGrn && (
+                    <td style={S.td}>
+                      {r.status !== "shipped" && <input type="checkbox" checked={!!selectedRpos[r.id]} onChange={e => setSelectedRpos({ ...selectedRpos, [r.id]: e.target.checked })} />}
+                    </td>
+                  )}
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.rpo_number || "—"}</td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{r.grnNumber}</td>
                   <td style={S.td}>{r.product?.name || "—"}</td>
@@ -1149,9 +1184,14 @@ function ReceivingView({ token, profile, showToast }) {
                   <td style={{ ...S.td, color: "#6B6355" }}>{r.reason}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{r.createdByName}</td>
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
+                  <td style={S.td}>
+                    {r.status === "shipped"
+                      ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Shipped</span>
+                      : <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Pending</span>}
+                  </td>
                 </tr>
               ))}
-              {rpoRecords.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi RPO/shortage record nahi hai." /></td></tr>}
+              {rpoRecords.length === 0 && <tr><td colSpan={canManageGrn ? 10 : 9}><EmptyNote text="Koi RPO/shortage record nahi hai." /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -1398,13 +1438,23 @@ function PutawayView({ token, profile, showToast }) {
         if (m) maxSerial = Math.max(maxSerial, parseInt(m[1], 10));
       }
       const rpoNumber = `RPO-${String(maxSerial + 1).padStart(5, "0")}`;
-      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber } });
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber, status: "pending" } });
       const newRequired = matchedTask.qty - qty;
       const done = (matchedTask.qty_completed || 0) >= newRequired;
       await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
         method: "PATCH", token,
         body: done ? { qty: newRequired, status: "completed", completed_at: new Date().toISOString() } : { qty: newRequired }
       });
+      // Shrink the GRN line's own required qty too — otherwise the GRN summary (Total Qty) never
+      // accounts for this accepted shortage and the GRN stays "Partial" forever.
+      if (matchedTask.grn_line_id) {
+        const glRows = await sb(`/rest/v1/grn_lines?id=eq.${matchedTask.grn_line_id}&select=*`, { token });
+        const gl = glRows && glRows[0];
+        if (gl) {
+          const newExpected = Math.max(0, gl.qty_expected - qty);
+          await sb(`/rest/v1/grn_lines?id=eq.${matchedTask.grn_line_id}`, { method: "PATCH", token, body: { qty_expected: newExpected, qty_received: Math.min(gl.qty_received, newExpected) } });
+        }
+      }
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty, rpo_number: rpoNumber } } });
       showToast(`${rpoNumber} created — ${qty} pcs recorded`);
       setMatchedTaskId(null); setShortageOpen(false); setShortageQty("");
@@ -1497,9 +1547,15 @@ function PutawayView({ token, profile, showToast }) {
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
             {!isPieceMode && <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>}
+            {isPieceMode && matchedBinId && matchedRemaining > 0 && (
+              <button style={{ ...S.secondaryBtnSm, color: "#5B9EE8", borderColor: "#5B9EE8" }} onClick={() => setMatchedBinId("")}>🔄 Change Location (naya bin ke liye)</button>
+            )}
             <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Physical item nahi mila (RTV)</button>
             <button style={S.secondaryBtnSm} onClick={() => { setMatchedTaskId(null); setMatchedBinId(""); setShortageOpen(false); }}>Cancel</button>
           </div>
+          {isPieceMode && matchedBinId && matchedRemaining > 0 && (
+            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 4 }}>⚠ Agar baaki pieces kisi doosri location par rakhne hain, to product dobara scan karne se PEHLE "Change Location" dabayein, phir nayi location scan karein.</div>
+          )}
           {shortageOpen && (
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, width: 140 }} placeholder={`Short qty (max ${matchedRemaining})`} value={shortageQty} onChange={e => setShortageQty(e.target.value)} />
@@ -1609,9 +1665,9 @@ function InventoryView({ token, profile, showToast }) {
 
   const loadAll = useCallback(async () => {
       const [inv, res, prods, binList, putaway] = await Promise.all([
-        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=*`, { token }),
+        sb(`/rest/v1/products?select=*&limit=20000`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
       ]);
@@ -1704,14 +1760,14 @@ function InventoryView({ token, profile, showToast }) {
     return Object.entries(byProduct).map(([productId, onHand]) => {
       const res = reserved[productId] || 0;
       return { productId, onHand, reserved: res, available: onHand - res };
-    }).filter(r => {
+    }).filter(r => r.onHand > 0).filter(r => {
       const p = products[r.productId];
       if (!q) return true;
       return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
     }).sort((a, b) => (products[b.productId]?.name || "").localeCompare(products[a.productId]?.name || ""));
   })();
 
-  const binRows = rows.filter(r => {
+  const binRows = rows.filter(r => r.on_hand > 0).filter(r => {
     const p = products[r.product_id];
     if (!q) return true;
     return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
@@ -4003,8 +4059,8 @@ function ReportsView({ token, profile, showToast }) {
     try {
       if (key === "inventory_ledger") {
         const [inv, products, reserved, putaway] = await Promise.all([
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/products?select=*`, { token }),
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
+          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
           sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.asc`, { token })
         ]);
@@ -4018,15 +4074,15 @@ function ReportsView({ token, profile, showToast }) {
         }
         const byProduct = {};
         for (const row of inv || []) byProduct[row.product_id] = (byProduct[row.product_id] || 0) + row.on_hand;
-        setRows(Object.entries(byProduct).map(([pid, onHand]) => {
+        setRows(Object.entries(byProduct).filter(([, onHand]) => onHand > 0).map(([pid, onHand]) => {
           const p = prodMap[pid]; const res = resMap[pid] || 0;
           const aging = computeAgingDays(onHand, putawayByProduct[pid]);
           return { "Barcode": p?.barcode || "—", "Product": p?.name || "—", "On Hand": onHand, "Reserved": res, "Available": onHand - res, "Aging (days)": aging != null ? aging : "—" };
         }));
       } else if (key === "inventory_bin_ledger") {
         const [inv, products, bins, putaway] = await Promise.all([
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/products?select=*`, { token }),
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
+          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
         ]);
