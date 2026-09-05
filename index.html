@@ -3456,6 +3456,20 @@ function DispatchView({ token, profile, showToast }) {
                 w.document.close();
                 w.print();
               }}>🖨 Print</button>
+              <button style={S.secondaryBtnSm} onClick={async () => {
+                const ids = ls.order_ids || [];
+                const os = ids.length ? await sb(`/rest/v1/sales_orders?id=in.(${ids.join(",")})&select=*`, { token }) : [];
+                let text = `📦 Load Sheet: ${ls.load_sheet_number}\nCourier: ${ls.courier}\nDate: ${fmtTime(ls.created_at)}\nOrders: ${ids.length}\n\n`;
+                for (const o of os || []) {
+                  const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${o.id}&select=qty`, { token });
+                  const qty = (lines || []).reduce((s, l) => s + l.qty, 0);
+                  text += `${o.external_order_id} — ${o.raw_data?.customer_order_number || o.raw_data?.customer || "—"} (${qty} pcs)\n`;
+                }
+                if (navigator.share) {
+                  try { await navigator.share({ title: `Load Sheet ${ls.load_sheet_number}`, text }); return; } catch (e) { /* user cancelled or unsupported — fall through */ }
+                }
+                window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank");
+              }}>📱 Share</button>
               {!handedOver && ["admin", "warehouse_lead"].includes(profile.role) && (
                 <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => setHandoverModal(ls)}>✓ Confirm Handover</button>
               )}
