@@ -5086,13 +5086,31 @@ function KPIView({ token, profile, showToast }) {
           }
         }
 
-        // ---- Combine into weighted scores per staff ----
+        // ---- Combine into weighted scores per staff — scored by ACTUAL capacity performed ----
+        // (not just the single role stored on their profile, since one person can genuinely do
+        // more than one job — e.g. the same user acting as both Returns Agent and Putaway Officer)
+        const capacityPairs = []; // {uid, capacityRole}
+        for (const uid of Object.keys(pwByOfficer)) capacityPairs.push({ uid, capacityRole: "putaway_officer" });
+        for (const uid of Object.keys(pkByPicker)) capacityPairs.push({ uid, capacityRole: "picker" });
+        for (const uid of Object.keys(staff)) { if (Object.keys(staff[uid].ordersPackedByDay || {}).length > 0) capacityPairs.push({ uid, capacityRole: "packer" }); }
+        for (const uid of Object.keys(lsByDispatcher)) capacityPairs.push({ uid, capacityRole: "dispatcher" });
+        for (const uid of Object.keys(returnsByAgent)) capacityPairs.push({ uid, capacityRole: "returns_agent" });
+        for (const p of profs || []) { if (["warehouse_lead", "supervisor"].includes(p.role)) capacityPairs.push({ uid: p.id, capacityRole: p.role }); }
+        // dedupe (a uid could appear more than once for the same capacity via different source maps — not expected, but safe)
+        const seenPairs = new Set();
+        const uniquePairs = capacityPairs.filter(cp => {
+          const key = `${cp.uid}|${cp.capacityRole}`;
+          if (seenPairs.has(key)) return false;
+          seenPairs.add(key); return true;
+        });
+
         const result = [];
-        for (const p of profs || []) {
-          const role = p.role;
-          const roleTargets = targetsByRole[role] || [];
+        for (const { uid, capacityRole } of uniquePairs) {
+          const p = profMap[uid];
+          if (!p) continue; // task assigned to a user outside this warehouse's profile list
+          const roleTargets = targetsByRole[capacityRole] || [];
           if (roleTargets.length === 0) continue;
-          const u = staff[p.id] || { metrics: {} };
+          const u = staff[uid] || { metrics: {} };
           const metricRows = [];
           let weightedSum = 0, weightUsed = 0;
           for (const t of roleTargets) {
@@ -5108,9 +5126,9 @@ function KPIView({ token, profile, showToast }) {
           }
           const score = weightUsed > 0 ? weightedSum / weightUsed : null;
           result.push({
-            userId: p.id, name: p.full_name, role,
+            userId: uid, name: p.full_name, role: capacityRole,
             metrics: metricRows, score, rating: score != null ? ratingFor(score) : null,
-            packerTier: role === "packer" && u.metrics.packing_volume != null ? tierFor(u.metrics.packing_volume) : null,
+            packerTier: capacityRole === "packer" && u.metrics.packing_volume != null ? tierFor(u.metrics.packing_volume) : null,
             packingVolume: u.metrics.packing_volume
           });
         }
