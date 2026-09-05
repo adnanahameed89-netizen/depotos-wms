@@ -3069,6 +3069,7 @@ function PackingView({ token, profile, showToast }) {
   const [damageQty, setDamageQty] = useState("");
   const [damageBinId, setDamageBinId] = useState("");
   const [staff, setStaff] = useState([]);
+  const [viewOnly, setViewOnly] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -3131,6 +3132,18 @@ function PackingView({ token, profile, showToast }) {
       const fresh = await sb(`/rest/v1/totes?id=eq.${tote.id}&select=*`, { token });
       const row = fresh && fresh[0];
       if (!row) { showToast("Tote nahi mila", "err"); return; }
+      const isPacker = profile.role === "packer";
+
+      if (!isPacker) {
+        // Admin / Warehouse Lead / Supervisor: view-only monitoring — never claims or changes the lock,
+        // so the actual packer's assignment is never disturbed just by someone checking progress.
+        const pickTasks = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&select=order_id,tote_bin_number`, { token });
+        setBinNumMap(Object.fromEntries((pickTasks || []).map(pt => [pt.order_id, pt.tote_bin_number])));
+        setOpenTote(row);
+        setViewOnly(true);
+        return;
+      }
+
       if (row.locked_by && row.locked_by !== profile.id) {
         showToast("Yeh tote pehle se kisi aur packer ke paas process ho rahi hai", "err");
         return;
@@ -3141,6 +3154,7 @@ function PackingView({ token, profile, showToast }) {
       const pickTasks = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&select=order_id,tote_bin_number`, { token });
       setBinNumMap(Object.fromEntries((pickTasks || []).map(pt => [pt.order_id, pt.tote_bin_number])));
       setOpenTote({ ...row, locked_by: profile.id });
+      setViewOnly(false);
     } catch (e) { showToast("Tote open nahi ho saki", "err"); }
   };
 
@@ -3288,11 +3302,17 @@ function PackingView({ token, profile, showToast }) {
     return (
       <div>
         <SectionTitle title={`${openTote.tote_number} — ${toteTasks.length} orders to pack`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenTote(null)}>← Back</button>} />
+        {viewOnly && (
+          <div style={{ ...S.panel, borderColor: "#5B9EE8", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={{ color: "#5B9EE8", fontWeight: 700, fontSize: 13 }}>👁 Monitoring — View Only</span>
+            <span style={{ color: "#6B6355", fontSize: 12 }}>{openTote.locked_by ? "Currently being packed" : "Not yet claimed by a packer"}</span>
+          </div>
+        )}
         <div style={S.cardGrid}>
           {toteTasks.map(t => {
             const o = orders[t.order_id];
             return (
-              <div key={t.id} style={S.card} onClick={() => openPack(t)}>
+              <div key={t.id} style={{ ...S.card, cursor: viewOnly ? "default" : "pointer", opacity: viewOnly ? 0.85 : 1 }} onClick={() => { if (!viewOnly) openPack(t); }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Bin #{binNumMap[t.order_id] || "?"}</span>
                   <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Ready to pack</span>
