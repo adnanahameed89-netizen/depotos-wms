@@ -795,6 +795,7 @@ function ReceivingView({ token, profile, showToast }) {
   const [selectedRpos, setSelectedRpos] = useState({});
   const [rpoBusy, setRpoBusy] = useState(false);
   const [statusTab, setStatusTab] = useState("all");
+  const [rpoSubTab, setRpoSubTab] = useState("pending");
   const [selectedGrns, setSelectedGrns] = useState({});
   const [staff, setStaff] = useState([]);
   const [bulkOfficerId, setBulkOfficerId] = useState("");
@@ -820,7 +821,8 @@ function ReceivingView({ token, profile, showToast }) {
           ...r,
           grnNumber: glMap[r.grn_line_id] ? grnMap2[glMap[r.grn_line_id].grn_id]?.grn_number : "—",
           product: prodMap[r.product_id],
-          createdByName: profMap[r.created_by]?.full_name || "—"
+          createdByName: profMap[r.created_by]?.full_name || "—",
+          shippedByName: profMap[r.shipped_by]?.full_name || "—"
         })));
       } else setRpoRecords([]);
       const ids = (g || []).map(x => x.id);
@@ -1155,45 +1157,68 @@ function ReceivingView({ token, profile, showToast }) {
 
       {statusTab === "rpo" ? (
         <div style={S.panel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
             <div style={S.panelTitle}>RPO / Shortage transactions — physical vs GRN qty mismatch</div>
-            {canManageGrn && (
-              <button style={S.primaryBtnSm} onClick={shipSelectedRpos} disabled={rpoBusy}>
-                {rpoBusy ? "Processing…" : `✓ Mark as Shipped (${Object.values(selectedRpos).filter(Boolean).length})`}
-              </button>
-            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setRpoSubTab("pending")} style={{ ...S.pill, ...(rpoSubTab === "pending" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Pending ({rpoRecords.filter(r => r.status !== "shipped").length})</button>
+              <button onClick={() => setRpoSubTab("processed")} style={{ ...S.pill, ...(rpoSubTab === "processed" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Processed ({rpoRecords.filter(r => r.status === "shipped").length})</button>
+            </div>
           </div>
-          <table>
-            <thead><tr>
-              {canManageGrn && <th style={S.th}><input type="checkbox" onChange={e => setSelectedRpos(Object.fromEntries(rpoRecords.filter(r => r.status !== "shipped").map(r => [r.id, e.target.checked])))} /></th>}
-              <th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Expected</th><th style={S.th}>Short</th><th style={S.th}>Reason</th><th style={S.th}>By</th><th style={S.th}>Date</th><th style={S.th}>Status</th>
-            </tr></thead>
-            <tbody>
-              {rpoRecords.map(r => (
-                <tr key={r.id}>
-                  {canManageGrn && (
-                    <td style={S.td}>
-                      {r.status !== "shipped" && <input type="checkbox" checked={!!selectedRpos[r.id]} onChange={e => setSelectedRpos({ ...selectedRpos, [r.id]: e.target.checked })} />}
-                    </td>
-                  )}
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.rpo_number || "—"}</td>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{r.grnNumber}</td>
-                  <td style={S.td}>{r.product?.name || "—"}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.expected_qty}</td>
-                  <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.short_qty}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.reason}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{r.createdByName}</td>
-                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
-                  <td style={S.td}>
-                    {r.status === "shipped"
-                      ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Shipped</span>
-                      : <span style={{ ...S.badgeSm, color: "#F5A623", borderColor: "#F5A623" }}>Pending</span>}
-                  </td>
-                </tr>
-              ))}
-              {rpoRecords.length === 0 && <tr><td colSpan={canManageGrn ? 10 : 9}><EmptyNote text="Koi RPO/shortage record nahi hai." /></td></tr>}
-            </tbody>
-          </table>
+
+          {rpoSubTab === "pending" ? (
+            <>
+              {canManageGrn && (
+                <div style={{ marginBottom: 10 }}>
+                  <button style={S.primaryBtnSm} onClick={shipSelectedRpos} disabled={rpoBusy || Object.values(selectedRpos).filter(Boolean).length === 0}>
+                    {rpoBusy ? "Processing…" : `✓ Mark as Shipped (${Object.values(selectedRpos).filter(Boolean).length})`}
+                  </button>
+                </div>
+              )}
+              <table>
+                <thead><tr>
+                  {canManageGrn && <th style={S.th}><input type="checkbox" onChange={e => setSelectedRpos(Object.fromEntries(rpoRecords.filter(r => r.status !== "shipped").map(r => [r.id, e.target.checked])))} /></th>}
+                  <th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Expected</th><th style={S.th}>Short</th><th style={S.th}>Reason</th><th style={S.th}>By</th><th style={S.th}>Date</th>
+                </tr></thead>
+                <tbody>
+                  {rpoRecords.filter(r => r.status !== "shipped").map(r => (
+                    <tr key={r.id}>
+                      {canManageGrn && (
+                        <td style={S.td}><input type="checkbox" checked={!!selectedRpos[r.id]} onChange={e => setSelectedRpos({ ...selectedRpos, [r.id]: e.target.checked })} /></td>
+                      )}
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.rpo_number || "—"}</td>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{r.grnNumber}</td>
+                      <td style={S.td}>{r.product?.name || "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{r.expected_qty}</td>
+                      <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.short_qty}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{r.reason}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{r.createdByName}</td>
+                      <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
+                    </tr>
+                  ))}
+                  {rpoRecords.filter(r => r.status !== "shipped").length === 0 && <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="Koi pending RPO/shortage nahi hai." /></td></tr>}
+                </tbody>
+              </table>
+            </>
+          ) : (
+            <table>
+              <thead><tr><th style={S.th}>RPO #</th><th style={S.th}>GRN #</th><th style={S.th}>Product</th><th style={S.th}>Short</th><th style={S.th}>Reported By</th><th style={S.th}>Reported</th><th style={S.th}>Shipped By</th><th style={S.th}>Shipped At</th></tr></thead>
+              <tbody>
+                {rpoRecords.filter(r => r.status === "shipped").map(r => (
+                  <tr key={r.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.rpo_number || "—"}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>{r.grnNumber}</td>
+                    <td style={S.td}>{r.product?.name || "—"}</td>
+                    <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.short_qty}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{r.createdByName}</td>
+                    <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
+                    <td style={{ ...S.td, color: "#4CAF7D" }}>{r.shippedByName}</td>
+                    <td style={{ ...S.td, color: "#4CAF7D", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{r.shipped_at ? fmtTime(r.shipped_at) : "—"}</td>
+                  </tr>
+                ))}
+                {rpoRecords.filter(r => r.status === "shipped").length === 0 && <tr><td colSpan={8}><EmptyNote text="Abhi tak koi RPO ship nahi hui." /></td></tr>}
+              </tbody>
+            </table>
+          )}
         </div>
       ) : (
       <div style={S.panel}>
@@ -1438,7 +1463,7 @@ function PutawayView({ token, profile, showToast }) {
         if (m) maxSerial = Math.max(maxSerial, parseInt(m[1], 10));
       }
       const rpoNumber = `RPO-${String(maxSerial + 1).padStart(5, "0")}`;
-      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber, status: "pending" } });
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber, status: "pending", grn_adjusted: true } });
       const newRequired = matchedTask.qty - qty;
       const done = (matchedTask.qty_completed || 0) >= newRequired;
       await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
