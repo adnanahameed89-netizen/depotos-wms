@@ -136,6 +136,7 @@ function App() {
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "pna" && ["admin", "warehouse_lead"].includes(profile.role) && <PnaView token={session.token} profile={profile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -188,8 +189,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "packing", label: "Packing", icon: "🏷" },
     { id: "dispatch", label: "Dispatch", icon: "🚚" }
   ];
-  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
   const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "damage", "reports", "bins", "totemaster", "users"];
@@ -2772,9 +2773,23 @@ function PickingView({ token, profile, showToast }) {
     const remaining = group.required - group.scanned;
     if (remaining <= 0) return;
     try {
-      const altRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${group.product_id}&bin_id=neq.${group.bin_id}&on_hand=gt.0&select=*`, { token });
-      const alt = (altRows || []).sort((a, b) => b.on_hand - a.on_hand)[0];
       const openRefs = group.refs.filter(r => r.allocated < r.qty_required);
+
+      // ALWAYS park the original (now-untrusted) location's qty into PNA-HOLD, tagged with who
+      // reported it — the picker moving to a different bin doesn't make the original discrepancy
+      // go away; Warehouse Lead still needs to verify/trace it separately.
+      let pnaParked = false;
+      const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
+      const pnaBin = pnaBinRows && pnaBinRows[0];
+      if (pnaBin) {
+        await addOnHand(token, profile.warehouse_id, group.product_id, group.bin_id, -remaining);
+        await addOnHand(token, profile.warehouse_id, group.product_id, pnaBin.id, remaining);
+        await sb(`/rest/v1/pna_records`, { method: "POST", token, body: { product_id: group.product_id, original_bin_id: group.bin_id, qty: remaining, order_id: openRefs[0]?.order_id || null, reported_by: profile.id, status: "pending" } });
+        pnaParked = true;
+      }
+
+      const altRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${group.product_id}&bin_id=neq.${group.bin_id}&on_hand=gt.0&select=*`, { token });
+      const alt = (altRows || []).filter(r => r.bin_id !== pnaBin?.id).sort((a, b) => b.on_hand - a.on_hand)[0];
 
       if (alt) {
         const existingIdx = consolidated.findIndex(g2 => g2.bin_id === alt.bin_id && g2.product_id === group.product_id);
@@ -2784,9 +2799,11 @@ function PickingView({ token, profile, showToast }) {
         } else {
           consolidated.push({ bin_id: alt.bin_id, product_id: group.product_id, required: remaining, scanned: 0, refs: openRefs.map(r => ({ ...r })) });
         }
-        group.required = group.scanned; // close out this location — fully relocated
+        group.required = group.scanned; // close out this location — job continues from the alternate bin
         setConsolidated([...consolidated]);
-        showToast(`📍 Product doosri location par mila — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein`);
+        showToast(pnaParked
+          ? `📍 Doosri location mil gayi (Bin ${bins[alt.bin_id]?.code || "?"}) se pick karein — original location ka discrepancy PNA-HOLD mein park ho gaya, ${profile.full_name} ke naam se`
+          : `📍 Doosri location mil gayi — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein`);
       } else {
         const affectedOrders = new Set();
         for (const ref of openRefs) {
@@ -2799,7 +2816,9 @@ function PickingView({ token, profile, showToast }) {
         }
         group.required = group.scanned; // let this location's shortfall resolve without blocking
         setConsolidated([...consolidated]);
-        showToast("⚠ Koi aur location nahi mili — shortage record ho gaya, Admin ko Incomplete Orders mein nazar aayega", "err");
+        showToast(pnaParked
+          ? `⚠ Koi aur location nahi mili — order shortage record hui, ${remaining} pcs PNA-HOLD mein park ho gaye ${profile.full_name} ke naam se`
+          : "⚠ Shortage record ho gaya — lekin PNA-HOLD bin set up nahi hai, Admin ko batayein", "err");
         // shortage-resolved orders may now be "done" (with a shortfall) — check and send to packing
         const lineStatus = buildLineStatus();
         for (const orderId of affectedOrders) {
@@ -2888,7 +2907,7 @@ function PickingView({ token, profile, showToast }) {
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{activeGroup.scanned} / {activeGroup.required}</div>
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportNotFound(activeGroup)}>❌ Not found here</button>
+              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportNotFound(activeGroup)}>❌ Mark PNA (yahan nahi mila)</button>
               <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={() => setShowDamageInput(s => !s)}>⚠ Mark Damaged</button>
             </div>
             {showDamageInput && (
@@ -4721,6 +4740,152 @@ function DamageView({ token, profile, showToast }) {
             {visible.length === 0 && <tr><td colSpan={9}><EmptyNote text="Koi record nahi hai." /></td></tr>}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= PNA — Product Not Available reconciliation (Admin/Warehouse Lead) ================= */
+function PnaView({ token, profile, showToast }) {
+  const [pnaSubTab, setPnaSubTab] = useState("pending");
+  const [records, setRecords] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [resolveTarget, setResolveTarget] = useState(null); // record being resolved
+  const [resolveBinCode, setResolveBinCode] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [pna, b, profs, orders] = await Promise.all([
+        sb(`/rest/v1/pna_records?select=*&order=reported_at.desc`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/profiles?select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+      ]);
+      setBins(b || []);
+      const binMap = Object.fromEntries((b || []).map(x => [x.id, x]));
+      const profMap = Object.fromEntries((profs || []).map(x => [x.id, x]));
+      const orderMap = Object.fromEntries((orders || []).map(x => [x.id, x]));
+      const productIds = [...new Set((pna || []).map(r => r.product_id))];
+      const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+      setRecords((pna || []).map(r => ({
+        ...r, product: prodMap[r.product_id],
+        originalBinCode: binMap[r.original_bin_id]?.code || "—",
+        resolvedBinCode: binMap[r.resolved_bin_id]?.code || "—",
+        reporterName: profMap[r.reported_by]?.full_name || "—",
+        resolverName: profMap[r.resolved_by]?.full_name || "—",
+        orderRef: orderMap[r.order_id]?.external_order_id || "—"
+      })));
+    } catch (e) { showToast("Load failed", "err"); }
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { load(); }, [load]);
+
+  const transferToSaleable = async () => {
+    if (!resolveTarget) return;
+    const bin = bins.find(b => b.code.toLowerCase() === resolveBinCode.trim().toLowerCase());
+    if (!bin) { showToast("Bin code sahi enter karein", "err"); return; }
+    setBusy(true);
+    try {
+      const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
+      const pnaBin = pnaBinRows && pnaBinRows[0];
+      if (pnaBin) await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, pnaBin.id, -resolveTarget.qty);
+      await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, bin.id, resolveTarget.qty);
+      await sb(`/rest/v1/pna_records?id=eq.${resolveTarget.id}`, { method: "PATCH", token, body: { status: "transferred", resolved_bin_id: bin.id, resolved_by: profile.id, resolved_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pna_record", entity_id: resolveTarget.id, user_id: profile.id, action: "transferred_to_saleable", metadata: { bin: bin.code, qty: resolveTarget.qty } } });
+      showToast(`✓ ${resolveTarget.qty} pcs saleable stock mein transfer ho gaye — Bin ${bin.code}`);
+      setResolveTarget(null); setResolveBinCode(""); load();
+    } catch (e) { showToast("Transfer failed", "err"); }
+    setBusy(false);
+  };
+
+  const writeOff = async (r) => {
+    setBusy(true);
+    try {
+      const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
+      const pnaBin = pnaBinRows && pnaBinRows[0];
+      if (pnaBin) await addOnHand(token, profile.warehouse_id, r.product_id, pnaBin.id, -r.qty);
+      const strNumber = `STR-PNA-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
+      await sb(`/rest/v1/pna_records?id=eq.${r.id}`, { method: "PATCH", token, body: { status: "written_off", str_number: strNumber, resolved_by: profile.id, resolved_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pna_record", entity_id: r.id, user_id: profile.id, action: "written_off", metadata: { str_number: strNumber, qty: r.qty } } });
+      showToast(`${strNumber} — written off`);
+      load();
+    } catch (e) { showToast("Write-off failed", "err"); }
+    setBusy(false);
+  };
+
+  const pending = records.filter(r => r.status === "pending");
+  const resolved = records.filter(r => r.status !== "pending");
+
+  return (
+    <div>
+      <SectionTitle title="PNA — Product Not Available" />
+      <div style={S.panel}>
+        <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 14 }}>
+          Picking ke doran jo item apni system-batayi location par nahi mila, uski qty yahan <b>PNA-HOLD</b> bin mein park hoti hai —
+          taake physically verify kiya ja sake. Agar item kisi doosri bin mein mil jaye, "Transfer to Saleable" se sahi bin mein bhej dein.
+          Agar genuinely nahi mila, "Write Off" se STR bana kar permanently hata dein.
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button onClick={() => setPnaSubTab("pending")} style={{ ...S.pill, ...(pnaSubTab === "pending" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Pending ({pending.length})</button>
+          <button onClick={() => setPnaSubTab("resolved")} style={{ ...S.pill, ...(pnaSubTab === "resolved" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Resolved ({resolved.length})</button>
+        </div>
+
+        {pnaSubTab === "pending" ? (
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Original Bin</th><th style={S.th}>Order</th><th style={S.th}>Reported By</th><th style={S.th}>Date</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {pending.map(r => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.product?.barcode || "—"}</td>
+                  <td style={S.td}>{r.product?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{r.qty}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.originalBinCode}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{r.orderRef}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.reporterName}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.reported_at)}</td>
+                  <td style={S.td}>
+                    {resolveTarget?.id === r.id ? (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input style={{ ...S.input, width: 110, padding: "4px 8px" }} placeholder="Bin code" value={resolveBinCode} onChange={e => setResolveBinCode(e.target.value)} />
+                        <button style={S.primaryBtnSm} disabled={busy} onClick={transferToSaleable}>✓</button>
+                        <button style={S.secondaryBtnSm} onClick={() => setResolveTarget(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button style={S.secondaryBtnSm} onClick={() => { setResolveTarget(r); setResolveBinCode(""); }}>📍 Transfer to Saleable</button>
+                        <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} disabled={busy} onClick={() => writeOff(r)}>Write Off</button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {pending.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi pending PNA record nahi hai." /></td></tr>}
+            </tbody>
+          </table>
+        ) : (
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Status</th><th style={S.th}>Resolved Bin</th><th style={S.th}>Resolved By</th><th style={S.th}>Resolved At</th><th style={S.th}>STR #</th></tr></thead>
+            <tbody>
+              {resolved.map(r => (
+                <tr key={r.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.product?.barcode || "—"}</td>
+                  <td style={S.td}>{r.product?.name || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.qty}</td>
+                  <td style={S.td}>
+                    {r.status === "transferred"
+                      ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Transferred</span>
+                      : <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Written Off</span>}
+                  </td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.status === "transferred" ? r.resolvedBinCode : "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.resolverName}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{r.resolved_at ? fmtTime(r.resolved_at) : "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number || "—"}</td>
+                </tr>
+              ))}
+              {resolved.length === 0 && <tr><td colSpan={8}><EmptyNote text="Abhi tak koi PNA resolve nahi hua." /></td></tr>}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
