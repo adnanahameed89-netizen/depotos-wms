@@ -877,11 +877,21 @@ function ReceivingView({ token, profile, showToast }) {
     if (ids.length === 0) { showToast("Kam se kam ek RPO select karein", "err"); return; }
     setRpoBusy(true);
     try {
+      let successCount = 0;
       for (const id of ids) {
-        await sb(`/rest/v1/rtv_returns?id=eq.${id}`, { method: "PATCH", token, body: { status: "shipped", shipped_by: profile.id, shipped_at: new Date().toISOString() } });
-        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "rtv_return", entity_id: id, user_id: profile.id, action: "shipped_to_vendor" } });
+        const result = await sb(`/rest/v1/rtv_returns?id=eq.${id}`, { method: "PATCH", token, prefer: "return=representation", body: { status: "shipped", shipped_by: profile.id, shipped_at: new Date().toISOString() } });
+        if (result && result.length > 0) {
+          successCount++;
+          await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "rtv_return", entity_id: id, user_id: profile.id, action: "shipped_to_vendor" } });
+        }
       }
-      showToast(`${ids.length} RPO(s) marked shipped`);
+      if (successCount === ids.length) {
+        showToast(`${successCount} RPO(s) marked shipped`);
+      } else if (successCount > 0) {
+        showToast(`${successCount}/${ids.length} shipped — baaki fail hue, dobara try karein`, "err");
+      } else {
+        showToast("Ship action failed — koi record update nahi hua (permission check karein)", "err");
+      }
       setSelectedRpos({});
       load();
     } catch (e) { showToast("Ship action failed", "err"); }
@@ -3058,15 +3068,18 @@ function PackingView({ token, profile, showToast }) {
   const [showDamageInput, setShowDamageInput] = useState(false);
   const [damageQty, setDamageQty] = useState("");
   const [damageBinId, setDamageBinId] = useState("");
+  const [staff, setStaff] = useState([]);
 
   const load = useCallback(async () => {
     try {
-      const [t, o, tt, b] = await Promise.all([
+      const [t, o, tt, b, s] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token }),
-        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
+      setStaff(s || []);
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
       setTotes(tt || []);
@@ -3074,6 +3087,11 @@ function PackingView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (openTote || openTask) return; // don't poll while actively packing — avoid disrupting scan flow
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, [load, openTote, openTask]);
 
   const openPack = async (task) => {
     const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${task.order_id}&select=*`, { token });
@@ -3313,15 +3331,21 @@ function PackingView({ token, profile, showToast }) {
           <button style={S.secondaryBtnSm} onClick={() => openByOrderNumber()}>Open</button>
         </div>
       </div>
-      <SectionTitle title="Totes ready for packing" />
+      <SectionTitle title="Totes ready for packing" action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status — 15s auto-refresh</span>} />
       <div style={S.cardGrid}>
         {totes.map(tt => {
           const count = tasks.filter(t => t.tote_id === tt.id).length;
+          const lockedByProfile = tt.locked_by ? staff.find(s => s.id === tt.locked_by) : null;
           return (
             <div key={tt.id} style={S.card} onClick={() => scanTote(tt.tote_number)}>
               <span>🧺</span>
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
               <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
+              {lockedByProfile ? (
+                <div style={{ color: "#E5484D", fontSize: 11, marginTop: 6, fontWeight: 600 }}>🔒 In Progress — {lockedByProfile.full_name}</div>
+              ) : (
+                <div style={{ color: "#4CAF7D", fontSize: 11, marginTop: 6, fontWeight: 600 }}>🟢 Available</div>
+              )}
             </div>
           );
         })}
