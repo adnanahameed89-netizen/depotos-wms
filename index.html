@@ -5090,12 +5090,19 @@ function KPIView({ token, profile, showToast }) {
   const [selectedRole, setSelectedRole] = useState("all");
 
   const RATING_BANDS = [
-    { min: 90, label: "Excellent", color: "#4CAF7D" },
-    { min: 75, label: "Good", color: "#5B9EE8" },
-    { min: 60, label: "Average", color: "#F5A623" },
-    { min: 0, label: "Below Expectation", color: "#E5484D" }
+    { min: 97, label: "Outstanding", color: "#4CAF7D" },
+    { min: 90, label: "Good", color: "#5B9EE8" },
+    { min: 80, label: "Average", color: "#F5A623" },
+    { min: 0, label: "Poor", color: "#E5484D" }
   ];
   const ratingFor = (score) => RATING_BANDS.find(b => score >= b.min);
+  const [reviewPeriod, setReviewPeriod] = useState(() => {
+    const d = new Date(); const q = Math.floor(d.getMonth() / 3) + 1;
+    return `${d.getFullYear()}-Q${q}`;
+  });
+  const [manualEntries, setManualEntries] = useState({}); // `${userId}|${metricKey}` -> {achievement_pct, id, version-ish}
+  const [savingManual, setSavingManual] = useState("");
+  const canEnterManual = ["admin", "warehouse_lead"].includes(profile.role);
 
   const PACKER_TIERS = [
     { min: 70, label: "Top Performer", tag: "Best of Best", color: "#D9A441" },
@@ -5109,8 +5116,8 @@ function KPIView({ token, profile, showToast }) {
     (async () => {
       setLoading(true);
       try {
-        const [tg, profs, pickTasksAll, pickLinesRaw, packTasksAll, putawayAll, pnaAll, shortageAll,
-          returnsAll, returnLinesAll, loadSheetsAll, ordersAll, holidayRows, grnAll, grnLinesAll, rtvAll] = await Promise.all([
+        const [tg, profs, pickTasksAll, pickLinesAll, packTasksAll, putawayAll, pnaAll, shortageAll,
+          returnsAll, returnLinesAll, loadSheetsAll, ordersAll, holidayRows, grnAll, grnLinesAll, rtvAll, manualAll] = await Promise.all([
           sb(`/rest/v1/kpi_targets?select=*`, { token }),
           sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
@@ -5126,8 +5133,11 @@ function KPIView({ token, profile, showToast }) {
           sb(`/rest/v1/holidays?select=*`, { token }),
           sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/grn_lines?select=*`, { token }),
-          sb(`/rest/v1/rtv_returns?select=*`, { token })
+          sb(`/rest/v1/rtv_returns?select=*`, { token }),
+          sb(`/rest/v1/kpi_manual_entries?review_period=eq.${reviewPeriod}&select=*`, { token })
         ]);
+        const manualMap = Object.fromEntries((manualAll || []).map(m => [`${m.user_id}|${m.metric_key}`, m]));
+        setManualEntries(manualMap);
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
         setProfiles(profMap);
         setTargets(tg || []);
@@ -5200,13 +5210,13 @@ function KPIView({ token, profile, showToast }) {
         for (const [uid, tasks] of Object.entries(pkByPicker)) {
           const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
           const totalHrs = withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000, 0);
-          const lineCount = (pickLinesRaw || []).filter(l => tasks.some(t => t.id === l.pick_task_id)).length;
+          const lineCount = (pickLinesAll || []).filter(l => tasks.some(t => t.id === l.pick_task_id)).length;
           const avgAssignMin = withTimes.length ? withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 60000, 0) / withTimes.length : null;
           const u = ensure(uid);
           u.metrics.picking_productivity = totalHrs > 0.05 ? lineCount / totalHrs : null;
-          u.metrics.assign_to_pick_time = avgAssignMin;
-          pickerOrderTotal[uid] = tasks.length;
-          u.metrics.short_pick_rate = tasks.length > 0 ? ((pickerShortOrders[uid]?.size || 0) / tasks.length) * 100 : null;
+          u.metrics.pick_sla = avgAssignMin;
+          const shortRate = tasks.length > 0 ? ((pickerShortOrders[uid]?.size || 0) / tasks.length) * 100 : null;
+          u.metrics.picking_accuracy = shortRate != null ? 100 - shortRate : null;
         }
 
         // Packer
@@ -5218,7 +5228,7 @@ function KPIView({ token, profile, showToast }) {
         }
         for (const uid of Object.keys(staff)) {
           const days = Object.values(staff[uid].ordersPackedByDay || {});
-          if (days.length > 0) staff[uid].metrics.packing_volume = days.reduce((a, b) => a + b, 0) / days.length;
+          if (days.length > 0) staff[uid].metrics.packing_productivity = days.reduce((a, b) => a + b, 0) / days.length;
         }
 
         // Dispatcher
@@ -5257,19 +5267,38 @@ function KPIView({ token, profile, showToast }) {
         const backlogRate = pendingReturns.length ? (oldPending.length / pendingReturns.length) * 100 : 0;
         for (const uid of Object.keys(returnsByAgent)) ensure(uid).metrics.returns_backlog = backlogRate;
 
-        // Warehouse Lead / Supervisor (warehouse-wide metrics, shown on their own row)
+        // Warehouse Lead (Fulfillment Executive, approved framework) / Supervisor (old metric set, unchanged)
         const totalPwLines = (putawayAll || []).length;
         const invAccuracy = totalPwLines > 0 ? (1 - (pnaAll || []).length / totalPwLines) * 100 : null;
         const dispatchedAll = (ordersAll || []).filter(o => o.received_at && o.dispatched_at);
         let onTimeAll = 0;
         for (const o of dispatchedAll) { if (effDays(new Date(o.received_at), new Date(o.dispatched_at)) <= 1) onTimeAll++; }
         const fulfillment24 = dispatchedAll.length ? (onTimeAll / dispatchedAll.length) * 100 : null;
+        const shortageOrderIdsWl = new Set((shortageAll || []).map(s => s.order_id));
+        const allOrdersCount = (ordersAll || []).length;
+        const noShortageAllOrders = allOrdersCount ? ((ordersAll || []).filter(o => !shortageOrderIdsWl.has(o.id)).length / allOrdersCount) * 100 : null;
+        const dispatchedNoShortage = dispatchedAll.length ? (dispatchedAll.filter(o => !shortageOrderIdsWl.has(o.id)).length / dispatchedAll.length) * 100 : null;
         for (const p of profs || []) {
-          if (["warehouse_lead", "supervisor"].includes(p.role)) {
+          if (p.role === "supervisor") {
             const u = ensure(p.id);
             u.metrics.inventory_accuracy = invAccuracy;
             u.metrics.fulfillment_24hr = fulfillment24;
           }
+          if (p.role === "warehouse_lead") {
+            const u = ensure(p.id);
+            u.metrics.order_fill_rate = noShortageAllOrders;
+            u.metrics.dispatch_sla_24hr = fulfillment24;
+            u.metrics.fulfillment_accuracy = dispatchedNoShortage;
+          }
+        }
+
+        // Putaway Officer (Receiving Helper, approved framework) — Receiving Within Benchmark:
+        // % of putaway tasks completed within 24h of assignment
+        for (const [uid, tasks] of Object.entries(pwByOfficer)) {
+          const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
+          if (withTimes.length === 0) continue;
+          const within24 = withTimes.filter(t => (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 <= 24).length;
+          ensure(uid).metrics.receiving_benchmark = (within24 / withTimes.length) * 100;
         }
 
         // ---- Combine into weighted scores per staff — scored by ACTUAL capacity performed ----
@@ -5308,21 +5337,50 @@ function KPIView({ token, profile, showToast }) {
               weightedSum += achievementPct * t.weight;
               weightUsed += t.weight;
             }
-            metricRows.push({ ...t, value: val, achievementPct });
+            const manual = manualMap[`${uid}|${t.metric_key}`];
+            if (!t.computable && manual) {
+              achievementPct = manual.achievement_pct;
+              weightedSum += achievementPct * t.weight;
+              weightUsed += t.weight;
+            }
+            metricRows.push({ ...t, value: val, achievementPct, manualValue: manual ? manual.achievement_pct : null });
           }
           const score = weightUsed > 0 ? weightedSum / weightUsed : null;
           result.push({
             userId: uid, name: p.full_name, role: capacityRole,
             metrics: metricRows, score, rating: score != null ? ratingFor(score) : null,
-            packerTier: capacityRole === "packer" && u.metrics.packing_volume != null ? tierFor(u.metrics.packing_volume) : null,
-            packingVolume: u.metrics.packing_volume
+            packerTier: capacityRole === "packer" && u.metrics.packing_productivity != null ? tierFor(u.metrics.packing_productivity) : null,
+            packingVolume: u.metrics.packing_productivity
           });
         }
         setScores(result.sort((a, b) => (b.score || 0) - (a.score || 0)));
       } catch (e) { showToast("KPI load failed", "err"); }
       setLoading(false);
     })();
-  }, [token, profile.warehouse_id]);
+  }, [token, profile.warehouse_id, reviewPeriod]);
+
+  const saveManualEntry = async (userId, metricKey, value) => {
+    const num = Number(value);
+    if (isNaN(num) || num < 0 || num > 100) { showToast("0-100 ke darmiyan number enter karein", "err"); return; }
+    const key = `${userId}|${metricKey}`;
+    setSavingManual(key);
+    try {
+      await sb(`/rest/v1/kpi_manual_entries`, {
+        method: "POST", token, prefer: "resolution=merge-duplicates",
+        body: { user_id: userId, metric_key: metricKey, review_period: reviewPeriod, achievement_pct: num, entered_by: profile.id }
+      });
+      showToast("Saved");
+      setManualEntries(prev => ({ ...prev, [key]: { achievement_pct: num } }));
+      setScores(prev => prev.map(s => s.userId !== userId ? s : (() => {
+        const metrics = s.metrics.map(m => m.metric_key !== metricKey ? m : { ...m, achievementPct: num, manualValue: num });
+        let weightedSum = 0, weightUsed = 0;
+        for (const m of metrics) { if (m.achievementPct != null) { weightedSum += m.achievementPct * m.weight; weightUsed += m.weight; } }
+        const score = weightUsed > 0 ? weightedSum / weightUsed : null;
+        return { ...s, metrics, score, rating: score != null ? ratingFor(score) : null };
+      })()));
+    } catch (e) { showToast("Save failed — pehle SQL migration chalayein (kpi_manual_entries)", "err"); }
+    setSavingManual("");
+  };
 
   const visibleScores = isManager
     ? scores.filter(s => selectedRole === "all" || s.role === selectedRole)
@@ -5332,7 +5390,12 @@ function KPIView({ token, profile, showToast }) {
 
   return (
     <div>
-      <SectionTitle title="Staff KPI Framework" />
+      <SectionTitle title="Staff KPI Framework" action={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: "#6B6355", fontSize: 12 }}>Review Period:</span>
+          <input style={{ ...S.input, width: 100, padding: "6px 10px" }} value={reviewPeriod} onChange={e => setReviewPeriod(e.target.value)} placeholder="2026-Q3" />
+        </div>
+      } />
       {loading ? <EmptyNote text="Loading…" /> : (
         <>
           {receivingCard && isManager && (
@@ -5390,7 +5453,14 @@ function KPIView({ token, profile, showToast }) {
                       <td style={S.td}>{m.metric_name}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{m.target_direction === "gte" ? "≥" : "≤"}{m.target_value}{m.unit}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>
-                        {!m.computable ? <span style={{ color: "#8A8272", fontStyle: "italic" }}>Not tracked yet</span> : fmtVal(m.value, m.unit)}
+                        {m.computable ? fmtVal(m.value, m.unit) : (
+                          canEnterManual ? (
+                            <input type="number" min={0} max={100} placeholder="Enter %"
+                              defaultValue={m.manualValue != null ? m.manualValue : ""}
+                              style={{ ...S.input, width: 80, padding: "4px 8px", fontSize: 12 }}
+                              onBlur={e => { if (e.target.value !== "" && Number(e.target.value) !== m.manualValue) saveManualEntry(s.userId, m.metric_key, e.target.value); }} />
+                          ) : (m.manualValue != null ? <span>{m.manualValue}%</span> : <span style={{ color: "#8A8272", fontStyle: "italic" }}>Awaiting entry</span>)
+                        )}
                       </td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{m.weight}%</td>
                       <td style={S.td}>
@@ -5402,6 +5472,9 @@ function KPIView({ token, profile, showToast }) {
                   ))}
                 </tbody>
               </table>
+              {s.metrics.some(m => !m.computable) && (
+                <div style={{ color: "#8A8272", fontSize: 10, marginTop: 6 }}>⚠ Italic-marked metrics aate hain WMS ke bahar se (CS complaints, Audit Report, waghera) — Admin/Warehouse Lead is quarter ke liye % type kar sakte hain.</div>
+              )}
             </div>
           ))}
           {visibleScores.length === 0 && <EmptyNote text="Is role ke liye abhi koi KPI data nahi hai." />}
