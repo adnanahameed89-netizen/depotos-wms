@@ -271,6 +271,7 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [lbFrom, setLbFrom] = useState(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
   const [lbTo, setLbTo] = useState(new Date().toISOString().slice(0, 10));
   const [inboundOps, setInboundOps] = useState(null);
+  const [fulfillmentVelocity, setFulfillmentVelocity] = useState(null);
   const isAdmin = profile.role === "admin";
   const trendChartRef = useRef(null);
   const trendChartInstance = useRef(null);
@@ -374,6 +375,27 @@ function DashboardView({ token, profile, setView, showToast }) {
           pendingReceivingUnits: openLines.reduce((s, l) => s + Math.max(0, l.qty_expected - l.qty_received), 0),
           linesPendingPutaway: (putawayPendingIo || []).length,
           unitsPendingPutaway: (putawayPendingIo || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0)
+        });
+
+        // ---- Fulfillment Velocity (Today) ----
+        const [pickTasksFv, packTasksFv] = await Promise.all([
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token })
+        ]);
+        const todayStrFv = new Date().toDateString();
+        const avgOf = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+        const pickToday = (pickTasksFv || []).filter(t => t.completed_at && new Date(t.completed_at).toDateString() === todayStrFv);
+        const queueTimes = pickToday.filter(t => t.assigned_at && t.started_at).map(t => (new Date(t.started_at) - new Date(t.assigned_at)) / 60000);
+        const pickTimes = pickToday.filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
+        const packToday = (packTasksFv || []).filter(t => t.completed_at && new Date(t.completed_at).toDateString() === todayStrFv);
+        const packTimes = packToday.filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
+        const pickTaskByOrder = Object.fromEntries((pickTasksFv || []).map(t => [t.order_id, t]));
+        const allocToPacked = packToday.filter(t => pickTaskByOrder[t.order_id]?.assigned_at).map(t => (new Date(t.completed_at) - new Date(pickTaskByOrder[t.order_id].assigned_at)) / 3600000);
+        const backlogCutoff = new Date(Date.now() - 86400000);
+        const backlogCount = (orders || []).filter(o => o.received_at && new Date(o.received_at) < backlogCutoff && !["dispatched", "handed_over"].includes(o.status)).length;
+        setFulfillmentVelocity({
+          avgQueueMin: avgOf(queueTimes), avgPickMin: avgOf(pickTimes), avgPackMin: avgOf(packTimes),
+          avgAllocToPackedHrs: avgOf(allocToPacked), backlogCount
         });
       } catch (e) {}
     };
@@ -570,6 +592,38 @@ function DashboardView({ token, profile, setView, showToast }) {
           <canvas ref={trendChartRef}></canvas>
         </div>
       </div>
+
+      {fulfillmentVelocity && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Fulfillment Velocity — Today</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
+            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG QUEUE TIME</div>
+              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgQueueMin != null ? `${fulfillmentVelocity.avgQueueMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Assign → Pick Start</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PICK TIME</div>
+              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPickMin != null ? `${fulfillmentVelocity.avgPickMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Pick Start → Complete</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PACK TIME</div>
+              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPackMin != null ? `${fulfillmentVelocity.avgPackMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Pack Start → Complete</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ALLOCATED → PACKED</div>
+              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgAllocToPackedHrs != null ? `${fulfillmentVelocity.avgAllocToPackedHrs.toFixed(1)} hrs` : "—"}</div>
+              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Today's packed orders</div>
+            </div>
+            <div style={{ background: fulfillmentVelocity.backlogCount > 0 ? "#E5484D" : "#4CAF7D", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
+              <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>FULFILLMENT BACKLOG &gt;1D</div>
+              <div style={{ color: "#FFFFFF", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.backlogCount} orders</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {inboundOps && (
         <div style={S.panel}>
@@ -2862,7 +2916,7 @@ function PickingView({ token, profile, showToast }) {
     } catch (e) { showToast("Order finalize failed", "err"); }
   };
 
-  const scanToteBarcode = (codeArg) => {
+  const scanToteBarcode = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
@@ -2876,12 +2930,20 @@ function PickingView({ token, profile, showToast }) {
     }
     const ref = activeGroup.refs.find(r => r.allocated < r.qty_required);
     if (!ref) { showToast("Allocation error — dobara try karein", "err"); return; }
+    const orderAlreadyStarted = consolidated.some(g => g.refs.some(r => r.order_id === ref.order_id && r.allocated > 0));
     ref.allocated += 1;
     activeGroup.scanned += 1;
     setConsolidated([...consolidated]);
     setLastScannedProduct(p);
     const order = orders[ref.order_id];
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
+    if (!orderAlreadyStarted) {
+      const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
+      if (startTask && !startTask.started_at) {
+        startTask.started_at = new Date().toISOString();
+        sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}`, { method: "PATCH", token, body: { started_at: startTask.started_at } }).catch(() => {});
+      }
+    }
 
     // Check if THIS order's picking is now fully done — if so, send it to Packing right away
     const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
@@ -3854,6 +3916,15 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Mode change failed", "err"); }
   };
 
+  const changeRole = async (u, newRole) => {
+    if (newRole === u.role) return;
+    try {
+      await sb(`/rest/v1/profiles?id=eq.${u.id}`, { method: "PATCH", token, body: { role: newRole } });
+      showToast(`${u.full_name} → ${ROLE_LABEL[newRole] || newRole}`);
+      load();
+    } catch (e) { showToast("Role change failed", "err"); }
+  };
+
   const load = useCallback(async () => {
     try {
       const [u, w] = await Promise.all([
@@ -3952,6 +4023,18 @@ function UsersView({ token, profile, showToast }) {
             </div>
             <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {warehouses.find(w => w.id === u.warehouse_id)?.name || (u.role === "admin" ? "All warehouses" : "No warehouse set")}
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <div style={S.label}>ROLE</div>
+              <select style={{ ...S.input, fontSize: 12 }} value={u.role} onChange={e => changeRole(u, e.target.value)}>
+                <option value="picker">Picker</option>
+                <option value="packer">Packer</option>
+                <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
+                <option value="dispatcher">Dispatcher</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="warehouse_lead">Warehouse Lead</option>
+                <option value="admin">Admin</option>
+              </select>
             </div>
             <div style={{ marginTop: 10 }}>
               <div style={S.label}>PUTAWAY SCAN MODE</div>
