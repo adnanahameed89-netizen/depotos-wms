@@ -3100,7 +3100,10 @@ function PickingView({ token, profile, showToast }) {
           </div>
         </div>
 
-        {activeGroup ? (
+        {activeGroup ? (() => {
+          const nextRef = activeGroup.refs.find(r => r.allocated < r.qty_required);
+          const nextOrder = nextRef ? orders[nextRef.order_id] : null;
+          return (
           <div style={{ ...S.panel, borderColor: "#F5A623", borderWidth: 2 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={S.panelTitle}>📍 CURRENT STOP</div>
@@ -3119,6 +3122,15 @@ function PickingView({ token, profile, showToast }) {
               </div>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{activeGroup.scanned} / {activeGroup.required}</div>
             </div>
+            {nextRef && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, padding: "10px 14px", background: "#FFF7E8", borderRadius: 8, border: "1px dashed #F5A623" }}>
+                <span style={{ color: "#6B6355", fontSize: 12 }}>Scan karte hi rakhna hai → Order {nextOrder?.external_order_id}</span>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ color: "#8A8272", fontSize: 9, letterSpacing: 1 }}>TOTE BIN</div>
+                  <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#A6472F" }}>#{nextRef.toteBin || "?"}</div>
+                </div>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
               <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => reportNotFound(activeGroup)}>❌ Mark PNA (yahan nahi mila)</button>
               <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={() => setShowDamageInput(s => !s)}>⚠ Mark Damaged</button>
@@ -3130,7 +3142,8 @@ function PickingView({ token, profile, showToast }) {
               </div>
             )}
           </div>
-        ) : consolidated.length > 0 && (
+          );
+        })() : consolidated.length > 0 && (
           <div style={{ ...S.panel, borderColor: "#4CAF7D" }}>
             <div style={{ color: "#4CAF7D", fontSize: 15, fontFamily: "'Space Grotesk', sans-serif" }}>✅ Saari locations complete — neeche "Complete tote picking" dabayein</div>
           </div>
