@@ -182,7 +182,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: "🗂" },
     { id: "products", label: "Products", icon: "📦" },
-    { id: "receiving", label: "Receiving", icon: "⬇" },
+    { id: "receiving", label: "Inbound Ops", icon: "⬇" },
     { id: "putaway", label: "Putaway", icon: "📍" },
     { id: "inventory", label: "Inventory", icon: "🧰" },
     { id: "orders", label: "Sales Orders", icon: "🧾" },
@@ -196,7 +196,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
   const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "pna", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Receiving", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -592,7 +592,7 @@ function DashboardView({ token, profile, setView, showToast }) {
           <div style={S.panelTitle}>Inbound Ops</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
             <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("receiving")}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING STOCK ORDERS</div>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING GRN #</div>
               <div style={{ color: "#2B2620", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingStockOrders}</div>
             </div>
             <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("receiving")}>
