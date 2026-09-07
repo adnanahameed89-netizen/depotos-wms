@@ -73,7 +73,7 @@ async function login(email, password) {
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
-const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Inbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -1501,12 +1501,12 @@ function PutawayView({ token, profile, showToast }) {
       await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty);
       const newCompleted = (task.qty_completed || 0) + qty;
       const done = newCompleted >= task.qty;
-      await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, {
-        method: "PATCH", token,
-        body: done
-          ? { qty_completed: newCompleted, status: "completed", bin_id: binId, completed_at: new Date().toISOString() }
-          : { qty_completed: newCompleted, bin_id: binId }
-      });
+      const isFirstCommit = !(task.qty_completed > 0) && !task.started_at;
+      const body = done
+        ? { qty_completed: newCompleted, status: "completed", bin_id: binId, completed_at: new Date().toISOString() }
+        : { qty_completed: newCompleted, bin_id: binId };
+      if (isFirstCommit) body.started_at = new Date().toISOString();
+      await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: binId, qty, mode: putawayMode } } });
       return { done, newCompleted };
     } catch (e) { showToast("Putaway failed", "err"); return null; }
@@ -3906,11 +3906,10 @@ function UsersView({ token, profile, showToast }) {
           <select style={{ ...S.input, minWidth: 140 }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
             <option value="picker">Picker</option>
             <option value="packer">Packer</option>
-            <option value="putaway_officer">Putaway Officer</option>
+            <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
             <option value="dispatcher">Dispatcher</option>
             <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
-            <option value="returns_agent">Returns Agent</option>
             <option value="admin">Admin</option>
           </select>
           {form.role !== "admin" && (
@@ -4464,7 +4463,9 @@ function ReportsView({ token, profile, showToast }) {
         for (const t of putawayAll || []) {
           if (!t.assigned_to) continue;
           const u = ensure(t.assigned_to); u.pcsPutAway += (t.qty_completed || 0);
-          track(u, t.assigned_at, t.completed_at);
+          const hrs = (t.started_at && t.completed_at) ? (new Date(t.completed_at) - new Date(t.started_at)) / 3600000 : 0;
+          u.hrs += hrs;
+          track(u, t.started_at, t.completed_at);
         }
         setRows(Object.entries(agg).map(([uid, d]) => {
           const total = d.pcsPicked + d.pcsPacked + d.pcsPutAway;
@@ -5167,7 +5168,7 @@ function KPIView({ token, profile, showToast }) {
           return staff[uid];
         };
 
-        // Putaway Officer
+        // Putaway Officer (Inbound Officer: Receiving + Put Away + Returns)
         const pwByOfficer = {};
         for (const t of putawayAll || []) {
           if (!t.assigned_to) continue;
@@ -5175,25 +5176,25 @@ function KPIView({ token, profile, showToast }) {
           pwByOfficer[t.assigned_to].push(t);
         }
         for (const [uid, tasks] of Object.entries(pwByOfficer)) {
-          const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
-          const totalHrs = withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000, 0);
-          const cycleTimes = withTimes.map(t => (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000);
+          const withTimes = tasks.filter(t => t.started_at && t.completed_at);
+          const totalHrs = withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.started_at)) / 3600000, 0);
+          const totalPcs = withTimes.reduce((s, t) => s + (t.qty_completed || 0), 0);
           const u = ensure(uid);
-          u.metrics.putaway_productivity = totalHrs > 0.05 ? tasks.length / totalHrs : null;
-          u.metrics.putaway_cycle_time = cycleTimes.length ? cycleTimes.reduce((a, b) => a + b, 0) / cycleTimes.length : null;
+          u.metrics.putaway_productivity_pcs = totalHrs > 0.02 ? totalPcs / totalHrs : null;
+          u.metrics.putaway_cycle_time = withTimes.length ? withTimes.reduce((s, t) => s + (new Date(t.completed_at) - new Date(t.started_at)) / 3600000, 0) / withTimes.length : null;
         }
-        // Bin-Location Error Rate (approximate attribution: most recent putaway into that bin+product before the PNA was raised)
-        const pwSorted = [...(putawayAll || [])].filter(t => t.bin_id && t.completed_at).sort((a, b) => new Date(a.completed_at) - new Date(b.completed_at));
-        const officerPnaCount = {}, officerPlacementCount = {};
-        for (const t of pwSorted) { if (t.assigned_to) officerPlacementCount[t.assigned_to] = (officerPlacementCount[t.assigned_to] || 0) + 1; }
-        for (const r of pnaAll || []) {
-          const candidates = pwSorted.filter(t => t.bin_id === r.original_bin_id && t.product_id === r.product_id && new Date(t.completed_at) <= new Date(r.reported_at));
-          const attributed = candidates[candidates.length - 1];
-          if (attributed && attributed.assigned_to) officerPnaCount[attributed.assigned_to] = (officerPnaCount[attributed.assigned_to] || 0) + 1;
+        // Returns Processing Volume (pcs/day) — attributed to whoever processed the return
+        const returnsPcsByDay = {};
+        for (const r of returnsAll || []) {
+          if (!r.processed_by || !r.processed_at) continue;
+          const qty = (returnLinesAll || []).filter(l => l.return_id === r.id).reduce((s, l) => s + (l.qty || 0), 0);
+          const day = new Date(r.processed_at).toDateString();
+          if (!returnsPcsByDay[r.processed_by]) returnsPcsByDay[r.processed_by] = {};
+          returnsPcsByDay[r.processed_by][day] = (returnsPcsByDay[r.processed_by][day] || 0) + qty;
         }
-        for (const uid of Object.keys(officerPlacementCount)) {
-          const u = ensure(uid);
-          u.metrics.bin_location_error_rate = ((officerPnaCount[uid] || 0) / officerPlacementCount[uid]) * 100;
+        for (const [uid, days] of Object.entries(returnsPcsByDay)) {
+          const dayVals = Object.values(days);
+          if (dayVals.length) ensure(uid).metrics.returns_processing_volume = dayVals.reduce((a, b) => a + b, 0) / dayVals.length;
         }
 
         // Picker
@@ -5290,15 +5291,6 @@ function KPIView({ token, profile, showToast }) {
             u.metrics.dispatch_sla_24hr = fulfillment24;
             u.metrics.fulfillment_accuracy = dispatchedNoShortage;
           }
-        }
-
-        // Putaway Officer (Receiving Helper, approved framework) — Receiving Within Benchmark:
-        // % of putaway tasks completed within 24h of assignment
-        for (const [uid, tasks] of Object.entries(pwByOfficer)) {
-          const withTimes = tasks.filter(t => t.assigned_at && t.completed_at);
-          if (withTimes.length === 0) continue;
-          const within24 = withTimes.filter(t => (new Date(t.completed_at) - new Date(t.assigned_at)) / 3600000 <= 24).length;
-          ensure(uid).metrics.receiving_benchmark = (within24 / withTimes.length) * 100;
         }
 
         // ---- Combine into weighted scores per staff — scored by ACTUAL capacity performed ----
