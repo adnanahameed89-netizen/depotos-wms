@@ -38,6 +38,7 @@
     .depotos-content { padding: 14px 12px 60px !important; }
     .depotos-topbar { padding: 0 12px !important; }
     .depotos-statgrid { grid-template-columns: repeat(2, 1fr) !important; }
+    .depotos-gauge-row { grid-template-columns: 1fr !important; }
   }
 </style>
 </head>
@@ -271,6 +272,8 @@ function DashboardView({ token, profile, setView, showToast }) {
   const isAdmin = profile.role === "admin";
   const trendChartRef = useRef(null);
   const trendChartInstance = useRef(null);
+  const gaugeChartRef = useRef(null);
+  const gaugeChartInstance = useRef(null);
   const pickerChartRef = useRef(null);
   const pickerChartInstance = useRef(null);
   const packerChartRef = useRef(null);
@@ -360,9 +363,8 @@ function DashboardView({ token, profile, setView, showToast }) {
         })));
 
         // ---- Picker / Packer Leaderboards (all-time, top 10) ----
-        const [pickTasksLb, pickLinesLb, packTasksLb, profsLb] = await Promise.all([
+        const [pickTasksLb, packTasksLb, profsLb] = await Promise.all([
           sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
-          sb(`/rest/v1/pick_task_lines?select=*`, { token }),
           sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
           sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
         ]);
@@ -370,22 +372,19 @@ function DashboardView({ token, profile, setView, showToast }) {
         const pickByUser = {};
         for (const t of pickTasksLb || []) {
           if (!t.assigned_to) continue;
-          const qty = (pickLinesLb || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-          pickByUser[t.assigned_to] = (pickByUser[t.assigned_to] || 0) + qty;
+          pickByUser[t.assigned_to] = (pickByUser[t.assigned_to] || 0) + 1;
         }
         setPickerLeaderboard(Object.entries(pickByUser)
-          .map(([uid, qty]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty }))
+          .map(([uid, count]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty: count }))
           .filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty).slice(0, 10));
 
         const packByUser = {};
         for (const t of packTasksLb || []) {
           if (!t.assigned_to) continue;
-          let qty = 0;
-          try { const scans = JSON.parse(t.scans || "{}"); qty = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-          packByUser[t.assigned_to] = (packByUser[t.assigned_to] || 0) + qty;
+          packByUser[t.assigned_to] = (packByUser[t.assigned_to] || 0) + 1;
         }
         setPackerLeaderboard(Object.entries(packByUser)
-          .map(([uid, qty]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty }))
+          .map(([uid, count]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty: count }))
           .filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty).slice(0, 10));
 
         // ---- Inbound Ops Summary ----
@@ -441,6 +440,29 @@ function DashboardView({ token, profile, setView, showToast }) {
   }, [token, profile.warehouse_id, dateFrom, dateTo, refreshTick]);
 
   useEffect(() => {
+    if (!gaugeChartRef.current || typeof Chart === "undefined") return;
+    if (gaugeChartInstance.current) gaugeChartInstance.current.destroy();
+    const rate = kpi24.rate != null ? kpi24.rate : 0;
+    const gaugeColor = rate >= 90 ? "#4CAF7D" : rate >= 75 ? "#F5A623" : "#E5484D";
+    gaugeChartInstance.current = new Chart(gaugeChartRef.current.getContext("2d"), {
+      type: "doughnut",
+      data: {
+        datasets: [{
+          data: [rate, 100 - rate],
+          backgroundColor: [gaugeColor, "#EFE8D8"],
+          borderWidth: 0
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        rotation: -90, circumference: 180, cutout: "72%",
+        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+      }
+    });
+    return () => { if (gaugeChartInstance.current) gaugeChartInstance.current.destroy(); };
+  }, [kpi24.rate]);
+
+  useEffect(() => {
     if (!trendChartRef.current || dailyTrend.length === 0 || typeof Chart === "undefined") return;
     if (trendChartInstance.current) trendChartInstance.current.destroy();
     trendChartInstance.current = new Chart(trendChartRef.current.getContext("2d"), {
@@ -471,7 +493,7 @@ function DashboardView({ token, profile, setView, showToast }) {
     if (pickerLeaderboard.length === 0) return;
     pickerChartInstance.current = new Chart(pickerChartRef.current.getContext("2d"), {
       type: "bar",
-      data: { labels: pickerLeaderboard.map(p => p.name), datasets: [{ label: "Items Picked", data: pickerLeaderboard.map(p => p.qty), backgroundColor: "#5B9EE8" }] },
+      data: { labels: pickerLeaderboard.map(p => p.name), datasets: [{ label: "Orders Picked", data: pickerLeaderboard.map(p => p.qty), backgroundColor: "#5B9EE8" }] },
       options: {
         indexAxis: "y", responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
@@ -487,7 +509,7 @@ function DashboardView({ token, profile, setView, showToast }) {
     if (packerLeaderboard.length === 0) return;
     packerChartInstance.current = new Chart(packerChartRef.current.getContext("2d"), {
       type: "bar",
-      data: { labels: packerLeaderboard.map(p => p.name), datasets: [{ label: "Items Packed", data: packerLeaderboard.map(p => p.qty), backgroundColor: "#4CAF7D" }] },
+      data: { labels: packerLeaderboard.map(p => p.name), datasets: [{ label: "Orders Packed", data: packerLeaderboard.map(p => p.qty), backgroundColor: "#4CAF7D" }] },
       options: {
         indexAxis: "y", responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
@@ -647,18 +669,23 @@ function DashboardView({ token, profile, setView, showToast }) {
           <div style={S.panelTitle}>24hr Dispatch KPI — Received → Dispatch (Pakistan holidays excluded)</div>
           {isAdmin && <button style={S.secondaryBtnSm} onClick={() => setShowHolidayManager(s => !s)}>📅 Manage Holidays</button>}
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
-          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{kpi24.onTime}</div>
-            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>On-Time (within 24h)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "center" }} className="depotos-gauge-row">
+          <div style={{ position: "relative", height: 130 }}>
+            <canvas ref={gaugeChartRef}></canvas>
+            <div style={{ position: "absolute", left: 0, right: 0, bottom: 6, textAlign: "center" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{kpi24.rate != null ? `${kpi24.rate}%` : "—"}</div>
+              <div style={{ color: "#8A8272", fontSize: 10 }}>On-Time Rate</div>
+            </div>
           </div>
-          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{kpi24.delayed}</div>
-            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Delayed</div>
-          </div>
-          <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F5A623" }}>{kpi24.rate != null ? `${kpi24.rate}%` : "—"}</div>
-            <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>24hr On-Time Rate</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14 }}>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{kpi24.onTime}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>On-Time (within 24h)</div>
+            </div>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{kpi24.delayed}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Delayed</div>
+            </div>
           </div>
         </div>
         {showHolidayManager && isAdmin && (
@@ -2588,7 +2615,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
           { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
         ];
-        const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => o.status === s.key).length]));
+        const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => s.key === "dispatched" ? ["dispatched", "handed_over"].includes(o.status) : o.status === s.key).length]));
         return (
           <div style={{ display: "grid", gridTemplateColumns: `repeat(${STAGES.length + 2}, 1fr)`, gap: 10, marginBottom: 18 }}>            <div onClick={() => setStatusFilter(null)}
               style={{ ...S.statCard, cursor: "pointer", ...(statusFilter === null ? { borderColor: "#F5A623" } : {}) }}>
@@ -2657,7 +2684,7 @@ function OrdersView({ token, profile, showToast, setView }) {
             </tr>
           </thead>
           <tbody>
-            {orders.filter(o => (!statusFilter || o.status === statusFilter) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).map(o => {
+            {orders.filter(o => (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).map(o => {
               const stat = lineStats[o.id] || { count: 0, qty: 0 };
               const type = o.status === "received" ? orderSkuType(o.id) : null;
               return (
@@ -2684,7 +2711,7 @@ function OrdersView({ token, profile, showToast, setView }) {
                 </tr>
               );
             })}
-            {orders.filter(o => (!statusFilter || o.status === statusFilter) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).length === 0 && (
+            {orders.filter(o => (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).length === 0 && (
               <tr><td colSpan={9}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
             )}
           </tbody>
