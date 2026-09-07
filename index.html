@@ -268,16 +268,14 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [dailyTrend, setDailyTrend] = useState([]);
   const [pickerLeaderboard, setPickerLeaderboard] = useState([]);
   const [packerLeaderboard, setPackerLeaderboard] = useState([]);
+  const [lbFrom, setLbFrom] = useState(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
+  const [lbTo, setLbTo] = useState(new Date().toISOString().slice(0, 10));
   const [inboundOps, setInboundOps] = useState(null);
   const isAdmin = profile.role === "admin";
   const trendChartRef = useRef(null);
   const trendChartInstance = useRef(null);
   const gaugeChartRef = useRef(null);
   const gaugeChartInstance = useRef(null);
-  const pickerChartRef = useRef(null);
-  const pickerChartInstance = useRef(null);
-  const packerChartRef = useRef(null);
-  const packerChartInstance = useRef(null);
 
   const isHoliday = (date, holidayDates) => holidayDates.has(date.toDateString());
 
@@ -361,31 +359,6 @@ function DashboardView({ token, profile, setView, showToast }) {
           label: b.label, count: b.count,
           avgLead: b.leadTimes.length ? b.leadTimes.reduce((a, c) => a + c, 0) / b.leadTimes.length : null
         })));
-
-        // ---- Picker / Packer Leaderboards (all-time, top 10) ----
-        const [pickTasksLb, packTasksLb, profsLb] = await Promise.all([
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
-          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
-          sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
-        ]);
-        const profLbMap = Object.fromEntries((profsLb || []).map(p => [p.id, p]));
-        const pickByUser = {};
-        for (const t of pickTasksLb || []) {
-          if (!t.assigned_to) continue;
-          pickByUser[t.assigned_to] = (pickByUser[t.assigned_to] || 0) + 1;
-        }
-        setPickerLeaderboard(Object.entries(pickByUser)
-          .map(([uid, count]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty: count }))
-          .filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty).slice(0, 10));
-
-        const packByUser = {};
-        for (const t of packTasksLb || []) {
-          if (!t.assigned_to) continue;
-          packByUser[t.assigned_to] = (packByUser[t.assigned_to] || 0) + 1;
-        }
-        setPackerLeaderboard(Object.entries(packByUser)
-          .map(([uid, count]) => ({ name: profLbMap[uid]?.full_name || "Unknown", qty: count }))
-          .filter(r => r.qty > 0).sort((a, b) => b.qty - a.qty).slice(0, 10));
 
         // ---- Inbound Ops Summary ----
         const [grnAllIo, grnLinesAllIo, putawayPendingIo] = await Promise.all([
@@ -487,37 +460,48 @@ function DashboardView({ token, profile, setView, showToast }) {
     return () => { if (trendChartInstance.current) trendChartInstance.current.destroy(); };
   }, [dailyTrend]);
 
-  useEffect(() => {
-    if (!pickerChartRef.current || typeof Chart === "undefined") return;
-    if (pickerChartInstance.current) pickerChartInstance.current.destroy();
-    if (pickerLeaderboard.length === 0) return;
-    pickerChartInstance.current = new Chart(pickerChartRef.current.getContext("2d"), {
-      type: "bar",
-      data: { labels: pickerLeaderboard.map(p => p.name), datasets: [{ label: "Orders Picked", data: pickerLeaderboard.map(p => p.qty), backgroundColor: "#5B9EE8" }] },
-      options: {
-        indexAxis: "y", responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, y: { ticks: { color: "#2B2620" }, grid: { display: false } } }
-      }
-    });
-    return () => { if (pickerChartInstance.current) pickerChartInstance.current.destroy(); };
-  }, [pickerLeaderboard]);
+
 
   useEffect(() => {
-    if (!packerChartRef.current || typeof Chart === "undefined") return;
-    if (packerChartInstance.current) packerChartInstance.current.destroy();
-    if (packerLeaderboard.length === 0) return;
-    packerChartInstance.current = new Chart(packerChartRef.current.getContext("2d"), {
-      type: "bar",
-      data: { labels: packerLeaderboard.map(p => p.name), datasets: [{ label: "Orders Packed", data: packerLeaderboard.map(p => p.qty), backgroundColor: "#4CAF7D" }] },
-      options: {
-        indexAxis: "y", responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: { x: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, y: { ticks: { color: "#2B2620" }, grid: { display: false } } }
-      }
-    });
-    return () => { if (packerChartInstance.current) packerChartInstance.current.destroy(); };
-  }, [packerLeaderboard]);
+    (async () => {
+      try {
+        const fromISO = new Date(lbFrom + "T00:00:00").toISOString();
+        const toISO = new Date(new Date(lbTo + "T00:00:00").getTime() + 86400000).toISOString();
+        const [pickTasksLb, pickLinesLb, packTasksLb, profsLb] = await Promise.all([
+          sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+          sb(`/rest/v1/pick_task_lines?select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+          sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        ]);
+        const profLbMap = Object.fromEntries((profsLb || []).map(p => [p.id, p]));
+        const pickTaskIdsLb = (pickTasksLb || []).map(t => t.id);
+        const pickByUser = {};
+        for (const t of pickTasksLb || []) {
+          if (!t.assigned_to) continue;
+          const pcs = (pickLinesLb || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
+          if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0 };
+          pickByUser[t.assigned_to].orders += 1;
+          pickByUser[t.assigned_to].pcs += pcs;
+        }
+        setPickerLeaderboard(Object.entries(pickByUser)
+          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs }))
+          .sort((a, b) => b.orders - a.orders));
+
+        const packByUser = {};
+        for (const t of packTasksLb || []) {
+          if (!t.assigned_to) continue;
+          let pcs = 0;
+          try { const scans = JSON.parse(t.scans || "{}"); pcs = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
+          if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0 };
+          packByUser[t.assigned_to].orders += 1;
+          packByUser[t.assigned_to].pcs += pcs;
+        }
+        setPackerLeaderboard(Object.entries(packByUser)
+          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs }))
+          .sort((a, b) => b.orders - a.orders));
+      } catch (e) {}
+    })();
+  }, [token, profile.warehouse_id, lbFrom, lbTo, refreshTick]);
 
   const addHoliday = async () => {
     if (!newHolidayDate) return;
@@ -615,22 +599,54 @@ function DashboardView({ token, profile, setView, showToast }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Picker Leaderboard</div>
-          {pickerLeaderboard.length === 0 ? <EmptyNote text="Abhi tak koi picking complete nahi hui." /> : (
-            <div style={{ height: Math.max(220, pickerLeaderboard.length * 32), position: "relative" }}>
-              <canvas ref={pickerChartRef}></canvas>
-            </div>
-          )}
+      <div style={S.panel}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+          <div style={S.panelTitle}>Picker &amp; Packer Leaderboard</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={lbFrom} onChange={e => setLbFrom(e.target.value)} />
+            <span style={{ color: "#8A8272" }}>to</span>
+            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={lbTo} onChange={e => setLbTo(e.target.value)} />
+          </div>
         </div>
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Packer Leaderboard</div>
-          {packerLeaderboard.length === 0 ? <EmptyNote text="Abhi tak koi packing complete nahi hui." /> : (
-            <div style={{ height: Math.max(220, packerLeaderboard.length * 32), position: "relative" }}>
-              <canvas ref={packerChartRef}></canvas>
-            </div>
-          )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+          <div>
+            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
+            {pickerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi picking complete nahi hui." /> : (
+              <table>
+                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>PCS/Order</th></tr></thead>
+                <tbody>
+                  {pickerLeaderboard.map((p, i) => (
+                    <tr key={p.name}>
+                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={S.td}>{p.name}</td>
+                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...S.td, color: "#5B9EE8", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 ? (p.pcs / p.orders).toFixed(1) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div>
+            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
+            {packerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi packing complete nahi hui." /> : (
+              <table>
+                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>PCS/Order</th></tr></thead>
+                <tbody>
+                  {packerLeaderboard.map((p, i) => (
+                    <tr key={p.name}>
+                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={S.td}>{p.name}</td>
+                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 ? (p.pcs / p.orders).toFixed(1) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       </div>
 
