@@ -501,12 +501,13 @@ function DashboardView({ token, profile, setView, showToast }) {
         for (const t of pickTasksLb || []) {
           if (!t.assigned_to) continue;
           const pcs = (pickLinesLb || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-          if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0 };
+          if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
           pickByUser[t.assigned_to].orders += 1;
           pickByUser[t.assigned_to].pcs += pcs;
+          if (t.started_at && t.completed_at) pickByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
         }
         setPickerLeaderboard(Object.entries(pickByUser)
-          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs }))
+          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
           .sort((a, b) => b.orders - a.orders));
 
         const packByUser = {};
@@ -514,12 +515,13 @@ function DashboardView({ token, profile, setView, showToast }) {
           if (!t.assigned_to) continue;
           let pcs = 0;
           try { const scans = JSON.parse(t.scans || "{}"); pcs = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-          if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0 };
+          if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
           packByUser[t.assigned_to].orders += 1;
           packByUser[t.assigned_to].pcs += pcs;
+          if (t.started_at && t.completed_at) packByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
         }
         setPackerLeaderboard(Object.entries(packByUser)
-          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs }))
+          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
           .sort((a, b) => b.orders - a.orders));
       } catch (e) {}
     })();
@@ -667,7 +669,7 @@ function DashboardView({ token, profile, setView, showToast }) {
             <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
             {pickerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi picking complete nahi hui." /> : (
               <table>
-                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>PCS/Order</th></tr></thead>
+                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
                 <tbody>
                   {pickerLeaderboard.map((p, i) => (
                     <tr key={p.name}>
@@ -675,7 +677,8 @@ function DashboardView({ token, profile, setView, showToast }) {
                       <td style={S.td}>{p.name}</td>
                       <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
                       <td style={{ ...S.td, color: "#5B9EE8", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 ? (p.pcs / p.orders).toFixed(1) : "—"}</td>
+                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -686,7 +689,7 @@ function DashboardView({ token, profile, setView, showToast }) {
             <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
             {packerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi packing complete nahi hui." /> : (
               <table>
-                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>PCS/Order</th></tr></thead>
+                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
                 <tbody>
                   {packerLeaderboard.map((p, i) => (
                     <tr key={p.name}>
@@ -694,7 +697,8 @@ function DashboardView({ token, profile, setView, showToast }) {
                       <td style={S.td}>{p.name}</td>
                       <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
                       <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 ? (p.pcs / p.orders).toFixed(1) : "—"}</td>
+                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
