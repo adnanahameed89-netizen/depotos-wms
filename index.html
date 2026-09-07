@@ -2938,7 +2938,6 @@ function PickingView({ token, profile, showToast }) {
     }
     const ref = activeGroup.refs.find(r => r.allocated < r.qty_required);
     if (!ref) { showToast("Allocation error — dobara try karein", "err"); return; }
-    const orderAlreadyStarted = consolidated.some(g => g.refs.some(r => r.order_id === ref.order_id && r.allocated > 0));
     ref.allocated += 1;
     activeGroup.scanned += 1;
     setConsolidated([...consolidated]);
@@ -2946,12 +2945,10 @@ function PickingView({ token, profile, showToast }) {
     const order = orders[ref.order_id];
     setLastScanInfo({ product: p, toteBin: ref.toteBin, orderRef: order?.external_order_id });
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
-    if (!orderAlreadyStarted) {
-      const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
-      if (startTask && !startTask.started_at) {
-        startTask.started_at = new Date().toISOString();
-        sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}`, { method: "PATCH", token, body: { started_at: startTask.started_at } }).catch(() => {});
-      }
+    // Server-authoritative: only sets started_at if it's still NULL in the DB right now.
+    const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
+    if (startTask) {
+      sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}&started_at=is.null`, { method: "PATCH", token, body: { started_at: new Date().toISOString() } }).catch(() => {});
     }
 
     // Check if THIS order's picking is now fully done — if so, send it to Packing right away
@@ -3450,15 +3447,15 @@ function PackingView({ token, profile, showToast }) {
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
-    const isFirstScan = Object.keys(scans).length === 0;
     const newScans = { ...scans, [p.id]: current + 1 };
     setScans(newScans);
     setLastScannedProduct(p);
     showToast(`Scanned: ${p.barcode}`);
     try {
-      const body = { scans: JSON.stringify(newScans) };
-      if (isFirstScan && !openTask.started_at) body.started_at = new Date().toISOString();
-      await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body });
+      await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { scans: JSON.stringify(newScans) } });
+      // Server-authoritative: only sets started_at if it's still NULL in the DB right now —
+      // avoids relying on possibly-stale local state to decide "is this the first scan".
+      sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}&started_at=is.null`, { method: "PATCH", token, body: { started_at: new Date().toISOString() } }).catch(() => {});
     } catch (e) { /* progress still visible locally even if this save fails */ }
   };
 
