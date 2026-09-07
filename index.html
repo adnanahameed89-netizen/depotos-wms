@@ -74,6 +74,7 @@ async function login(email, password) {
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
 const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Inbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+const ORDER_STATUS_LABEL = { received: "New", queued: "Queued", picking: "Picked", packed: "Packed", rtd: "RTD (Packed)", scanned: "Scanned", dispatched: "Dispatched", handed_over: "Handed Over", incomplete: "Incomplete" };
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -2521,7 +2522,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           ) : (
             <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
               <div><div style={S.label}>COURIER</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier}</div></div>
-              <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{openOrder.status}</span></div>
+              <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[openOrder.status] || openOrder.status}</span></div>
               <div><div style={S.label}>RECEIVED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
               {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
             </div>
@@ -2683,7 +2684,7 @@ function OrdersView({ token, profile, showToast, setView }) {
         const STAGES = [
           { key: "received", label: "New / Received", color: "#6B6355", icon: "🧾" },
           { key: "queued", label: "Queued for Pick", color: "#5B9EE8", icon: "🛒" },
-          { key: "picking", label: "Picking", color: "#5B9EE8", icon: "🚶" },
+          { key: "picking", label: "Picked", color: "#5B9EE8", icon: "🚶" },
           { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
           { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
           { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
@@ -2770,7 +2771,7 @@ function OrdersView({ token, profile, showToast, setView }) {
                   </td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
                   <td style={S.td}>{o.courier}</td>
-                  <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{o.status}</span></td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[o.status] || o.status}</span></td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{stat.count}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{stat.qty}</td>
                   <td style={S.td}>
@@ -2875,8 +2876,10 @@ function PickingView({ token, profile, showToast }) {
       for (const l of (taskLines[t.id] || [])) {
         const key = `${l.bin_id || "none"}|${l.product_id}`;
         if (!groups[key]) groups[key] = { bin_id: l.bin_id, product_id: l.product_id, required: 0, scanned: 0, refs: [] };
+        const already = l.qty_picked || 0;
         groups[key].required += l.qty_required;
-        groups[key].refs.push({ pick_task_id: t.id, order_id: t.order_id, toteBin: t.tote_bin_number, line_id: l.id, qty_required: l.qty_required, allocated: 0 });
+        groups[key].scanned += already;
+        groups[key].refs.push({ pick_task_id: t.id, order_id: t.order_id, toteBin: t.tote_bin_number, line_id: l.id, qty_required: l.qty_required, allocated: already });
       }
     }
     for (const g of Object.values(groups)) g.refs.sort((a, b) => (a.toteBin || 99) - (b.toteBin || 99));
@@ -2907,7 +2910,8 @@ function PickingView({ token, profile, showToast }) {
   const finalizeOrderPicking = async (orderId, lineStatus) => {
     const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
     const task = toteTasks.find(t => t.order_id === orderId);
-    if (!task || completedOrderIds[orderId]) return;
+    if (!task) return true;
+    if (completedOrderIds[orderId]) return true;
     try {
       const lines = taskLines[task.id] || [];
       for (const l of lines) {
@@ -2915,13 +2919,22 @@ function PickingView({ token, profile, showToast }) {
         await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: st ? st.allocated : 0 } });
       }
       await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: openTote.id } });
+      // Idempotent on retry: don't create a second pack_task if one already exists for this order
+      const existingPackTask = await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&select=id`, { token });
+      if (!existingPackTask || existingPackTask.length === 0) {
+        await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: openTote.id } });
+      }
       await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "picking" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "completed" } });
       setCompletedOrderIds(prev => ({ ...prev, [orderId]: true }));
       const order = orders[orderId];
       showToast(`✅ Order ${order?.external_order_id || ""} — picking complete, Packing ke liye chala gaya`);
-    } catch (e) { showToast("Order finalize failed", "err"); }
+      return true;
+    } catch (e) {
+      const order = orders[orderId];
+      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed`, "err");
+      return false;
+    }
   };
 
   const scanToteBarcode = async (codeArg) => {
@@ -2945,6 +2958,8 @@ function PickingView({ token, profile, showToast }) {
     const order = orders[ref.order_id];
     setLastScanInfo({ product: p, toteBin: ref.toteBin, orderRef: order?.external_order_id });
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
+    // Persist this scan immediately — never rely solely on the later "finalize" step to save progress
+    sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: ref.allocated } }).catch(() => {});
     // Server-authoritative: only sets started_at if it's still NULL in the DB right now.
     const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
     if (startTask) {
@@ -3055,9 +3070,15 @@ function PickingView({ token, profile, showToast }) {
     try {
       const lineStatus = buildLineStatus();
       const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+      const failedOrders = [];
       for (const t of toteTasks) {
         if (completedOrderIds[t.order_id]) continue; // already finalized as it completed early
-        await finalizeOrderPicking(t.order_id, lineStatus);
+        const ok = await finalizeOrderPicking(t.order_id, lineStatus);
+        if (ok === false) failedOrders.push(orders[t.order_id]?.external_order_id || t.order_id);
+      }
+      if (failedOrders.length > 0) {
+        showToast(`⚠ ${failedOrders.length} order(s) finalize NAHI ho paye (${failedOrders.join(", ")}) — dobara "Complete tote picking" try karein, ya Admin ko batayein`, "err");
+        return; // don't close out the tote — keep it actionable until these are resolved
       }
       await sb(`/rest/v1/totes?id=eq.${openTote.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
       showToast("Tote fully picked — ready for packer");
