@@ -2885,6 +2885,8 @@ function PickingView({ token, profile, showToast }) {
   };
 
   const activeGroup = consolidated.find(g => g.scanned < g.required);
+  const nextRef = activeGroup ? activeGroup.refs.find(r => r.allocated < r.qty_required) : null;
+  const nextOrder = nextRef ? orders[nextRef.order_id] : null;
 
   const [completedOrderIds, setCompletedOrderIds] = useState({});
 
@@ -3100,10 +3102,7 @@ function PickingView({ token, profile, showToast }) {
           </div>
         </div>
 
-        {activeGroup ? (() => {
-          const nextRef = activeGroup.refs.find(r => r.allocated < r.qty_required);
-          const nextOrder = nextRef ? orders[nextRef.order_id] : null;
-          return (
+        {activeGroup ? (
           <div style={{ ...S.panel, borderColor: "#F5A623", borderWidth: 2 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={S.panelTitle}>📍 CURRENT STOP</div>
@@ -3142,8 +3141,7 @@ function PickingView({ token, profile, showToast }) {
               </div>
             )}
           </div>
-          );
-        })() : consolidated.length > 0 && (
+        ) : consolidated.length > 0 && (
           <div style={{ ...S.panel, borderColor: "#4CAF7D" }}>
             <div style={{ color: "#4CAF7D", fontSize: 15, fontFamily: "'Space Grotesk', sans-serif" }}>✅ Saari locations complete — neeche "Complete tote picking" dabayein</div>
           </div>
