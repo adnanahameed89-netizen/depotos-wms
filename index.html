@@ -2808,6 +2808,7 @@ function PickingView({ token, profile, showToast }) {
   const [toteScans, setToteScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
   const [lastScannedProduct, setLastScannedProduct] = useState(null);
+  const [lastScanInfo, setLastScanInfo] = useState(null);
   const [pickViewMode, setPickViewMode] = useState("location");
   const [showDamageInput, setShowDamageInput] = useState(false);
   const [damageQtyInput, setDamageQtyInput] = useState("");
@@ -2878,6 +2879,7 @@ function PickingView({ token, profile, showToast }) {
     const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
     setConsolidated(list);
     setLastScannedProduct(null);
+    setLastScanInfo(null);
     setCompletedOrderIds({});
     setOpenTote(tote);
   };
@@ -2936,6 +2938,7 @@ function PickingView({ token, profile, showToast }) {
     setConsolidated([...consolidated]);
     setLastScannedProduct(p);
     const order = orders[ref.order_id];
+    setLastScanInfo({ product: p, toteBin: ref.toteBin, orderRef: order?.external_order_id });
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
     if (!orderAlreadyStarted) {
       const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
@@ -3133,14 +3136,22 @@ function PickingView({ token, profile, showToast }) {
           </div>
         )}
 
-        {lastScannedProduct && (
-          <div style={{ ...S.panel, display: "flex", gap: 14, alignItems: "center", padding: 12 }}>
-            {lastScannedProduct.image_url ? (
-              <ZoomableImage src={lastScannedProduct.image_url} alt="" style={{ width: 44, height: 44, objectFit: "cover", borderRadius: 6, border: "1px solid #E0D8C5", flexShrink: 0 }} />
+        {lastScanInfo && (
+          <div style={{ ...S.panel, display: "flex", gap: 16, alignItems: "center", padding: 14, borderColor: "#4CAF7D", borderWidth: 2, background: "#F0F9F4" }}>
+            {lastScanInfo.product.image_url ? (
+              <ZoomableImage src={lastScanInfo.product.image_url} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, border: "1px solid #E0D8C5", flexShrink: 0 }} />
             ) : (
-              <div style={{ width: 44, height: 44, borderRadius: 6, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 14, flexShrink: 0 }}>📦</div>
+              <div style={{ width: 56, height: 56, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 18, flexShrink: 0 }}>📦</div>
             )}
-            <div style={{ color: "#6B6355", fontSize: 11 }}>Last scanned: <span style={{ color: "#2B2620" }}>{lastScannedProduct.barcode} — {lastScannedProduct.name}</span></div>
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>✓ SCANNED — YAHAN RAKHEIN</div>
+              <div style={{ color: "#2B2620", fontSize: 13, marginTop: 2 }}>{lastScanInfo.product.barcode} — {lastScanInfo.product.name}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Order {lastScanInfo.orderRef}</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>TOTE BIN</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 34, fontWeight: 700, color: "#4CAF7D" }}>#{lastScanInfo.toteBin || "?"}</div>
+            </div>
           </div>
         )}
         {pickViewMode === "order" ? (
