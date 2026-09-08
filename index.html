@@ -40,13 +40,24 @@
     .depotos-statgrid { grid-template-columns: repeat(2, 1fr) !important; }
     .depotos-gauge-row { grid-template-columns: 1fr !important; }
   }
+
+  @keyframes twinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+  @keyframes cordSwing { 0% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } 100% { transform: rotate(-3deg); } }
+  @keyframes cordPull { 0% { transform: translateY(0); } 40% { transform: translateY(18px); } 100% { transform: translateY(0); } }
+  @keyframes loginFadeIn { from { opacity: 0; transform: translateY(14px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes glowPulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.85; } }
+  .galaxy-star { position: absolute; background: #fff; border-radius: 50%; animation: twinkle 3s ease-in-out infinite; }
+  .lamp-cord-group { animation: cordSwing 4s ease-in-out infinite; transform-origin: top center; cursor: pointer; }
+  .lamp-cord-group.pulling { animation: cordPull 0.35s ease; }
+  .login-card-appear { animation: loginFadeIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .lamp-glow { animation: glowPulse 2.5s ease-in-out infinite; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
 /* ---------- Supabase connection ---------- */
 const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
@@ -75,6 +86,8 @@ const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
 const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Inbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 const ORDER_STATUS_LABEL = { received: "New", queued: "Queued", picking: "Picked", packed: "Packed", rtd: "RTD (Packed)", scanned: "Scanned", dispatched: "Dispatched", handed_over: "Handed Over", incomplete: "Incomplete" };
+const isBulkTote = (tote) => !!(tote && tote.tote_number && tote.tote_number.toLowerCase().includes("bulk"));
+const NORMAL_TOTE_MAX = 15;
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
 /* ================= APP ================= */
@@ -153,27 +166,69 @@ function LoginScreen({ onLogin, error }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lampOn, setLampOn] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const submit = async () => { if (!email || !password) return; setBusy(true); await onLogin(email, password); setBusy(false); };
   const darkInput = { background: "#171A21", border: "1px solid #2C323F", borderRadius: 6, color: "#E8E6E1", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" };
   const darkLabel = { color: "#6B7280", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" };
+
+  const stars = useMemo(() => Array.from({ length: 90 }, () => ({
+    top: Math.random() * 100, left: Math.random() * 100, size: Math.random() * 2 + 1, delay: Math.random() * 3
+  })), []);
+
+  const pullCord = () => {
+    setPulling(true);
+    setTimeout(() => setPulling(false), 350);
+    setLampOn(v => !v);
+  };
+
   return (
-    <div style={S.loginWrap}>
-      <div style={S.loginCard}>
-        <div style={S.hazardBar} />
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-          <span style={{ fontSize: 22 }}>📦</span>
-          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#E8E6E1" }}>
-            MUGHAL<span style={{ color: "#F5A623" }}> FULFILLMENT WAREHOUSE</span>
-          </span>
+    <div style={{ height: "100vh", position: "relative", overflow: "hidden", background: "radial-gradient(ellipse at 50% 0%, #1b1035 0%, #0a0a18 45%, #050509 100%)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {stars.map((s, i) => (
+        <div key={i} className="galaxy-star" style={{ top: `${s.top}%`, left: `${s.left}%`, width: s.size, height: s.size, animationDelay: `${s.delay}s` }} />
+      ))}
+      <div style={{ position: "absolute", top: "-10%", left: "-10%", width: 400, height: 400, background: "radial-gradient(circle, rgba(120,60,200,0.25), transparent 70%)", borderRadius: "50%", filter: "blur(40px)" }} />
+      <div style={{ position: "absolute", bottom: "-15%", right: "-10%", width: 450, height: 450, background: "radial-gradient(circle, rgba(40,80,200,0.2), transparent 70%)", borderRadius: "50%", filter: "blur(50px)" }} />
+
+      <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", zIndex: 5 }}>
+        <div style={{ width: 16, height: 10, background: "#3a3a45", borderRadius: "0 0 4px 4px" }} />
+        <div style={{ width: 2, height: 26, background: "#3a3a45" }} />
+        <svg width="90" height="46" viewBox="0 0 90 46">
+          <path d="M5 46 Q5 4 45 4 Q85 4 85 46 Z" fill={lampOn ? "#F5D98A" : "#2a2a35"} stroke="#1a1a22" strokeWidth="1.5" style={{ transition: "fill 0.4s ease" }} />
+        </svg>
+        {lampOn && (
+          <div className="lamp-glow" style={{ position: "absolute", top: 56, width: 280, height: 380, background: "radial-gradient(ellipse at top, rgba(255,220,150,0.35), transparent 70%)", pointerEvents: "none" }} />
+        )}
+        <div className={`lamp-cord-group${pulling ? " pulling" : ""}`} onClick={pullCord} style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: -2 }}>
+          <div style={{ width: 1.5, height: 55, background: "#555" }} />
+          <div style={{ width: 10, height: 14, borderRadius: "50%", background: "#8a8a95", border: "1px solid #555" }} />
         </div>
-                <div style={darkLabel}>EMAIL</div>
-        <input style={darkInput} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
-        <div style={darkLabel}>PASSWORD</div>
-        <input style={darkInput} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
-        <button style={{ width: "100%", background: "#F5A623", color: "#1A1206", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" }} onClick={submit} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-        {error && <div style={{ color: "#F5A6A6", fontSize: 12, marginTop: 12 }}>{error}</div>}
-        <div style={{ display: "flex", gap: 6, marginTop: 22, fontSize: 11, color: "#6B7280", lineHeight: 1.4 }}>⚠ Live production database — real accounts only.</div>
       </div>
+
+      {!lampOn && (
+        <div style={{ position: "absolute", bottom: "18%", color: "#6B7280", fontSize: 12, textAlign: "center", fontFamily: "'Space Grotesk', sans-serif" }}>
+          💡 Rassi khinch kar login karein
+        </div>
+      )}
+
+      {lampOn && (
+        <div className="login-card-appear" style={{ ...S.loginCard, position: "relative", zIndex: 10, background: "rgba(31,36,48,0.92)", backdropFilter: "blur(6px)" }}>
+          <div style={S.hazardBar} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <span style={{ fontSize: 22 }}>📦</span>
+            <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: "#E8E6E1" }}>
+              MUGHAL<span style={{ color: "#F5A623" }}> FULFILLMENT WAREHOUSE</span>
+            </span>
+          </div>
+          <div style={darkLabel}>EMAIL</div>
+          <input style={darkInput} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+          <div style={darkLabel}>PASSWORD</div>
+          <input style={darkInput} type="password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="••••••••" />
+          <button style={{ width: "100%", background: "#F5A623", color: "#1A1206", border: "none", borderRadius: 6, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", marginTop: 18, fontFamily: "'Space Grotesk', sans-serif" }} onClick={submit} disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+          {error && <div style={{ color: "#F5A6A6", fontSize: 12, marginTop: 12 }}>{error}</div>}
+          <div style={{ display: "flex", gap: 6, marginTop: 22, fontSize: 11, color: "#6B7280", lineHeight: 1.4 }}>⚠ Live production database — real accounts only.</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -985,6 +1040,8 @@ function ReceivingView({ token, profile, showToast }) {
   const [productCache, setProductCache] = useState({});
   const [openGrn, setOpenGrn] = useState(null);
   const [lines, setLines] = useState([]);
+  const [linePutawayQty, setLinePutawayQty] = useState({});
+  const [linesWithPutawayTask, setLinesWithPutawayTask] = useState(new Set());
   const [source, setSource] = useState("");
   const [grnNumber, setGrnNumber] = useState("");
   const [lineQty, setLineQty] = useState(1);
@@ -1030,7 +1087,7 @@ function ReceivingView({ token, profile, showToast }) {
       } else setRpoRecords([]);
       const ids = (g || []).map(x => x.id);
       if (ids.length) {
-        const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=id,grn_id,qty_expected`, { token });
+        const allLines = await sb(`/rest/v1/grn_lines?grn_id=in.(${ids.join(",")})&select=id,grn_id,qty_expected,qty_received`, { token });
         const stats = {};
         const lineToGrn = {};
         for (const l of allLines || []) {
@@ -1043,13 +1100,22 @@ function ReceivingView({ token, profile, showToast }) {
         const lineIds = (allLines || []).map(l => l.id);
         const statusMap = {};
         for (const id of ids) statusMap[id] = { status: "open", totalQty: stats[id]?.qty || 0, putawayQty: 0, anyAssigned: false };
+        const linesWithPutawayTask = new Set();
         if (lineIds.length) {
           const pw = await sb(`/rest/v1/putaway_tasks?grn_line_id=in.(${lineIds.join(",")})&select=*`, { token });
           for (const t of pw || []) {
             const grnId = lineToGrn[t.grn_line_id];
             if (!grnId || !statusMap[grnId]) continue;
-            if (t.status === "completed") statusMap[grnId].putawayQty += t.qty;
+            statusMap[grnId].putawayQty += (t.qty_completed || 0);
             if (t.assigned_to) statusMap[grnId].anyAssigned = true;
+            linesWithPutawayTask.add(t.grn_line_id);
+          }
+          // Direct-received lines never create a putaway_task (they skip putaway entirely) —
+          // count their full expected qty as completed so they don't look stuck "pending" forever.
+          for (const l of allLines || []) {
+            if (!linesWithPutawayTask.has(l.id) && l.qty_received >= l.qty_expected && l.qty_expected > 0) {
+              statusMap[l.grn_id].putawayQty += l.qty_expected;
+            }
           }
         }
         for (const id of ids) {
@@ -1130,6 +1196,18 @@ function ReceivingView({ token, profile, showToast }) {
     setLines(ls);
     const cache = await fetchProductsByIds(token, ls.map(l => l.product_id));
     setProductCache(prev => ({ ...prev, ...cache }));
+    const lineIds = ls.map(l => l.id);
+    if (lineIds.length) {
+      const pw = await sb(`/rest/v1/putaway_tasks?grn_line_id=in.(${lineIds.join(",")})&select=*`, { token }) || [];
+      const putawayMap = {};
+      const linesWithTask = new Set();
+      for (const t of pw) {
+        putawayMap[t.grn_line_id] = (putawayMap[t.grn_line_id] || 0) + (t.qty_completed || 0);
+        linesWithTask.add(t.grn_line_id);
+      }
+      setLinePutawayQty(putawayMap);
+      setLinesWithPutawayTask(linesWithTask);
+    } else { setLinePutawayQty({}); setLinesWithPutawayTask(new Set()); }
   };
 
   const handleGrnFile = async (e) => {
@@ -1235,19 +1313,13 @@ function ReceivingView({ token, profile, showToast }) {
     setProductCache(prev => ({ ...prev, [product.id]: product }));
     setLineQty(1); loadLines(openGrn.id);
   };
-  const receiveLine = async (line, mode) => {
+  const receiveLine = async (line) => {
     const qty = line.qty_expected - (line.qty_received || 0);
     if (qty <= 0) return;
     await sb(`/rest/v1/grn_lines?id=eq.${line.id}`, { method: "PATCH", token, body: { qty_received: line.qty_expected } });
-    if (mode === "putaway") {
-      await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: line.id, product_id: line.product_id, qty, status: "pending" } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty } } });
-      showToast("Received — sent to putaway queue");
-    } else {
-      await addOnHand(token, profile.warehouse_id, line.product_id, null, qty);
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "direct_to_packing", metadata: { qty } } });
-      showToast("Received — sent direct to packing (urgent)");
-    }
+    await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: line.id, product_id: line.product_id, qty, status: "pending" } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty } } });
+    showToast("Received — sent to putaway queue");
     loadLines(openGrn.id);
   };
   const completeGrn = async () => {
@@ -1273,28 +1345,33 @@ function ReceivingView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Lines</div>
           <table>
-            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Expected</th><th style={S.th}>Received</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>SKU</th><th style={S.th}>Expected</th><th style={S.th}>Received</th><th style={S.th}>Put Away Status</th><th style={S.th}></th></tr></thead>
             <tbody>
               {lines.map(l => {
                 const p = productCache[l.product_id];
                 const done = l.qty_received >= l.qty_expected;
+                const pwQty = linePutawayQty[l.id] || 0;
+                const remaining = Math.max(0, l.qty_expected - pwQty);
+                let pwStatus, pwColor;
+                if (done && !linesWithPutawayTask.has(l.id)) { pwStatus = "Completed (Direct)"; pwColor = "#4CAF7D"; }
+                else if (pwQty <= 0) { pwStatus = "Pending"; pwColor = "#8A8272"; }
+                else if (pwQty < l.qty_expected) { pwStatus = `Partial (${remaining} pending)`; pwColor = "#F5A623"; }
+                else { pwStatus = "Completed"; pwColor = "#4CAF7D"; }
                 return (
                   <tr key={l.id}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{l.qty_expected}</td>
                     <td style={S.td}>{l.qty_received || 0}</td>
+                    <td style={S.td}><span style={{ ...S.badgeSm, color: pwColor, borderColor: pwColor }}>{pwStatus}</span></td>
                     <td style={S.td}>
                       {!done ? (
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button style={S.secondaryBtnSm} onClick={() => receiveLine(l, "putaway")}>📍 Receive → Putaway</button>
-                          <button style={{ ...S.secondaryBtnSm, borderColor: "#F5A623", color: "#F5A623" }} onClick={() => receiveLine(l, "direct")}>⚡ Direct (urgent)</button>
-                        </div>
-                      ) : <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Received</span>}
+                        <button style={S.secondaryBtnSm} onClick={() => receiveLine(l)}>📍 Receive → Putaway</button>
+                      ) : <span style={{ color: "#8A8272", fontSize: 11 }}>Dock-received ✓</span>}
                     </td>
                   </tr>
                 );
               })}
-              {lines.length === 0 && <tr><td colSpan={4}><EmptyNote text="No lines yet — add one above." /></td></tr>}
+              {lines.length === 0 && <tr><td colSpan={5}><EmptyNote text="No lines yet — add one above." /></td></tr>}
             </tbody>
           </table>
           {allReceived && <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={completeGrn}>✓ Mark GRN completed</button>}
@@ -1595,24 +1672,6 @@ function PutawayView({ token, profile, showToast }) {
     const product = Object.values(products).find(p => cleanCode(p.barcode) === c || cleanCode(p.sku) === c);
     if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
 
-    // Piece-to-Piece mode: re-scanning the SAME matched product (location already set) auto-records 1 more unit immediately
-    if (isPieceMode && matchedTask && matchedTask.product_id === product.id && matchedBinId) {
-      if (matchedRemaining <= 0) { showToast("Required quantity already complete", "err"); return; }
-      const result = await commitPutaway(matchedTask, matchedBinId, 1);
-      if (result) {
-        if (result.done) {
-          showToast("✓ Putaway complete");
-          setMatchedTaskId(null); setMatchedBinId(""); setPieceCount(0);
-          load();
-        } else {
-          matchedTask.qty_completed = result.newCompleted;
-          setMyAllTasks([...myAllTasks]);
-          showToast(`✓ 1 pc recorded — ${matchedTask.qty - result.newCompleted} remaining — agla piece scan karein`);
-        }
-      }
-      return;
-    }
-
     const candidates = pendingMine.filter(t => t.product_id === product.id).sort((a, b) => a.id.localeCompare(b.id));
     if (candidates.length === 0) { showToast("Yeh product aapke pending jobs mein nahi hai — WRONG ITEM ya already complete", "err"); return; }
     setMatchedTaskId(candidates[0].id);
@@ -1632,7 +1691,10 @@ function PutawayView({ token, profile, showToast }) {
     setMatchedBinId(bin.id);
 
     if (isPieceMode && matchedTask) {
-      // Piece mode: location scan immediately records the first unit — no separate confirm step
+      // Every single piece requires its own Product Scan + Location Scan pair — even if it's
+      // the same SKU going to the same location again. This preserves an exact per-piece
+      // Product→Location→Qty trail, since different pieces of the same SKU can legitimately
+      // end up in different bins.
       const result = await commitPutaway(matchedTask, bin.id, 1);
       if (result) {
         if (result.done) {
@@ -1642,7 +1704,8 @@ function PutawayView({ token, profile, showToast }) {
         } else {
           matchedTask.qty_completed = result.newCompleted;
           setMyAllTasks([...myAllTasks]);
-          showToast(`📍 ${bin.code} — ✓ 1 pc recorded — agle piece ke liye sirf product barcode dobara scan karein`);
+          showToast(`📍 ${bin.code} — ✓ 1 pc recorded — agle piece ke liye product barcode DOBARA scan karein`);
+          setMatchedTaskId(null); setMatchedBinId(""); // force a fresh product scan before the next location scan
         }
       }
     } else {
@@ -1769,10 +1832,10 @@ function PutawayView({ token, profile, showToast }) {
 
           {isPieceMode ? (
             <>
-              <div style={S.label}>3. AUTO-RECORDING — HAR UNIT KE LIYE PRODUCT BARCODE SCAN KAREIN</div>
+              <div style={S.label}>3. HAR PIECE KE LIYE: PEHLE BARCODE SCAN, PHIR LOCATION SCAN</div>
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                 <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: matchedRemaining <= 0 ? "#4CAF7D" : "#F5A623" }}>{matchedTask.qty_completed || 0} / {matchedTask.qty}</div>
-                <div style={{ color: "#8A8272", fontSize: 11 }}>{matchedBinId ? "Location set hai — ab sirf upar barcode field mein har piece scan karein, khud record hota jayega" : "Location scan karte hi 1st piece record ho jayega"}</div>
+                <div style={{ color: "#8A8272", fontSize: 11 }}>Location scan hote hi 1 piece record hoga — agle piece ke liye barcode dobara scan karein (chahe wahi location ho)</div>
               </div>
             </>
           ) : (
@@ -1785,15 +1848,9 @@ function PutawayView({ token, profile, showToast }) {
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
             {!isPieceMode && <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>}
-            {isPieceMode && matchedBinId && matchedRemaining > 0 && (
-              <button style={{ ...S.secondaryBtnSm, color: "#5B9EE8", borderColor: "#5B9EE8" }} onClick={() => setMatchedBinId("")}>🔄 Change Location (naya bin ke liye)</button>
-            )}
             <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Physical item nahi mila (RTV)</button>
             <button style={S.secondaryBtnSm} onClick={() => { setMatchedTaskId(null); setMatchedBinId(""); setShortageOpen(false); }}>Cancel</button>
           </div>
-          {isPieceMode && matchedBinId && matchedRemaining > 0 && (
-            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 4 }}>⚠ Agar baaki pieces kisi doosri location par rakhne hain, to product dobara scan karne se PEHLE "Change Location" dabayein, phir nayi location scan karein.</div>
-          )}
           {shortageOpen && (
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, width: 140 }} placeholder={`Short qty (max ${matchedRemaining})`} value={shortageQty} onChange={e => setShortageQty(e.target.value)} />
@@ -1877,15 +1934,15 @@ function PutawayView({ token, profile, showToast }) {
 
 /* ================= INVENTORY ================= */
 function computeAgingDays(onHand, putawayRowsAsc) {
-  // putawayRowsAsc: [{qty_completed, completed_at}] sorted oldest-first for this product (and bin, if bin-level)
+  // putawayRowsAsc: [{qty_completed, grnDate, grnNumber}] sorted oldest-first by GRN receipt date
   if (!putawayRowsAsc || putawayRowsAsc.length === 0) return null; // no putaway history (e.g. opening stock import) — age unknown
   let remaining = onHand;
   for (const row of putawayRowsAsc) {
     remaining -= row.qty_completed;
-    if (remaining <= 0) return Math.floor((Date.now() - new Date(row.completed_at)) / 86400000);
+    if (remaining <= 0) return { days: Math.floor((Date.now() - new Date(row.grnDate)) / 86400000), grnNumber: row.grnNumber };
   }
   // on_hand exceeds tracked putaway history — fall back to oldest known batch
-  return Math.floor((Date.now() - new Date(putawayRowsAsc[0].completed_at)) / 86400000);
+  return { days: Math.floor((Date.now() - new Date(putawayRowsAsc[0].grnDate)) / 86400000), grnNumber: putawayRowsAsc[0].grnNumber };
 }
 
 function InventoryView({ token, profile, showToast }) {
@@ -1902,26 +1959,40 @@ function InventoryView({ token, profile, showToast }) {
   const canImport = ["admin", "warehouse_lead"].includes(profile.role);
 
   const loadAll = useCallback(async () => {
-      const [inv, res, prods, binList, putaway] = await Promise.all([
+      const [inv, res, prods, binList, putaway, grnLinesAll, grnAll] = await Promise.all([
         sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/products?select=*&limit=20000`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
+        sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
+        sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
+        sb(`/rest/v1/grn?select=id,grn_number,created_at`, { token })
       ]);
       setRows(inv || []);
       setReserved(Object.fromEntries((res || []).map(r => [r.product_id, r.reserved])));
       setProducts(Object.fromEntries((prods || []).map(p => [p.id, p])));
       setBins(Object.fromEntries((binList || []).map(b => [b.id, b])));
+      const glMap = Object.fromEntries((grnLinesAll || []).map(l => [l.id, l]));
+      const grnMap = Object.fromEntries((grnAll || []).map(g => [g.id, g]));
       const byProduct = {}, byBin = {};
       for (const p of putaway || []) {
         if (!p.qty_completed || !p.completed_at) continue;
+        // Age must reflect the GRN's actual receipt date (when it was inbound), not when it was
+        // physically shelved — different GRNs of the same SKU must never share an ageing clock.
+        const gl = p.grn_line_id ? glMap[p.grn_line_id] : null;
+        const grn = gl ? grnMap[gl.grn_id] : null;
+        const grnDate = grn ? grn.created_at : p.completed_at; // return-sourced putaway has no GRN — fall back
+        const grnNumber = grn ? grn.grn_number : "Return";
+        const row = { qty_completed: p.qty_completed, completed_at: p.completed_at, grnDate, grnNumber };
         if (!byProduct[p.product_id]) byProduct[p.product_id] = [];
-        byProduct[p.product_id].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+        byProduct[p.product_id].push(row);
         const binKey = `${p.product_id}|${p.bin_id}`;
         if (!byBin[binKey]) byBin[binKey] = [];
-        byBin[binKey].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+        byBin[binKey].push(row);
       }
+      // Sort each batch list by GRN receipt date (FIFO by inbound date, not putaway date)
+      for (const k in byProduct) byProduct[k].sort((a, b) => new Date(a.grnDate) - new Date(b.grnDate));
+      for (const k in byBin) byBin[k].sort((a, b) => new Date(a.grnDate) - new Date(b.grnDate));
       setPutawayHistory(byProduct);
       setPutawayHistoryByBin(byBin);
   }, [token, profile.warehouse_id]);
@@ -2048,12 +2119,13 @@ function InventoryView({ token, profile, showToast }) {
       {tab === "ledger" && (
         <div style={S.panel}>
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th><th style={S.th}>Aging (days)</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th></tr></thead>
             <tbody>
               {ledger.map(r => {
                 const p = products[r.productId];
                 const aging = computeAgingDays(r.onHand, putawayHistory[r.productId]);
-                const agingColor = aging == null ? "#8A8272" : aging > 60 ? "#E5484D" : aging > 30 ? "#F5A623" : "#4CAF7D";
+                const days = aging?.days;
+                const agingColor = days == null ? "#8A8272" : days > 60 ? "#E5484D" : days > 30 ? "#F5A623" : "#4CAF7D";
                 return (
                   <tr key={r.productId}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
@@ -2061,11 +2133,12 @@ function InventoryView({ token, profile, showToast }) {
                     <td style={{ ...S.td, color: "#6B6355" }}>{r.onHand}</td>
                     <td style={{ ...S.td, color: r.reserved > 0 ? "#E5484D" : "#6B6355" }}>{r.reserved}</td>
                     <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{r.available}</td>
-                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{aging != null ? `${aging}d` : "—"}</td>
+                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{days != null ? `${days}d` : "—"}</td>
+                    <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{aging?.grnNumber || "—"}</td>
                   </tr>
                 );
               })}
-              {ledger.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {ledger.length === 0 && <tr><td colSpan={7}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -2074,21 +2147,23 @@ function InventoryView({ token, profile, showToast }) {
       {tab === "bins" && (
         <div style={S.panel}>
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Reserved against order?</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Reserved against order?</th></tr></thead>
             <tbody>
               {binRows.map((r, i) => {
                 const p = products[r.product_id];
                 const bin = bins[r.bin_id];
                 const productReserved = reserved[r.product_id] || 0;
                 const aging = computeAgingDays(r.on_hand, putawayHistoryByBin[`${r.product_id}|${r.bin_id}`]);
-                const agingColor = aging == null ? "#8A8272" : aging > 60 ? "#E5484D" : aging > 30 ? "#F5A623" : "#4CAF7D";
+                const days = aging?.days;
+                const agingColor = days == null ? "#8A8272" : days > 60 ? "#E5484D" : days > 30 ? "#F5A623" : "#4CAF7D";
                 return (
                   <tr key={i}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
                     <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
                     <td style={S.td}>{r.on_hand}</td>
-                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{aging != null ? `${aging}d` : "—"}</td>
+                    <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{days != null ? `${days}d` : "—"}</td>
+                    <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{aging?.grnNumber || "—"}</td>
                     <td style={S.td}>
                       {productReserved > 0
                         ? <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Yes · {productReserved} reserved (product-wide)</span>
@@ -2097,7 +2172,7 @@ function InventoryView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {binRows.length === 0 && <tr><td colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {binRows.length === 0 && <tr><td colSpan={7}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
           <div style={{ marginTop: 10, fontSize: 11, color: "#8A8272" }}>
@@ -2179,8 +2254,13 @@ function OrdersView({ token, profile, showToast, setView }) {
 
   const bulkReserveAndAssign = async () => {
     const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k]);
-    if (ids.length === 0 || ids.length > 15) { showToast("1 se 15 orders select karein", "err"); return; }
+    if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
     if (!bulkToteId || !bulkPickerId) { showToast("Tote aur Picker select karein", "err"); return; }
+    const selectedTote = totes.find(t => t.id === bulkToteId);
+    if (!isBulkTote(selectedTote) && ids.length > NORMAL_TOTE_MAX) {
+      showToast(`This TOT has a maximum capacity of ${NORMAL_TOTE_MAX} orders. Bulk Trolley select karein zyada orders ke liye.`, "err");
+      return;
+    }
     setBulkBusy(true);
     try {
       const okOrders = [];
@@ -2719,17 +2799,23 @@ function OrdersView({ token, profile, showToast, setView }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Smart Picking — order classification</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setSkuFilter("all")} style={{ ...S.pill, ...(skuFilter === "all" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>All ({receivedOrders.length})</button>
-            <button onClick={() => setSkuFilter("single")} style={{ ...S.pill, ...(skuFilter === "single" ? { background: "#4CAF7D", color: "#1A1206", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleCount})</button>
-            <button onClick={() => setSkuFilter("multi")} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#1A1206", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
+            <button onClick={() => { setSkuFilter("all"); setSelectedOrders({}); }} style={{ ...S.pill, ...(skuFilter === "all" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>All ({receivedOrders.length})</button>
+            <button onClick={() => {
+              setSkuFilter("single");
+              setSelectedOrders(Object.fromEntries(receivedOrders.filter(o => orderSkuType(o.id) === "single").map(o => [o.id, true])));
+            }} style={{ ...S.pill, ...(skuFilter === "single" ? { background: "#4CAF7D", color: "#1A1206", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleCount})</button>
+            <button onClick={() => {
+              setSkuFilter("multi");
+              setSelectedOrders(Object.fromEntries(receivedOrders.filter(o => orderSkuType(o.id) === "multi").map(o => [o.id, true])));
+            }} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#1A1206", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
           </div>
-          <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Single-SKU orders ek hi product ke liye hain — inhe ek aisle-trip mein saath batch karna zyada efficient hota hai.</div>
+          <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Single-SKU ya Multi-SKU pe click karte hi woh saare orders automatically select ho jate hain — neeche seedha "Assign" kar sakte hain bulk mein, alag-alag tick karne ki zaroorat nahi.</div>
         </div>
       )}
 
       {receivedOrders.length > 0 && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Bulk assign to picker ({selectedCount}/15 selected)</div>
+          <div style={S.panelTitle}>Bulk assign to picker ({selectedCount} selected)</div>
           {totes.length === 0 && (
             <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ Koi available tote nahi hai — Admin se Tote Master check karwayein.</div>
           )}
@@ -2742,7 +2828,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               <option value="">Assign to…</option>
               {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
             </select>
-            <button style={S.primaryBtnSm} onClick={bulkReserveAndAssign} disabled={bulkBusy || selectedCount === 0 || selectedCount > 15}>
+            <button style={S.primaryBtnSm} onClick={bulkReserveAndAssign} disabled={bulkBusy || selectedCount === 0}>
               {bulkBusy ? "Assigning…" : `Reserve & Assign (${selectedCount})`}
             </button>
           </div>
@@ -2852,9 +2938,14 @@ function PickingView({ token, profile, showToast }) {
 
   const createTote = async () => {
     const ids = Object.keys(selectedForTote).filter(k => selectedForTote[k]);
-    if (ids.length === 0 || ids.length > 15) { showToast("1 se 15 orders select karein", "err"); return; }
+    if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
     if (!toteAssignPicker) { showToast("Picker select karein", "err"); return; }
     if (!selectedToteId) { showToast("Tote select karein — koi available nahi hai to admin se check karwayein", "err"); return; }
+    const selectedToteObj = totes.find(t => t.id === selectedToteId);
+    if (!isBulkTote(selectedToteObj) && ids.length > NORMAL_TOTE_MAX) {
+      showToast(`This TOT has a maximum capacity of ${NORMAL_TOTE_MAX} orders. Bulk Trolley select karein zyada orders ke liye.`, "err");
+      return;
+    }
     try {
       await sb(`/rest/v1/totes?id=eq.${selectedToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: toteAssignPicker } });
       let binNum = 1;
@@ -3189,7 +3280,7 @@ function PickingView({ token, profile, showToast }) {
         )}
         {pickViewMode === "order" ? (
           <div style={S.panel}>
-            <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin 15)</div>
+            <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
             <table>
               <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
@@ -3298,7 +3389,7 @@ function PickingView({ token, profile, showToast }) {
                 <option value="">Assign to…</option>
                 {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
               </select>
-              <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0 || selectedCount > 15}>Assign tote</button>
+              <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0}>Assign tote</button>
             </div>
             <table>
               <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th></tr></thead>
@@ -3345,6 +3436,20 @@ function PackingView({ token, profile, showToast }) {
   const [damageBinId, setDamageBinId] = useState("");
   const [staff, setStaff] = useState([]);
   const [viewOnly, setViewOnly] = useState(false);
+  const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
+  const packers = staff.filter(s => s.role === "packer");
+
+  const assignToteToPacker = async (toteId, packerId) => {
+    if (!packerId) return;
+    try {
+      await sb(`/rest/v1/totes?id=eq.${toteId}`, { method: "PATCH", token, body: { locked_by: packerId } });
+      const tote = totes.find(t => t.id === toteId);
+      const packer = staff.find(s => s.id === packerId);
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: toteId, user_id: profile.id, action: "assigned_to_packer", metadata: { packer_id: packerId } } });
+      showToast(`${tote?.tote_number || "Tote"} → ${packer?.full_name || "Packer"} ko assign ho gayi`);
+      load();
+    } catch (e) { showToast("Assign failed", "err"); }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -3419,12 +3524,13 @@ function PackingView({ token, profile, showToast }) {
         return;
       }
 
-      if (row.locked_by && row.locked_by !== profile.id) {
-        showToast("Yeh tote pehle se kisi aur packer ke paas process ho rahi hai", "err");
+      if (!row.locked_by) {
+        showToast("Yeh tote abhi tak kisi packer ko assign nahi hui — Warehouse Lead/Admin se assign karwayein", "err");
         return;
       }
-      if (!row.locked_by) {
-        await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { locked_by: profile.id } });
+      if (row.locked_by !== profile.id) {
+        showToast("Yeh tote kisi aur packer ko assign hui hai", "err");
+        return;
       }
       const pickTasks = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&select=order_id,tote_bin_number`, { token });
       setBinNumMap(Object.fromEntries((pickTasks || []).map(pt => [pt.order_id, pt.tote_bin_number])));
@@ -3629,9 +3735,68 @@ function PackingView({ token, profile, showToast }) {
           <button style={S.secondaryBtnSm} onClick={() => openByOrderNumber()}>Open</button>
         </div>
       </div>
-      <SectionTitle title="Totes ready for packing" action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status — 15s auto-refresh</span>} />
+      {canAssign && (() => {
+        const unassignedTotes = totes.filter(t => !t.locked_by);
+        const assignedTotes = totes.filter(t => t.locked_by);
+        const workload = {};
+        for (const t of assignedTotes) {
+          const count = tasks.filter(x => x.tote_id === t.id).length;
+          if (!workload[t.locked_by]) workload[t.locked_by] = { orders: 0, totes: 0 };
+          workload[t.locked_by].orders += count;
+          workload[t.locked_by].totes += 1;
+        }
+        return (
+          <>
+            <SectionTitle title="Assign totes to packers" />
+            <div style={S.panel}>
+              {unassignedTotes.length === 0 ? <EmptyNote text="Koi unassigned tote nahi hai — sab packers ko assign ho chuki hain." /> : (
+                <table>
+                  <thead><tr><th style={S.th}>Tote</th><th style={S.th}>Orders</th><th style={S.th}>Assign to</th></tr></thead>
+                  <tbody>
+                    {unassignedTotes.map(t => {
+                      const count = tasks.filter(x => x.tote_id === t.id).length;
+                      return (
+                        <tr key={t.id}>
+                          <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{t.tote_number}</td>
+                          <td style={S.td}>{count}</td>
+                          <td style={S.td}>
+                            <select style={{ ...S.input, fontSize: 12, maxWidth: 220 }} defaultValue="" onChange={e => e.target.value && assignToteToPacker(t.id, e.target.value)}>
+                              <option value="">Packer select karein…</option>
+                              {packers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div style={S.panel}>
+              <div style={S.panelTitle}>Packer workload — kitne orders kis packer ko assign hain</div>
+              {Object.keys(workload).length === 0 ? <EmptyNote text="Abhi kisi packer ko kuch assign nahi hua." /> : (
+                <table>
+                  <thead><tr><th style={S.th}>Packer</th><th style={S.th}>Totes Assigned</th><th style={S.th}>Orders</th></tr></thead>
+                  <tbody>
+                    {Object.entries(workload).map(([pid, w]) => (
+                      <tr key={pid}>
+                        <td style={S.td}>{staff.find(s => s.id === pid)?.full_name || "—"}</td>
+                        <td style={{ ...S.td, color: "#6B6355" }}>{w.totes}</td>
+                        <td style={{ ...S.td, color: "#F5A623", fontWeight: 600 }}>{w.orders}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        );
+      })()}
+
+      <SectionTitle title={canAssign ? "All totes — monitoring" : "My assigned totes"} action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status — 15s auto-refresh</span>} />
       <div style={S.cardGrid}>
-        {totes.map(tt => {
+        {(canAssign ? totes : totes.filter(tt => tt.locked_by === profile.id)).map(tt => {
           const count = tasks.filter(t => t.tote_id === tt.id).length;
           const lockedByProfile = tt.locked_by ? staff.find(s => s.id === tt.locked_by) : null;
           return (
@@ -3640,14 +3805,16 @@ function PackingView({ token, profile, showToast }) {
               <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15, marginTop: 10 }}>{tt.tote_number}</div>
               <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{count} orders to pack</div>
               {lockedByProfile ? (
-                <div style={{ color: "#E5484D", fontSize: 11, marginTop: 6, fontWeight: 600 }}>🔒 In Progress — {lockedByProfile.full_name}</div>
+                <div style={{ color: "#E5484D", fontSize: 11, marginTop: 6, fontWeight: 600 }}>🔒 Assigned — {lockedByProfile.full_name}</div>
               ) : (
-                <div style={{ color: "#4CAF7D", fontSize: 11, marginTop: 6, fontWeight: 600 }}>🟢 Available</div>
+                <div style={{ color: "#8A8272", fontSize: 11, marginTop: 6, fontWeight: 600 }}>⏳ Not yet assigned</div>
               )}
             </div>
           );
         })}
-        {totes.length === 0 && <EmptyNote text="Koi tote packing ke liye ready nahi hai." />}
+        {(canAssign ? totes : totes.filter(tt => tt.locked_by === profile.id)).length === 0 && (
+          <EmptyNote text={canAssign ? "Koi tote packing ke liye ready nahi hai." : "Abhi aapko koi tote assign nahi hui — Warehouse Lead se check karwayein."} />
+        )}
       </div>
     </div>
   );
@@ -4480,48 +4647,65 @@ function ReportsView({ token, profile, showToast }) {
     setLoading(true);
     try {
       if (key === "inventory_ledger") {
-        const [inv, products, reserved, putaway] = await Promise.all([
+        const [inv, products, reserved, putaway, grnLinesAll, grnAll] = await Promise.all([
           sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
           sb(`/rest/v1/products?select=*&limit=20000`, { token }),
           sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.asc`, { token })
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
+          sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
+          sb(`/rest/v1/grn?select=id,grn_number,created_at`, { token })
         ]);
         const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
         const resMap = Object.fromEntries((reserved || []).map(r => [r.product_id, r.reserved]));
+        const glMap = Object.fromEntries((grnLinesAll || []).map(l => [l.id, l]));
+        const grnMap = Object.fromEntries((grnAll || []).map(g => [g.id, g]));
         const putawayByProduct = {};
         for (const p of putaway || []) {
           if (!p.qty_completed || !p.completed_at) continue;
+          const gl = p.grn_line_id ? glMap[p.grn_line_id] : null;
+          const grn = gl ? grnMap[gl.grn_id] : null;
+          const row = { qty_completed: p.qty_completed, grnDate: grn ? grn.created_at : p.completed_at, grnNumber: grn ? grn.grn_number : "Return" };
           if (!putawayByProduct[p.product_id]) putawayByProduct[p.product_id] = [];
-          putawayByProduct[p.product_id].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+          putawayByProduct[p.product_id].push(row);
         }
+        for (const k in putawayByProduct) putawayByProduct[k].sort((a, b) => new Date(a.grnDate) - new Date(b.grnDate));
         const byProduct = {};
         for (const row of inv || []) byProduct[row.product_id] = (byProduct[row.product_id] || 0) + row.on_hand;
         setRows(Object.entries(byProduct).filter(([, onHand]) => onHand > 0).map(([pid, onHand]) => {
           const p = prodMap[pid]; const res = resMap[pid] || 0;
           const aging = computeAgingDays(onHand, putawayByProduct[pid]);
-          return { "Barcode": p?.barcode || "—", "Product": p?.name || "—", "On Hand": onHand, "Reserved": res, "Available": onHand - res, "Aging (days)": aging != null ? aging : "—" };
+          return { "Barcode": p?.barcode || "—", "Product": p?.name || "—", "On Hand": onHand, "Reserved": res, "Available": onHand - res, "Aging (days)": aging != null ? aging.days : "—", "Oldest Batch (GRN)": aging?.grnNumber || "—" };
         }));
       } else if (key === "inventory_bin_ledger") {
-        const [inv, products, bins, putaway] = await Promise.all([
+        const [inv, products, bins, putaway, grnLinesAll, grnAll] = await Promise.all([
           sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
           sb(`/rest/v1/products?select=*&limit=20000`, { token }),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at&order=completed_at.asc`, { token })
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
+          sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
+          sb(`/rest/v1/grn?select=id,grn_number,created_at`, { token })
         ]);
         const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
         const binMap = Object.fromEntries((bins || []).map(b => [b.id, b]));
+        const glMap2 = Object.fromEntries((grnLinesAll || []).map(l => [l.id, l]));
+        const grnMap2 = Object.fromEntries((grnAll || []).map(g => [g.id, g]));
         const putawayByBin = {};
         for (const p of putaway || []) {
           if (!p.qty_completed || !p.completed_at) continue;
+          const gl = p.grn_line_id ? glMap2[p.grn_line_id] : null;
+          const grn = gl ? grnMap2[gl.grn_id] : null;
+          const row = { qty_completed: p.qty_completed, grnDate: grn ? grn.created_at : p.completed_at, grnNumber: grn ? grn.grn_number : "Return" };
           const key2 = `${p.product_id}|${p.bin_id}`;
           if (!putawayByBin[key2]) putawayByBin[key2] = [];
-          putawayByBin[key2].push({ qty_completed: p.qty_completed, completed_at: p.completed_at });
+          putawayByBin[key2].push(row);
         }
+        for (const k in putawayByBin) putawayByBin[k].sort((a, b) => new Date(a.grnDate) - new Date(b.grnDate));
         setRows((inv || []).filter(r => r.on_hand > 0).map(r => {
           const aging = computeAgingDays(r.on_hand, putawayByBin[`${r.product_id}|${r.bin_id}`]);
           return {
             "Bin": binMap[r.bin_id]?.code || "Unassigned", "Barcode": prodMap[r.product_id]?.barcode || "—",
-            "Product": prodMap[r.product_id]?.name || "—", "On Hand": r.on_hand, "Aging (days)": aging != null ? aging : "—"
+            "Product": prodMap[r.product_id]?.name || "—", "On Hand": r.on_hand, "Aging (days)": aging != null ? aging.days : "—",
+            "Oldest Batch (GRN)": aging?.grnNumber || "—"
           };
         }));
       } else if (key === "order_dump") {
