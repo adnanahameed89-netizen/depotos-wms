@@ -190,26 +190,29 @@ function LoginScreen({ onLogin, error }) {
       <div style={{ position: "absolute", top: "-10%", left: "-10%", width: 400, height: 400, background: "radial-gradient(circle, rgba(120,60,200,0.25), transparent 70%)", borderRadius: "50%", filter: "blur(40px)" }} />
       <div style={{ position: "absolute", bottom: "-15%", right: "-10%", width: 450, height: 450, background: "radial-gradient(circle, rgba(40,80,200,0.2), transparent 70%)", borderRadius: "50%", filter: "blur(50px)" }} />
 
+      {/* Decorative planets */}
+      <div style={{ position: "absolute", top: "12%", right: "10%", width: 70, height: 70, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%, #E8935A, #B5502A 60%, #7A2F16 100%)", boxShadow: "0 0 30px rgba(232,147,90,0.35)" }} />
+      <div style={{ position: "absolute", top: "62%", right: "16%", width: 26, height: 26, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%, #8FBFE0, #4A7FA8 70%)", boxShadow: "0 0 16px rgba(143,191,224,0.4)" }} />
+      <div style={{ position: "absolute", bottom: "10%", left: "8%", width: 100, height: 26, transform: "rotate(-18deg)" }}>
+        <div style={{ position: "absolute", top: 5, left: 20, width: 60, height: 60, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%, #E8D2A0, #B89A5E 70%)", boxShadow: "0 0 24px rgba(232,210,160,0.3)" }} />
+        <div style={{ position: "absolute", top: 28, left: 0, width: 100, height: 10, borderRadius: "50%", border: "2px solid rgba(216,196,150,0.55)" }} />
+      </div>
+      <div style={{ position: "absolute", top: "30%", left: "12%", width: 16, height: 16, borderRadius: "50%", background: "radial-gradient(circle at 35% 30%, #C9A0E8, #7A4FA0 70%)", boxShadow: "0 0 12px rgba(201,160,232,0.4)" }} />
+
       <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", zIndex: 5 }}>
-        <div style={{ width: 16, height: 10, background: "#3a3a45", borderRadius: "0 0 4px 4px" }} />
-        <div style={{ width: 2, height: 26, background: "#3a3a45" }} />
-        <svg width="90" height="46" viewBox="0 0 90 46">
-          <path d="M5 46 Q5 4 45 4 Q85 4 85 46 Z" fill={lampOn ? "#F5D98A" : "#2a2a35"} stroke="#1a1a22" strokeWidth="1.5" style={{ transition: "fill 0.4s ease" }} />
+        <div style={{ width: 22, height: 13, background: "#3a3a45", borderRadius: "0 0 5px 5px" }} />
+        <div style={{ width: 2.5, height: 32, background: "#3a3a45" }} />
+        <svg width="130" height="66" viewBox="0 0 130 66">
+          <path d="M7 66 Q7 6 65 6 Q123 6 123 66 Z" fill={lampOn ? "#F5D98A" : "#2a2a35"} stroke="#1a1a22" strokeWidth="2" style={{ transition: "fill 0.4s ease" }} />
         </svg>
         {lampOn && (
-          <div className="lamp-glow" style={{ position: "absolute", top: 56, width: 280, height: 380, background: "radial-gradient(ellipse at top, rgba(255,220,150,0.35), transparent 70%)", pointerEvents: "none" }} />
+          <div className="lamp-glow" style={{ position: "absolute", top: 78, width: 380, height: 480, background: "radial-gradient(ellipse at top, rgba(255,220,150,0.35), transparent 70%)", pointerEvents: "none" }} />
         )}
         <div className={`lamp-cord-group${pulling ? " pulling" : ""}`} onClick={pullCord} style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: -2 }}>
-          <div style={{ width: 1.5, height: 55, background: "#555" }} />
-          <div style={{ width: 10, height: 14, borderRadius: "50%", background: "#8a8a95", border: "1px solid #555" }} />
+          <div style={{ width: 2, height: 65, background: "#555" }} />
+          <div style={{ width: 13, height: 18, borderRadius: "50%", background: "#8a8a95", border: "1px solid #555" }} />
         </div>
       </div>
-
-      {!lampOn && (
-        <div style={{ position: "absolute", bottom: "18%", color: "#6B7280", fontSize: 12, textAlign: "center", fontFamily: "'Space Grotesk', sans-serif" }}>
-          💡 Rassi khinch kar login karein
-        </div>
-      )}
 
       {lampOn && (
         <div className="login-card-appear" style={{ ...S.loginCard, position: "relative", zIndex: 10, background: "rgba(31,36,48,0.92)", backdropFilter: "blur(6px)" }}>
@@ -328,6 +331,8 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [lbTo, setLbTo] = useState(new Date().toISOString().slice(0, 10));
   const [inboundOps, setInboundOps] = useState(null);
   const [fulfillmentVelocity, setFulfillmentVelocity] = useState(null);
+  const [fvFrom, setFvFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [fvTo, setFvTo] = useState(new Date().toISOString().slice(0, 10));
   const isAdmin = profile.role === "admin";
   const trendChartRef = useRef(null);
   const trendChartInstance = useRef(null);
@@ -433,26 +438,6 @@ function DashboardView({ token, profile, setView, showToast }) {
           unitsPendingPutaway: (putawayPendingIo || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0)
         });
 
-        // ---- Fulfillment Velocity (Today) ----
-        const [pickTasksFv, packTasksFv] = await Promise.all([
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
-          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token })
-        ]);
-        const todayStrFv = new Date().toDateString();
-        const avgOf = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
-        const pickToday = (pickTasksFv || []).filter(t => t.completed_at && new Date(t.completed_at).toDateString() === todayStrFv);
-        const queueTimes = pickToday.filter(t => t.assigned_at && t.started_at).map(t => (new Date(t.started_at) - new Date(t.assigned_at)) / 60000);
-        const pickTimes = pickToday.filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
-        const packToday = (packTasksFv || []).filter(t => t.completed_at && new Date(t.completed_at).toDateString() === todayStrFv);
-        const packTimes = packToday.filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
-        const pickTaskByOrder = Object.fromEntries((pickTasksFv || []).map(t => [t.order_id, t]));
-        const allocToPacked = packToday.filter(t => pickTaskByOrder[t.order_id]?.assigned_at).map(t => (new Date(t.completed_at) - new Date(pickTaskByOrder[t.order_id].assigned_at)) / 3600000);
-        const backlogCutoff = new Date(Date.now() - 86400000);
-        const backlogCount = (orders || []).filter(o => o.received_at && new Date(o.received_at) < backlogCutoff && !["dispatched", "handed_over"].includes(o.status)).length;
-        setFulfillmentVelocity({
-          avgQueueMin: avgOf(queueTimes), avgPickMin: avgOf(pickTimes), avgPackMin: avgOf(packTimes),
-          avgAllocToPackedHrs: avgOf(allocToPacked), backlogCount
-        });
       } catch (e) {}
     };
     loadDashboard();
@@ -583,6 +568,32 @@ function DashboardView({ token, profile, setView, showToast }) {
     })();
   }, [token, profile.warehouse_id, lbFrom, lbTo, refreshTick]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const fromISO = new Date(fvFrom + "T00:00:00").toISOString();
+        const toISO = new Date(new Date(fvTo + "T00:00:00").getTime() + 86400000).toISOString();
+        const [pickTasksFv, packTasksFv, ordersFv] = await Promise.all([
+          sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        ]);
+        const avgOf = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+        const queueTimes = (pickTasksFv || []).filter(t => t.assigned_at && t.started_at).map(t => (new Date(t.started_at) - new Date(t.assigned_at)) / 60000);
+        const pickTimes = (pickTasksFv || []).filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
+        const packTimes = (packTasksFv || []).filter(t => t.started_at && t.completed_at).map(t => (new Date(t.completed_at) - new Date(t.started_at)) / 60000);
+        const pickTaskByOrderFv = Object.fromEntries((pickTasksFv || []).map(t => [t.order_id, t]));
+        const allocToPacked = (packTasksFv || []).filter(t => pickTaskByOrderFv[t.order_id]?.assigned_at).map(t => (new Date(t.completed_at) - new Date(pickTaskByOrderFv[t.order_id].assigned_at)) / 3600000);
+        const backlogCutoff = new Date(Date.now() - 86400000);
+        const backlogCount = (ordersFv || []).filter(o => o.received_at && new Date(o.received_at) < backlogCutoff && !["dispatched", "handed_over"].includes(o.status)).length;
+        setFulfillmentVelocity({
+          avgQueueMin: avgOf(queueTimes), avgPickMin: avgOf(pickTimes), avgPackMin: avgOf(packTimes),
+          avgAllocToPackedHrs: avgOf(allocToPacked), backlogCount
+        });
+      } catch (e) {}
+    })();
+  }, [token, profile.warehouse_id, fvFrom, fvTo, refreshTick]);
+
   const addHoliday = async () => {
     if (!newHolidayDate) return;
     try {
@@ -653,7 +664,14 @@ function DashboardView({ token, profile, setView, showToast }) {
 
       {fulfillmentVelocity && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Fulfillment Velocity — Today</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+            <div style={S.panelTitle}>Fulfillment Velocity</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={fvFrom} onChange={e => setFvFrom(e.target.value)} />
+              <span style={{ color: "#8A8272" }}>to</span>
+              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={fvTo} onChange={e => setFvTo(e.target.value)} />
+            </div>
+          </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
             <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
               <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG QUEUE TIME</div>
