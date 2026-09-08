@@ -327,6 +327,7 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [dailyTrend, setDailyTrend] = useState([]);
   const [pickerLeaderboard, setPickerLeaderboard] = useState([]);
   const [packerLeaderboard, setPackerLeaderboard] = useState([]);
+  const [putawayLeaderboard, setPutawayLeaderboard] = useState([]);
   const [lbFrom, setLbFrom] = useState(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
   const [lbTo, setLbTo] = useState(new Date().toISOString().slice(0, 10));
   const [inboundOps, setInboundOps] = useState(null);
@@ -530,10 +531,11 @@ function DashboardView({ token, profile, setView, showToast }) {
       try {
         const fromISO = new Date(lbFrom + "T00:00:00").toISOString();
         const toISO = new Date(new Date(lbTo + "T00:00:00").getTime() + 86400000).toISOString();
-        const [pickTasksLb, pickLinesLb, packTasksLb, profsLb] = await Promise.all([
+        const [pickTasksLb, pickLinesLb, packTasksLb, putawayLb, profsLb] = await Promise.all([
           sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
           sb(`/rest/v1/pick_task_lines?select=*`, { token }),
           sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
           sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
         ]);
         const profLbMap = Object.fromEntries((profsLb || []).map(p => [p.id, p]));
@@ -562,6 +564,18 @@ function DashboardView({ token, profile, setView, showToast }) {
           if (t.started_at && t.completed_at) packByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
         }
         setPackerLeaderboard(Object.entries(packByUser)
+          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
+          .sort((a, b) => b.orders - a.orders));
+
+        const putawayByUser = {};
+        for (const t of putawayLb || []) {
+          if (!t.assigned_to) continue;
+          if (!putawayByUser[t.assigned_to]) putawayByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
+          putawayByUser[t.assigned_to].orders += 1;
+          putawayByUser[t.assigned_to].pcs += (t.qty_completed || 0);
+          if (t.started_at && t.completed_at) putawayByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
+        }
+        setPutawayLeaderboard(Object.entries(putawayByUser)
           .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
           .sort((a, b) => b.orders - a.orders));
       } catch (e) {}
@@ -731,7 +745,7 @@ function DashboardView({ token, profile, setView, showToast }) {
 
       <div style={S.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-          <div style={S.panelTitle}>Picker &amp; Packer Leaderboard</div>
+          <div style={S.panelTitle}>Picker &amp; Packer &amp; Put Away Leaderboard</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input type="date" style={{ ...S.input, maxWidth: 150 }} value={lbFrom} onChange={e => setLbFrom(e.target.value)} />
             <span style={{ color: "#8A8272" }}>to</span>
@@ -771,6 +785,26 @@ function DashboardView({ token, profile, setView, showToast }) {
                       <td style={S.td}>{p.name}</td>
                       <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
                       <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div>
+            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📍 Put Away</div>
+            {putawayLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi putaway complete nahi hui." /> : (
+              <table>
+                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Lines</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Line</th></tr></thead>
+                <tbody>
+                  {putawayLeaderboard.map((p, i) => (
+                    <tr key={p.name}>
+                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={S.td}>{p.name}</td>
+                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...S.td, color: "#D9A441", fontWeight: 600 }}>{p.pcs}</td>
                       <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
@@ -1592,7 +1626,7 @@ function PutawayView({ token, profile, showToast }) {
     try {
       const [u, mine, b, s] = await Promise.all([
         sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=is.null&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/putaway_tasks?assigned_to=eq.${profile.id}&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=eq.${profile.id}&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
@@ -2316,16 +2350,17 @@ function OrdersView({ token, profile, showToast, setView }) {
       await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
       let binNum = 1;
       for (const { orderId, summaries } of okOrders) {
-        const lineBins = {};
+        const lineAllocations = {};
         for (const { line, summary } of summaries) {
-          const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
-          lineBins[line.product_id] = bestBin ? bestBin.bin_id : null;
+          lineAllocations[line.product_id] = allocateAcrossBins(summary.rows, line.qty);
           await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
         }
         const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
         binNum++;
         for (const { line } of summaries) {
-          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: line.qty, bin_id: lineBins[line.product_id] || null } });
+          for (const alloc of lineAllocations[line.product_id]) {
+            await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: alloc.qty, bin_id: alloc.bin_id } });
+          }
         }
         await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "queued" } });
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "reserved_and_assigned_to_tote" } });
@@ -2469,15 +2504,16 @@ function OrdersView({ token, profile, showToast, setView }) {
         return;
       }
 
-      const lineBins = {};
+      const lineAllocations = {};
       for (const { line, summary } of summaries) {
-        const bestBin = [...summary.rows].sort((a, b) => b.on_hand - a.on_hand)[0];
-        lineBins[line.product_id] = bestBin ? bestBin.bin_id : null;
+        lineAllocations[line.product_id] = allocateAcrossBins(summary.rows, line.qty);
         await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
       }
       const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: order.id, status: "queued" } });
       for (const { line } of summaries) {
-        await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: line.qty, bin_id: lineBins[line.product_id] || null } });
+        for (const alloc of lineAllocations[line.product_id]) {
+          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: alloc.qty, bin_id: alloc.bin_id } });
+        }
       }
       await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "queued" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "reserved_and_queued" } });
@@ -6065,6 +6101,21 @@ async function getStockSummary(token, warehouseId, productId) {
   const onHand = (rows || []).reduce((s, r) => s + r.on_hand, 0);
   const reserved = (res && res[0]) ? res[0].reserved : 0;
   return { rows: rows || [], onHand, reserved, available: onHand - reserved };
+}
+// Splits a required qty across as many bins as needed (largest bin first) instead of assuming
+// a single bin can cover the whole line — this is what lets Picking correctly send a picker to
+// EVERY location a product is fragmented across, rather than over-allocating to just one.
+function allocateAcrossBins(summaryRows, qtyNeeded) {
+  const allocations = [];
+  let remaining = qtyNeeded;
+  const sorted = [...(summaryRows || [])].filter(r => r.on_hand > 0).sort((a, b) => b.on_hand - a.on_hand);
+  for (const row of sorted) {
+    if (remaining <= 0) break;
+    const take = Math.min(row.on_hand, remaining);
+    if (take > 0) { allocations.push({ bin_id: row.bin_id, qty: take }); remaining -= take; }
+  }
+  if (remaining > 0) allocations.push({ bin_id: null, qty: remaining }); // shortfall — no bin has it
+  return allocations;
 }
 // Deducts qty from bins (largest bin first) when goods actually leave the warehouse (dispatch).
 async function deductStock(token, warehouseId, productId, qty) {
