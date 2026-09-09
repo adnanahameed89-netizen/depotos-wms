@@ -710,7 +710,7 @@ function DashboardView({ token, profile, setView, showToast }) {
 
       <div style={S.panel}>
         <div style={S.panelTitle}>Daily Order Volume &amp; Same-Day Lead Time — Last 30 Days</div>
-        <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Bars = kitne orders us din receive hue; Line = un orders ka average dispatch lead time.</div>
+        <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Bars = orders received that day; Line = average dispatch lead time for those orders.</div>
         <div style={{ height: 280, position: "relative" }}>
           <canvas ref={trendChartRef}></canvas>
         </div>
@@ -795,7 +795,7 @@ function DashboardView({ token, profile, setView, showToast }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
           <div>
             <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
-            {pickerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi picking complete nahi hui." /> : (
+            {pickerLeaderboard.length === 0 ? <EmptyNote text="No picking completed in this date range." /> : (
               <table>
                 <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
                 <tbody>
@@ -815,7 +815,7 @@ function DashboardView({ token, profile, setView, showToast }) {
           </div>
           <div>
             <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
-            {packerLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi packing complete nahi hui." /> : (
+            {packerLeaderboard.length === 0 ? <EmptyNote text="No packing completed in this date range." /> : (
               <table>
                 <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
                 <tbody>
@@ -835,7 +835,7 @@ function DashboardView({ token, profile, setView, showToast }) {
           </div>
           <div>
             <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📍 Put Away</div>
-            {putawayLeaderboard.length === 0 ? <EmptyNote text="Is date range mein koi putaway complete nahi hui." /> : (
+            {putawayLeaderboard.length === 0 ? <EmptyNote text="No putaway completed in this date range." /> : (
               <table>
                 <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Lines</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Line</th></tr></thead>
                 <tbody>
@@ -923,7 +923,7 @@ function DashboardView({ token, profile, setView, showToast }) {
                 <span style={{ color: "#E5484D", cursor: "pointer" }} onClick={() => removeHoliday(h)}>✕ Remove</span>
               </div>
             ))}
-            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Eid ki dates chand dekhne pe depend karti hain — har saal manually add karni hongi.</div>
+            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Eid dates depend on moon sighting — must be added manually each year.</div>
           </div>
         )}
       </div>
@@ -1095,7 +1095,7 @@ function ProductsView({ token, profile, showToast }) {
 
       <div style={S.panel}>
         {!query.trim() ? (
-          <EmptyNote text="Search karein — catalogue bohot bada hai isliye poori list yahan load nahi hoti." />
+          <EmptyNote text="Please search — the catalogue is too large to load the full list here." />
         ) : (
           <table>
             <thead>
@@ -1482,7 +1482,7 @@ function ReceivingView({ token, profile, showToast }) {
         ) : null
       } />
       {!canManageGrn && (
-        <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ GRN upload/assignment sirf Admin ya Warehouse Lead kar sakte hain.</div>
+        <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ Only Admin or Warehouse Lead can upload/assign a GRN.</div>
       )}
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
@@ -1577,7 +1577,7 @@ function ReceivingView({ token, profile, showToast }) {
                       <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.created_at)}</td>
                     </tr>
                   ))}
-                  {rpoRecords.filter(r => r.status !== "shipped").length === 0 && <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="Koi pending RPO/shortage nahi hai." /></td></tr>}
+                  {rpoRecords.filter(r => r.status !== "shipped").length === 0 && <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="No pending RPO/shortage records." /></td></tr>}
                 </tbody>
               </table>
             </>
@@ -1597,7 +1597,7 @@ function ReceivingView({ token, profile, showToast }) {
                     <td style={{ ...S.td, color: "#4CAF7D", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{r.shipped_at ? fmtTime(r.shipped_at) : "—"}</td>
                   </tr>
                 ))}
-                {rpoRecords.filter(r => r.status === "shipped").length === 0 && <tr><td colSpan={8}><EmptyNote text="Abhi tak koi RPO ship nahi hui." /></td></tr>}
+                {rpoRecords.filter(r => r.status === "shipped").length === 0 && <tr><td colSpan={8}><EmptyNote text="No RPO has been shipped yet." /></td></tr>}
               </tbody>
             </table>
           )}
@@ -1637,7 +1637,7 @@ function ReceivingView({ token, profile, showToast }) {
               );
             })}
             {grns.filter(g => statusTab === "all" || (grnStatus[g.id]?.status || "open") === statusTab).length === 0 && (
-              <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="Is status mein koi GRN nahi hai." /></td></tr>
+              <tr><td colSpan={canManageGrn ? 9 : 8}><EmptyNote text="No GRNs in this status." /></td></tr>
             )}
           </tbody>
         </table>
@@ -1878,7 +1878,7 @@ function PutawayView({ token, profile, showToast }) {
     <div>
       <SectionTitle title="Put Away — scan-driven" />
       <div style={S.panel}>
-        <div style={S.panelTitle}>1. Scan product (koi bhi sequence mein)</div>
+        <div style={S.panelTitle}>1. Scan product (any sequence)</div>
         <div style={{ display: "flex", gap: 10 }}>
           <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
             value={scanBarcodeInput} onChange={e => setScanBarcodeInput(e.target.value)}
@@ -1927,7 +1927,7 @@ function PutawayView({ token, profile, showToast }) {
               <div style={S.label}>3. HAR PIECE KE LIYE: PEHLE BARCODE SCAN, PHIR LOCATION SCAN</div>
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                 <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 28, fontWeight: 700, color: matchedRemaining <= 0 ? "#4CAF7D" : "#F5A623" }}>{matchedTask.qty_completed || 0} / {matchedTask.qty}</div>
-                <div style={{ color: "#8A8272", fontSize: 11 }}>Location scan hote hi 1 piece record hoga — agle piece ke liye barcode dobara scan karein (chahe wahi location ho)</div>
+                <div style={{ color: "#8A8272", fontSize: 11 }}>Scanning a location records 1 piece — for the next piece, scan the barcode again (even if it is the same location)</div>
               </div>
             </>
           ) : (
@@ -1954,7 +1954,7 @@ function PutawayView({ token, profile, showToast }) {
 
       {canAssign && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Team Put Away Overview — sab officers ki assigned jobs ({teamTasks.length} lines pending)</div>
+          <div style={S.panelTitle}>Team Put Away Overview — all officers' assigned jobs ({teamTasks.length} lines pending)</div>
           <table>
             <thead><tr><th style={S.th}>Officer</th><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Reference</th><th style={S.th}>Required</th><th style={S.th}>Put Away</th><th style={S.th}>Remaining</th></tr></thead>
             <tbody>
@@ -1975,7 +1975,7 @@ function PutawayView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {teamTasks.length === 0 && <tr><td colSpan={7}><EmptyNote text="Koi assigned putaway job pending nahi hai." /></td></tr>}
+              {teamTasks.length === 0 && <tr><td colSpan={7}><EmptyNote text="No assigned putaway jobs pending." /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -2006,7 +2006,7 @@ function PutawayView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {myAllTasks.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi job aapko assign nahi hui." /></td></tr>}
+            {myAllTasks.length === 0 && <tr><td colSpan={8}><EmptyNote text="No jobs assigned to you yet." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -2016,7 +2016,7 @@ function PutawayView({ token, profile, showToast }) {
           <SectionTitle title="Unassigned putaway queue (assign to staff)" />
           <div style={S.cardGrid}>
             {unassignedTasks.map(t => <UnassignedCard key={t.id} t={t} />)}
-            {unassignedTasks.length === 0 && <EmptyNote text="Sab tasks assign ho chuke hain." />}
+            {unassignedTasks.length === 0 && <EmptyNote text="All tasks have been assigned." />}
           </div>
         </>
       )}
@@ -2754,7 +2754,7 @@ function OrdersView({ token, profile, showToast, setView }) {
 
         {orderTimingSummary && (
           <div style={S.panel}>
-            <div style={S.panelTitle}>Timing summary — kisne kitne time mein kya kiya</div>
+            <div style={S.panelTitle}>Timing summary — who did what, and how long it took</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
               <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
                 <div style={S.label}>🚶 PICKER</div>
@@ -2782,8 +2782,8 @@ function OrdersView({ token, profile, showToast, setView }) {
         )}
 
         <div style={S.panel}>
-          <div style={S.panelTitle}>Order history — kisne kya kiya, kab</div>
-          {openEvents.length === 0 ? <EmptyNote text="Abhi tak koi activity nahi hui." /> : openEvents.map((ev, i) => (
+          <div style={S.panelTitle}>Order history — who did what, and when</div>
+          {openEvents.length === 0 ? <EmptyNote text="No activity yet." /> : openEvents.map((ev, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8" }}>
               <span style={{ color: "#2B2620", fontSize: 13 }}>{ev.label} <span style={{ color: "#6B6355" }}>— {ev.user}</span></span>
               <span style={{ color: "#8A8272", fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(ev.ts)}</span>
@@ -2859,8 +2859,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           { key: "received", label: "New / Received", color: "#6B6355", icon: "🧾" },
           { key: "queued", label: "Queued for Pick", color: "#5B9EE8", icon: "🛒" },
           { key: "picking", label: "Picked", color: "#5B9EE8", icon: "🚶" },
-          { key: "packed", label: "Packed", color: "#F5A623", icon: "🏷" },
-          { key: "rtd", label: "RTD", color: "#B084F5", icon: "📦" },
+          { key: "rtd", label: "Packed / RTD", color: "#B084F5", icon: "📦" },
           { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
           { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
         ];
@@ -2967,7 +2966,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               );
             })}
             {orders.filter(o => (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).length === 0 && (
-              <tr><td colSpan={9}><EmptyNote text="Is status mein koi order nahi hai." /></td></tr>
+              <tr><td colSpan={9}><EmptyNote text="No orders in this status." /></td></tr>
             )}
           </tbody>
         </table>
@@ -3027,6 +3026,12 @@ function PickingView({ token, profile, showToast }) {
   useEffect(() => { load(); }, [load]);
 
   const queuedTasks = tasks.filter(t => t.status === "queued" && !t.tote_id);
+  const taskSkuCount = (t) => new Set((taskLines[t.id] || []).map(l => l.product_id)).size;
+  const taskSkuType = (t) => taskSkuCount(t) <= 1 ? "single" : "multi";
+  const singleSkuCount = queuedTasks.filter(t => taskSkuType(t) === "single").length;
+  const multiSkuCount = queuedTasks.filter(t => taskSkuType(t) === "multi").length;
+  const [pickBatchSkuFilter, setPickBatchSkuFilter] = useState("all");
+  const filteredQueuedTasks = queuedTasks.filter(t => pickBatchSkuFilter === "all" || taskSkuType(t) === pickBatchSkuFilter);
   const selectedCount = Object.values(selectedForTote).filter(Boolean).length;
   const availableTotes = totes.filter(t => t.status === "open");
 
@@ -3299,7 +3304,7 @@ function PickingView({ token, profile, showToast }) {
         </div>
 
         <div style={S.panel}>
-          <div style={S.panelTitle}>Scan product — system aapko sequence mein guide karega</div>
+          <div style={S.panelTitle}>Scan product — the system will guide you through the sequence</div>
           <div style={{ display: "flex", gap: 10 }}>
             <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
@@ -3429,7 +3434,7 @@ function PickingView({ token, profile, showToast }) {
               </div>
             );
           })}
-          {consolidated.filter(g => g.scanned < g.required).length === 0 && <EmptyNote text="Saari locations complete ho chuki hain — 'Complete tote picking' dabayein." />}
+          {consolidated.filter(g => g.scanned < g.required).length === 0 && <EmptyNote text="All locations are complete — press 'Complete tote picking'." />}
         </div>
         )}
         {allToteScanned && consolidated.length > 0 && (
@@ -3459,7 +3464,7 @@ function PickingView({ token, profile, showToast }) {
             </div>
           );
         })}
-        {myTotes.length === 0 && <EmptyNote text="Koi tote assign nahi hua." />}
+        {myTotes.length === 0 && <EmptyNote text="No tote has been assigned." />}
       </div>
 
       {canBatch && (
@@ -3467,13 +3472,25 @@ function PickingView({ token, profile, showToast }) {
           <SectionTitle title={`Create picking batch (Tote) — ${selectedCount}/15 selected`} />
           {pickers.length === 0 && (
             <div style={{ ...S.panel, borderColor: "#7A551A" }}>
-              <div style={{ color: "#F5A623", fontSize: 12 }}>⚠ Is warehouse mein koi picker/packer profile nahi mila. Admin ko chahiye Users tab se account banana.</div>
+              <div style={{ color: "#F5A623", fontSize: 12 }}>⚠ No picker/packer profile found in this warehouse. Admin needs to create an account from the Users tab.</div>
             </div>
           )}
           <div style={S.panel}>
             {availableTotes.length === 0 && (
-              <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ Koi available tote nahi hai — sab totes use mein hain, ya Admin ne abhi tote master seed nahi ki.</div>
+              <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>⚠ No available tote — all totes are in use, or Admin has not seeded the tote master yet.</div>
             )}
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <button onClick={() => { setPickBatchSkuFilter("all"); setSelectedForTote({}); }} style={{ ...S.pill, ...(pickBatchSkuFilter === "all" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>All ({queuedTasks.length})</button>
+              <button onClick={() => {
+                setPickBatchSkuFilter("single");
+                setSelectedForTote(Object.fromEntries(queuedTasks.filter(t => taskSkuType(t) === "single").map(t => [t.id, true])));
+              }} style={{ ...S.pill, ...(pickBatchSkuFilter === "single" ? { background: "#4CAF7D", color: "#1A1206", borderColor: "#4CAF7D" } : {}) }}>Single-SKU ({singleSkuCount})</button>
+              <button onClick={() => {
+                setPickBatchSkuFilter("multi");
+                setSelectedForTote(Object.fromEntries(queuedTasks.filter(t => taskSkuType(t) === "multi").map(t => [t.id, true])));
+              }} style={{ ...S.pill, ...(pickBatchSkuFilter === "multi" ? { background: "#5B9EE8", color: "#1A1206", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiSkuCount})</button>
+            </div>
+            <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 12 }}>Clicking Single-SKU or Multi-SKU auto-selects all matching orders — ready to assign in one go.</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
               <select style={{ ...S.input, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} value={selectedToteId} onChange={e => setSelectedToteId(e.target.value)}>
                 <option value="">🧺 Select tote…</option>
@@ -3486,9 +3503,9 @@ function PickingView({ token, profile, showToast }) {
               <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0}>Assign tote</button>
             </div>
             <table>
-              <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th></tr></thead>
+              <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th><th style={S.th}>Type</th></tr></thead>
               <tbody>
-                {queuedTasks.map(t => {
+                {filteredQueuedTasks.map(t => {
                   const o = orders[t.order_id];
                   return (
                     <tr key={t.id}>
@@ -3496,10 +3513,15 @@ function PickingView({ token, profile, showToast }) {
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o?.external_order_id}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{o?.courier}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{(taskLines[t.id] || []).length}</td>
+                      <td style={S.td}>
+                        {taskSkuType(t) === "single"
+                          ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>Single-SKU</span>
+                          : <span style={{ ...S.badgeSm, color: "#5B9EE8", borderColor: "#5B9EE8" }}>Multi-SKU</span>}
+                      </td>
                     </tr>
                   );
                 })}
-                {queuedTasks.length === 0 && <tr><td colSpan={4}><EmptyNote text="Koi queued order nahi hai." /></td></tr>}
+                {filteredQueuedTasks.length === 0 && <tr><td colSpan={5}><EmptyNote text="No queued orders." /></td></tr>}
               </tbody>
             </table>
           </div>
@@ -3800,7 +3822,7 @@ function PackingView({ token, profile, showToast }) {
               </div>
             );
           })}
-          {toteTasks.length === 0 && <EmptyNote text="Is tote ke sab orders pack ho chuke hain." />}
+          {toteTasks.length === 0 && <EmptyNote text="All orders in this tote have been packed." />}
         </div>
       </div>
     );
@@ -3843,7 +3865,7 @@ function PackingView({ token, profile, showToast }) {
           <>
             <SectionTitle title="Assign totes to packers" />
             <div style={S.panel}>
-              {unassignedTotes.length === 0 ? <EmptyNote text="Koi unassigned tote nahi hai — sab packers ko assign ho chuki hain." /> : (
+              {unassignedTotes.length === 0 ? <EmptyNote text="No unassigned totes — all have been assigned to packers." /> : (
                 <table>
                   <thead><tr><th style={S.th}>Tote</th><th style={S.th}>Orders</th><th style={S.th}>Assign to</th></tr></thead>
                   <tbody>
@@ -3868,8 +3890,8 @@ function PackingView({ token, profile, showToast }) {
             </div>
 
             <div style={S.panel}>
-              <div style={S.panelTitle}>Packer workload — kitne orders kis packer ko assign hain</div>
-              {Object.keys(workload).length === 0 ? <EmptyNote text="Abhi kisi packer ko kuch assign nahi hua." /> : (
+              <div style={S.panelTitle}>Packer workload — orders assigned per packer</div>
+              {Object.keys(workload).length === 0 ? <EmptyNote text="Nothing assigned to any packer yet." /> : (
                 <table>
                   <thead><tr><th style={S.th}>Packer</th><th style={S.th}>Totes Assigned</th><th style={S.th}>Orders</th></tr></thead>
                   <tbody>
@@ -4636,7 +4658,7 @@ function ReturnsView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="Abhi tak koi item scan nahi hua." /></td></tr>}
+              {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="No items scanned yet." /></td></tr>}
             </tbody>
           </table>
           {openLines.length > 0 && (
@@ -4683,7 +4705,7 @@ function ReturnsView({ token, profile, showToast }) {
         </div>
       )}
       <div style={S.panel}>
-        <div style={S.panelTitle}>Scan order tracking number — courier se return receive hua</div>
+        <div style={S.panelTitle}>Scan order tracking number — return received from courier</div>
         <div style={{ display: "flex", gap: 10 }}>
           <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type tracking number, then Enter"
             value={orderScanInput} onChange={e => setOrderScanInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanOrderTracking()} />
@@ -4925,7 +4947,7 @@ function ReportsView({ token, profile, showToast }) {
         </div>
       </div>
       <div style={S.panel}>
-        {loading ? <EmptyNote text="Loading…" /> : rows.length === 0 ? <EmptyNote text="Is report ke liye koi data nahi mila." /> : (
+        {loading ? <EmptyNote text="Loading…" /> : rows.length === 0 ? <EmptyNote text="No data found for this report." /> : (
           <table>
             <thead><tr>{Object.keys(rows[0]).map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
             <tbody>
@@ -5161,7 +5183,7 @@ function BinsView({ token, profile, showToast }) {
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
           </div>
         ))}
-        {bins.length === 0 && <EmptyNote text="Koi bin location nahi hai — upload karein ya manually add karein." />}
+        {bins.length === 0 && <EmptyNote text="No bin locations — upload a file or add manually." />}
       </div>
     </div>
   );
@@ -5247,7 +5269,7 @@ function ToteMasterView({ token, profile, showToast }) {
             )}
           </div>
         ))}
-        {totes.length === 0 && <EmptyNote text="Koi tote nahi hai — upar se add karein." />}
+        {totes.length === 0 && <EmptyNote text="No totes — add one above." />}
       </div>
     </div>
   );
@@ -5353,7 +5375,7 @@ function DamageView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {visible.length === 0 && <tr><td colSpan={9}><EmptyNote text="Koi record nahi hai." /></td></tr>}
+            {visible.length === 0 && <tr><td colSpan={9}><EmptyNote text="No records." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -5475,7 +5497,7 @@ function PnaView({ token, profile, showToast }) {
                   </td>
                 </tr>
               ))}
-              {pending.length === 0 && <tr><td colSpan={8}><EmptyNote text="Koi pending PNA record nahi hai." /></td></tr>}
+              {pending.length === 0 && <tr><td colSpan={8}><EmptyNote text="No pending PNA records." /></td></tr>}
             </tbody>
           </table>
         ) : (
@@ -5498,7 +5520,7 @@ function PnaView({ token, profile, showToast }) {
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number || "—"}</td>
                 </tr>
               ))}
-              {resolved.length === 0 && <tr><td colSpan={8}><EmptyNote text="Abhi tak koi PNA resolve nahi hua." /></td></tr>}
+              {resolved.length === 0 && <tr><td colSpan={8}><EmptyNote text="No PNA records resolved yet." /></td></tr>}
             </tbody>
           </table>
         )}
@@ -5893,11 +5915,11 @@ function KPIView({ token, profile, showToast }) {
                 </tbody>
               </table>
               {s.metrics.some(m => !m.computable) && (
-                <div style={{ color: "#8A8272", fontSize: 10, marginTop: 6 }}>⚠ Italic-marked metrics aate hain WMS ke bahar se (CS complaints, Audit Report, waghera) — Admin/Warehouse Lead is quarter ke liye % type kar sakte hain.</div>
+                <div style={{ color: "#8A8272", fontSize: 10, marginTop: 6 }}>⚠ Italic-marked metrics come from outside the WMS (CS complaints, Audit Report, etc.) — Admin/Warehouse Lead can type in the % for this quarter.</div>
               )}
             </div>
           ))}
-          {visibleScores.length === 0 && <EmptyNote text="Is role ke liye abhi koi KPI data nahi hai." />}
+          {visibleScores.length === 0 && <EmptyNote text="No KPI data available for this role yet." />}
         </>
       )}
     </div>
@@ -5981,7 +6003,7 @@ function CameraScanModal({ onScan, onClose }) {
           <button style={S.iconBtnCircle} onClick={onClose}>✕</button>
         </div>
         <div id={regionId} style={{ width: "100%", borderRadius: 8, overflow: "hidden" }}></div>
-        <div style={{ color: "#6B6355", fontSize: 11, marginTop: 10, textAlign: "center" }}>Camera ko barcode ke upar point karein</div>
+        <div style={{ color: "#6B6355", fontSize: 11, marginTop: 10, textAlign: "center" }}>Point the camera at the barcode</div>
       </div>
     </div>
   );
