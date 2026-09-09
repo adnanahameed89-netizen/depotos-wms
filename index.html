@@ -47,6 +47,10 @@
   @keyframes cordPull { 0% { transform: translateY(0); } 40% { transform: translateY(18px); } 100% { transform: translateY(0); } }
   @keyframes loginFadeIn { from { opacity: 0; transform: translateY(14px) scale(0.97); } to { opacity: 1; transform: translateY(0) scale(1); } }
   @keyframes glowPulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.85; } }
+  @keyframes flameFlicker { 0% { transform: scaleY(1) scaleX(1); opacity: 0.9; } 100% { transform: scaleY(1.25) scaleX(0.85); opacity: 1; } }
+  @keyframes rocketIdle { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+  .rocket-flame { animation: flameFlicker 0.12s ease-in-out infinite alternate; transform-origin: top center; }
+  .rocket-idle { animation: rocketIdle 3s ease-in-out infinite; }
   .galaxy-star { position: absolute; background: #fff; border-radius: 50%; animation: twinkle 3s ease-in-out infinite; }
   .lamp-cord-group { animation: cordSwing 4s ease-in-out infinite; transform-origin: top center; cursor: pointer; }
   .lamp-cord-group.pulling { animation: cordPull 0.35s ease; }
@@ -168,7 +172,7 @@ function LoginScreen({ onLogin, error }) {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [lampOn, setLampOn] = useState(false);
-  const [pulling, setPulling] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const submit = async () => { if (!email || !password) return; setBusy(true); await onLogin(email, password); setBusy(false); };
   const darkInput = { background: "#171A21", border: "1px solid #2C323F", borderRadius: 6, color: "#E8E6E1", padding: "9px 10px", fontSize: 13, outline: "none", fontFamily: "'Space Grotesk', sans-serif", width: "100%", boxSizing: "border-box" };
   const darkLabel = { color: "#6B7280", fontSize: 10, letterSpacing: 1, marginBottom: 6, marginTop: 12, fontFamily: "'IBM Plex Mono', monospace" };
@@ -177,9 +181,9 @@ function LoginScreen({ onLogin, error }) {
     top: Math.random() * 100, left: Math.random() * 100, size: Math.random() * 2 + 1, delay: Math.random() * 3
   })), []);
 
-  const pullCord = () => {
-    setPulling(true);
-    setTimeout(() => setPulling(false), 350);
+  const pullLever = () => {
+    setLaunching(true);
+    setTimeout(() => setLaunching(false), 700);
     setLampOn(v => !v);
   };
 
@@ -222,20 +226,26 @@ function LoginScreen({ onLogin, error }) {
         ))}
       </div>
 
-      {/* ---- RIGHT: lamp + login card ---- */}
+      {/* ---- RIGHT: rocket + login card ---- */}
       <div style={{ flex: "1", position: "relative", zIndex: 4, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "4% 4%" }}>
-        <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
-          <div style={{ width: 22, height: 13, background: "#3a3a45", borderRadius: "0 0 5px 5px" }} />
-          <div style={{ width: 2.5, height: 32, background: "#3a3a45" }} />
-          <svg width="130" height="66" viewBox="0 0 130 66">
-            <path d="M7 66 Q7 6 65 6 Q123 6 123 66 Z" fill={lampOn ? "#F5D98A" : "#2a2a35"} stroke="#1a1a22" strokeWidth="2" style={{ transition: "fill 0.4s ease" }} />
-          </svg>
-          {lampOn && (
-            <div className="lamp-glow" style={{ position: "absolute", top: 78, width: 380, height: 480, background: "radial-gradient(ellipse at top, rgba(255,220,150,0.35), transparent 70%)", pointerEvents: "none" }} />
-          )}
-          <div className={`lamp-cord-group${pulling ? " pulling" : ""}`} onClick={pullCord} style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: -2 }}>
-            <div style={{ width: 2, height: 65, background: "#555" }} />
-            <div style={{ width: 13, height: 18, borderRadius: "50%", background: "#8a8a95", border: "1px solid #555" }} />
+        <div style={{ position: "relative", height: 190, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" }}>
+          <div className={lampOn ? "" : "rocket-idle"} style={{ position: "relative", transform: lampOn ? "translateY(-70px)" : "translateY(0)", transition: "transform 0.8s cubic-bezier(0.3, 0, 0.2, 1)" }}>
+            <svg width="60" height="120" viewBox="0 0 60 120">
+              <path d="M17 40 Q30 -8 43 40 Z" fill="#F5A623" stroke="#1a1a22" strokeWidth="2" />
+              <rect x="17" y="40" width="26" height="55" rx="13" fill="#E8E6E1" stroke="#1a1a22" strokeWidth="2" />
+              <circle cx="30" cy="58" r="7" fill="#5B9EE8" stroke="#1a1a22" strokeWidth="1.5" />
+              <path d="M17 78 L4 100 L17 93 Z" fill="#B5502A" stroke="#1a1a22" strokeWidth="1.5" />
+              <path d="M43 78 L56 100 L43 93 Z" fill="#B5502A" stroke="#1a1a22" strokeWidth="1.5" />
+              <rect x="21" y="90" width="18" height="7" fill="#1a1a22" />
+            </svg>
+            {lampOn && (
+              <div className="rocket-flame" style={{ position: "absolute", top: 96, left: "50%", transform: "translateX(-50%)", width: 14, height: 34, borderRadius: "0 0 50% 50%", background: "linear-gradient(180deg, #FFF3C4 0%, #F5A623 40%, #E5484D 90%)", filter: "blur(1px)" }} />
+            )}
+          </div>
+          <div onClick={pullLever} style={{ cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", marginTop: 14 }}>
+            <div style={{ width: 4, height: 42, background: "#555", borderRadius: 2, transformOrigin: "bottom center", transform: launching ? "rotate(28deg)" : lampOn ? "rotate(20deg)" : "rotate(-14deg)", transition: "transform 0.35s ease" }} />
+            <div style={{ width: 15, height: 15, borderRadius: "50%", background: "#F5A623", border: "1px solid #1a1a22", marginTop: -6 }} />
+            <div style={{ width: 54, height: 11, borderRadius: 6, background: "#3a3a45", marginTop: 3, border: "1px solid #1a1a22" }} />
           </div>
         </div>
 
