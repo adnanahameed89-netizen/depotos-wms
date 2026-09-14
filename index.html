@@ -103,6 +103,21 @@ function App() {
   const [view, setView] = useState("dashboard");
   const [toast, setToast] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [justReconnected, setJustReconnected] = useState(false);
+
+  useEffect(() => {
+    const goOnline = () => {
+      setIsOnline(true);
+      setJustReconnected(true);
+      window.dispatchEvent(new Event("app-reconnect"));
+      setTimeout(() => setJustReconnected(false), 3000);
+    };
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, []);
 
   const changeView = (v) => { setView(v); setSidebarOpen(false); };
 
@@ -135,6 +150,16 @@ function App() {
 
   return (
     <div style={S.app}>
+      {!isOnline && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#E5484D", color: "#FFFFFF", textAlign: "center", padding: "8px 12px", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600 }}>
+          🔴 Connection lost — reconnecting… Scans/updates paused until back online.
+        </div>
+      )}
+      {isOnline && justReconnected && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#4CAF7D", color: "#FFFFFF", textAlign: "center", padding: "8px 12px", fontSize: 13, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600 }}>
+          🟢 Back online — syncing latest data…
+        </div>
+      )}
       <div className={`depotos-overlay${sidebarOpen ? " open" : ""}`} onClick={() => setSidebarOpen(false)} />
       <Sidebar view={view} setView={changeView} profile={profile} sidebarOpen={sidebarOpen}
         onLogout={() => { setSession(null); setProfile(null); }} />
@@ -365,6 +390,11 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [newHolidayName, setNewHolidayName] = useState("");
   const [showHolidayManager, setShowHolidayManager] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => {
+    const onReconnect = () => setRefreshTick(v => v + 1);
+    window.addEventListener("app-reconnect", onReconnect);
+    return () => window.removeEventListener("app-reconnect", onReconnect);
+  }, []);
   const [dateFrom, setDateFrom] = useState(new Date().toISOString().slice(0, 10));
   const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
   const [snapshot, setSnapshot] = useState(null);
@@ -1708,6 +1738,10 @@ function PutawayView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id, profile.id, profile.role]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    window.addEventListener("app-reconnect", load);
+    return () => window.removeEventListener("app-reconnect", load);
+  }, [load]);
 
   const grnNumberFor = (task) => {
     if (task.return_line_id) {
@@ -2359,6 +2393,10 @@ function OrdersView({ token, profile, showToast, setView }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    window.addEventListener("app-reconnect", load);
+    return () => window.removeEventListener("app-reconnect", load);
+  }, [load]);
 
   const receivedOrders = orders.filter(o => o.status === "received");
   const [skuFilter, setSkuFilter] = useState("all");
@@ -3100,6 +3138,10 @@ function PickingView({ token, profile, showToast }) {
     const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
   }, [load, openTote]);
+  useEffect(() => {
+    window.addEventListener("app-reconnect", load);
+    return () => window.removeEventListener("app-reconnect", load);
+  }, [load]);
 
   const queuedTasks = tasks.filter(t => t.status === "queued" && !t.tote_id);
   const taskSkuCount = (t) => new Set((taskLines[t.id] || []).map(l => l.product_id)).size;
@@ -3743,6 +3785,10 @@ function PackingView({ token, profile, showToast }) {
     const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
   }, [load, openTote, openTask]);
+  useEffect(() => {
+    window.addEventListener("app-reconnect", load);
+    return () => window.removeEventListener("app-reconnect", load);
+  }, [load]);
 
   const openPack = async (task) => {
     const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${task.order_id}&select=*`, { token });
