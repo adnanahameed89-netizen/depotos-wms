@@ -3091,6 +3091,11 @@ function PickingView({ token, profile, showToast }) {
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (openTote) return; // don't poll while actively scanning inside a tote — avoid disrupting the picker
+    const interval = setInterval(load, 15000);
+    return () => clearInterval(interval);
+  }, [load, openTote]);
 
   const queuedTasks = tasks.filter(t => t.status === "queued" && !t.tote_id);
   const taskSkuCount = (t) => new Set((taskLines[t.id] || []).map(l => l.product_id)).size;
@@ -3543,7 +3548,7 @@ function PickingView({ token, profile, showToast }) {
         });
         return (
           <>
-            <SectionTitle title="Trolleys — Queued vs In Process" action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status</span>} />
+            <SectionTitle title="Trolleys — Queued vs In Process" action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status — 15s auto-refresh</span>} />
             <div style={S.panel}>
               {rows.length === 0 ? <EmptyNote text="No trolley currently assigned for picking." /> : (
                 <table>
