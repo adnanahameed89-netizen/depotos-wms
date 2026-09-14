@@ -2214,6 +2214,18 @@ function InventoryView({ token, profile, showToast }) {
 
       {tab === "ledger" && (
         <div style={S.panel}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 16 }}>
+            <div style={{ background: "#F0F9F4", borderRadius: 10, padding: "14px 16px", border: "1px solid #B7E4C7" }}>
+              <div style={{ color: "#4CAF7D", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL AVAILABLE QTY</div>
+              <div style={{ color: "#2B2620", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{ledger.reduce((s, r) => s + r.available, 0)}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Ready to allocate for new orders</div>
+            </div>
+            <div style={{ background: "#FDF0EE", borderRadius: 10, padding: "14px 16px", border: "1px solid #F5C4BE" }}>
+              <div style={{ color: "#E5484D", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL RESERVED QTY</div>
+              <div style={{ color: "#2B2620", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{ledger.reduce((s, r) => s + r.reserved, 0)}</div>
+              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Already allocated to open orders</div>
+            </div>
+          </div>
           <table>
             <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th></tr></thead>
             <tbody>
@@ -2311,6 +2323,9 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [bulkToteId, setBulkToteId] = useState("");
   const [bulkPickerId, setBulkPickerId] = useState("");
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [pickTaskInfo, setPickTaskInfo] = useState({});
+  const [allTotesMap, setAllTotesMap] = useState({});
+  const [userFilter, setUserFilter] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -2320,6 +2335,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       setProfiles(Object.fromEntries(profs.map(u => [u.id, u])));
       setPickers(profs.filter(u => ["picker", "packer"].includes(u.role) && u.warehouse_id === profile.warehouse_id));
       setTotes(await sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.open&select=*`, { token }) || []);
+      const allTotesData = await sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || [];
+      setAllTotesMap(Object.fromEntries(allTotesData.map(t => [t.id, t])));
       const returnsRows = await sb(`/rest/v1/returns?select=id`, { token });
       setReturnsCount((returnsRows || []).length);
       const ids = (o || []).map(x => x.id);
@@ -2331,6 +2348,10 @@ function OrdersView({ token, profile, showToast, setView }) {
           stats[l.order_id].count += 1; stats[l.order_id].qty += l.qty;
         }
         setLineStats(stats);
+        const pt = await sb(`/rest/v1/pick_tasks?order_id=in.(${ids.join(",")})&select=order_id,assigned_to,tote_id`, { token }) || [];
+        const pickInfo = {};
+        for (const t of pt) pickInfo[t.order_id] = { assignedTo: t.assigned_to, toteId: t.tote_id };
+        setPickTaskInfo(pickInfo);
       }
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
@@ -2343,6 +2364,11 @@ function OrdersView({ token, profile, showToast, setView }) {
     return c === 1 ? "single" : "multi";
   };
   const filteredReceived = receivedOrders.filter(o => skuFilter === "all" || orderSkuType(o.id) === skuFilter);
+  const displayedOrders = orders.filter(o =>
+    (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) &&
+    (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter) &&
+    (!userFilter || pickTaskInfo[o.id]?.assignedTo === userFilter)
+  );
   const singleCount = receivedOrders.filter(o => orderSkuType(o.id) === "single").length;
   const multiCount = receivedOrders.filter(o => orderSkuType(o.id) === "multi").length;
   const selectedCount = Object.values(selectedOrders).filter(Boolean).length;
@@ -2933,18 +2959,31 @@ function OrdersView({ token, profile, showToast, setView }) {
       )}
 
       <div style={S.panel}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <span style={{ color: "#6B6355", fontSize: 12 }}>Filter by user:</span>
+          <select style={{ ...S.input, minWidth: 200 }} value={userFilter} onChange={e => setUserFilter(e.target.value)}>
+            <option value="">All users</option>
+            {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+          </select>
+          {userFilter && <span style={{ color: "#8A8272", fontSize: 11 }}>Showing only orders assigned to this user — useful for sorting AWBs tracking-wise.</span>}
+        </div>
         <table>
           <thead>
             <tr>
               <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === filteredReceived.length} /></th>
               <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
-              <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th><th style={S.th}>Received</th><th style={S.th}></th>
+              <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th>
+              <th style={S.th}>Assigned To</th><th style={S.th}>Tote</th>
+              <th style={S.th}>Received</th><th style={S.th}></th>
             </tr>
           </thead>
           <tbody>
-            {orders.filter(o => (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).map(o => {
+            {displayedOrders.map(o => {
               const stat = lineStats[o.id] || { count: 0, qty: 0 };
               const type = o.status === "received" ? orderSkuType(o.id) : null;
+              const pInfo = pickTaskInfo[o.id];
+              const assignedName = pInfo?.assignedTo ? (profiles[pInfo.assignedTo]?.full_name || "—") : "—";
+              const toteNumber = pInfo?.toteId ? (allTotesMap[pInfo.toteId]?.tote_number || "—") : "—";
               return (
                 <tr key={o.id} style={{ cursor: "pointer" }} onClick={() => openOrderDetail(o)}>
                   <td style={S.td} onClick={e => e.stopPropagation()}>
@@ -2960,6 +2999,8 @@ function OrdersView({ token, profile, showToast, setView }) {
                   <td style={S.td}>
                     {type && <span style={{ ...S.badgeSm, color: type === "single" ? "#4CAF7D" : "#5B9EE8", borderColor: type === "single" ? "#4CAF7D" : "#5B9EE8" }}>{type === "single" ? "Single-SKU" : "Multi-SKU"}</span>}
                   </td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{assignedName}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{toteNumber}</td>
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
                   <td style={S.td}>
                     {o.status === "received" && (
@@ -2969,8 +3010,8 @@ function OrdersView({ token, profile, showToast, setView }) {
                 </tr>
               );
             })}
-            {orders.filter(o => (!statusFilter || o.status === statusFilter || (statusFilter === "dispatched" && o.status === "handed_over")) && (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter)).length === 0 && (
-              <tr><td colSpan={9}><EmptyNote text="No orders in this status." /></td></tr>
+            {displayedOrders.length === 0 && (
+              <tr><td colSpan={11}><EmptyNote text="No orders in this status." /></td></tr>
             )}
           </tbody>
         </table>
