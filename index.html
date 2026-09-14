@@ -2328,6 +2328,7 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [userFilter, setUserFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [toteFilter, setToteFilter] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -2371,7 +2372,8 @@ function OrdersView({ token, profile, showToast, setView }) {
     (o.status !== "received" || skuFilter === "all" || orderSkuType(o.id) === skuFilter) &&
     (!userFilter || pickTaskInfo[o.id]?.assignedTo === userFilter) &&
     (!dateFrom || new Date(o.received_at) >= new Date(dateFrom + "T00:00:00")) &&
-    (!dateTo || new Date(o.received_at) < new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000))
+    (!dateTo || new Date(o.received_at) < new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000)) &&
+    (!toteFilter || pickTaskInfo[o.id]?.toteId === toteFilter)
   );
   const singleCount = receivedOrders.filter(o => orderSkuType(o.id) === "single").length;
   const multiCount = receivedOrders.filter(o => orderSkuType(o.id) === "multi").length;
@@ -2964,21 +2966,29 @@ function OrdersView({ token, profile, showToast, setView }) {
 
       <div style={S.panel}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-          <span style={{ color: "#6B6355", fontSize: 12 }}>Filter by user:</span>
-          <select style={{ ...S.input, minWidth: 200 }} value={userFilter} onChange={e => setUserFilter(e.target.value)}>
-            <option value="">All users</option>
-            {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
-          </select>
-          {userFilter && <span style={{ color: "#8A8272", fontSize: 11 }}>Showing only orders assigned to this user — useful for sorting AWBs tracking-wise.</span>}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
           <span style={{ color: "#6B6355", fontSize: 12 }}>Received date:</span>
           <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
           <span style={{ color: "#8A8272" }}>to</span>
           <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
           <button style={S.secondaryBtnSm} onClick={() => { const t = new Date().toISOString().slice(0, 10); setDateFrom(t); setDateTo(t); }}>Today</button>
-          {(dateFrom || dateTo) && <button style={S.secondaryBtnSm} onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</button>}
+
+          <span style={{ color: "#6B6355", fontSize: 12, marginLeft: 14 }}>User:</span>
+          <select style={{ ...S.input, minWidth: 180 }} value={userFilter} onChange={e => setUserFilter(e.target.value)}>
+            <option value="">All users</option>
+            {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+          </select>
+
+          <span style={{ color: "#6B6355", fontSize: 12, marginLeft: 14 }}>Tote:</span>
+          <select style={{ ...S.input, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} value={toteFilter} onChange={e => setToteFilter(e.target.value)}>
+            <option value="">All totes</option>
+            {Object.values(allTotesMap).sort((a, b) => a.tote_number.localeCompare(b.tote_number)).map(t => <option key={t.id} value={t.id}>{t.tote_number}</option>)}
+          </select>
+
+          {(dateFrom || dateTo || userFilter || toteFilter) && (
+            <button style={S.secondaryBtnSm} onClick={() => { setDateFrom(""); setDateTo(""); setUserFilter(""); setToteFilter(""); }}>Clear all</button>
+          )}
         </div>
+        {(userFilter || toteFilter) && <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 10 }}>Showing filtered orders — useful for sorting AWBs tracking-wise.</div>}
         <table>
           <thead>
             <tr>
