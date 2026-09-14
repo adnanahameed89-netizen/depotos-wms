@@ -3534,6 +3534,41 @@ function PickingView({ token, profile, showToast }) {
         {myTotes.length === 0 && <EmptyNote text="No tote has been assigned." />}
       </div>
 
+      {canBatch && (() => {
+        const pickingTotes = totes.filter(t => t.status === "picking");
+        const rows = pickingTotes.map(tt => {
+          const remainingTasks = tasks.filter(t => t.tote_id === tt.id);
+          const anyStarted = remainingTasks.some(t => t.started_at);
+          return { tote: tt, remaining: remainingTasks.length, status: anyStarted ? "In Process" : "Queued" };
+        });
+        return (
+          <>
+            <SectionTitle title="Trolleys — Queued vs In Process" action={<span style={{ color: "#8A8272", fontSize: 10 }}>Live status</span>} />
+            <div style={S.panel}>
+              {rows.length === 0 ? <EmptyNote text="No trolley currently assigned for picking." /> : (
+                <table>
+                  <thead><tr><th style={S.th}>Trolley</th><th style={S.th}>Assigned Picker</th><th style={S.th}>Orders Remaining</th><th style={S.th}>Status</th></tr></thead>
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.tote.id}>
+                        <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tote.tote_number}</td>
+                        <td style={S.td}>{pickers.find(p => p.id === r.tote.assigned_to)?.full_name || "—"}</td>
+                        <td style={{ ...S.td, color: "#6B6355" }}>{r.remaining}</td>
+                        <td style={S.td}>
+                          {r.status === "In Process"
+                            ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>🟢 In Process</span>
+                            : <span style={{ ...S.badgeSm, color: "#8A8272", borderColor: "#8A8272" }}>⏳ Queued</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        );
+      })()}
+
       {canBatch && (
         <>
           <SectionTitle title={`Create picking batch (Tote) — ${selectedCount}/15 selected`} />
