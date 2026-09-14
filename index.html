@@ -3203,6 +3203,34 @@ function PickingView({ token, profile, showToast }) {
     }
   };
 
+  // Used when a shortage was genuinely unresolvable (no alternate bin found anywhere) — the order
+  // is pulled OUT of the normal picking→packing flow and marked Incomplete instead, so the Packer
+  // never sees it. Admin/Warehouse Lead resolve it from the Incomplete Orders tab.
+  const finalizeOrderAsIncomplete = async (orderId, lineStatus) => {
+    const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
+    const task = toteTasks.find(t => t.order_id === orderId);
+    if (!task) return true;
+    if (completedOrderIds[orderId]) return true;
+    try {
+      const lines = taskLines[task.id] || [];
+      for (const l of lines) {
+        const st = lineStatus[l.id];
+        await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: st ? st.allocated : 0 } });
+      }
+      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
+      await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "incomplete" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "completed_with_shortage_incomplete" } });
+      setCompletedOrderIds(prev => ({ ...prev, [orderId]: true }));
+      const order = orders[orderId];
+      showToast(`⚠ Order ${order?.external_order_id || ""} — item short, 'Incomplete' mein chala gaya (Packer ko nahi dikhega)`, "err");
+      return true;
+    } catch (e) {
+      const order = orders[orderId];
+      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed`, "err");
+      return false;
+    }
+  };
+
   const scanToteBarcode = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
@@ -3298,25 +3326,40 @@ function PickingView({ token, profile, showToast }) {
         }
         group.required = group.scanned; // close out this location — job continues from the alternate bin
         setConsolidated([...consolidated]);
+
+        // Auto-correct the same product's location for every pending pick_task_line that still
+        // points to the old (empty/wrong) bin — including this group's own, so the correction is
+        // also reflected in the database (not just in-memory), and every OTHER queued order needing
+        // this product won't hit the same "not found" surprise later.
+        let correctedCount = 0;
+        try {
+          const staleLines = await sb(`/rest/v1/pick_task_lines?product_id=eq.${group.product_id}&bin_id=eq.${group.bin_id}&qty_picked=eq.0&select=id`, { token });
+          for (const l of staleLines || []) {
+            await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { bin_id: alt.bin_id } });
+          }
+          correctedCount = (staleLines || []).length;
+        } catch (e) { /* best-effort correction — the current pick still succeeds even if this fails */ }
+
         showToast(pnaParked
-          ? `📍 Doosri location mil gayi (Bin ${bins[alt.bin_id]?.code || "?"}) se pick karein — original location ka discrepancy PNA-HOLD mein park ho gaya, ${profile.full_name} ke naam se`
-          : `📍 Doosri location mil gayi — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein`);
+          ? `📍 Doosri location mil gayi (Bin ${bins[alt.bin_id]?.code || "?"}) se pick karein — original location ka discrepancy PNA-HOLD mein park ho gaya, ${profile.full_name} ke naam se${correctedCount > 0 ? ` · ${correctedCount} pending line(s) ki location bhi auto-update ho gayi` : ""}`
+          : `📍 Doosri location mil gayi — Bin ${bins[alt.bin_id]?.code || "?"} se pick karein${correctedCount > 0 ? ` · ${correctedCount} pending line(s) ki location bhi auto-update ho gayi` : ""}`);
       } else {
         const affectedOrders = new Set();
         for (const ref of openRefs) {
           const short = ref.qty_required - ref.allocated;
           if (short > 0) {
             await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: ref.order_id, product_id: group.product_id, qty_required: ref.qty_required, qty_available: ref.allocated, not_available_qty: short } });
-            await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: ref.order_id, user_id: profile.id, action: "pick_shortage_reported", metadata: { product_id: group.product_id, short_qty: short } } });
+            await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: ref.order_id, user_id: profile.id, action: "pick_shortage_reported" } });
             affectedOrders.add(ref.order_id);
           }
         }
         group.required = group.scanned; // let this location's shortfall resolve without blocking
         setConsolidated([...consolidated]);
         showToast(pnaParked
-          ? `⚠ Koi aur location nahi mili — order shortage record hui, ${remaining} pcs PNA-HOLD mein park ho gaye ${profile.full_name} ke naam se`
-          : "⚠ Shortage record ho gaya — lekin PNA-HOLD bin set up nahi hai, Admin ko batayein", "err");
-        // shortage-resolved orders may now be "done" (with a shortfall) — check and send to packing
+          ? `⚠ Koi aur location nahi mili — order 'Incomplete' mein chala jayega, ${remaining} pcs PNA-HOLD mein park ho gaye ${profile.full_name} ke naam se`
+          : "⚠ Koi aur location nahi mili — lekin PNA-HOLD bin set up nahi hai, Admin ko batayein", "err");
+        // Shortage-affected orders are pulled OUT of the normal flow entirely — marked Incomplete,
+        // never sent to Packing — as soon as every line on that order has been resolved one way or another.
         const lineStatus = buildLineStatus();
         for (const orderId of affectedOrders) {
           const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === orderId);
@@ -3326,7 +3369,7 @@ function PickingView({ token, profile, showToast }) {
             const st = lineStatus[l.id];
             return st && (st.allocated >= st.qty_required || st.resolved);
           });
-          if (orderDone) finalizeOrderPicking(orderId, lineStatus);
+          if (orderDone) finalizeOrderAsIncomplete(orderId, lineStatus);
         }
       }
     } catch (e) { showToast("Report failed", "err"); }
