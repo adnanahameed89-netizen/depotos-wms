@@ -3081,7 +3081,11 @@ function PickingView({ token, profile, showToast }) {
       setTotes(tt || []);
       const taskIds = (t || []).map(x => x.id);
       if (taskIds.length) {
-        const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token });
+        const CHUNK = 60;
+        const chunks = [];
+        for (let i = 0; i < taskIds.length; i += CHUNK) chunks.push(taskIds.slice(i, i + CHUNK));
+        const lineResults = await Promise.all(chunks.map(ch => sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${ch.join(",")})&select=*`, { token })));
+        const lines = lineResults.flat().filter(Boolean);
         const newProducts = await fetchProductsByIds(token, lines.map(l => l.product_id));
         setProducts(prev => ({ ...prev, ...newProducts }));
         const grouped = {};
@@ -4987,7 +4991,14 @@ function ReportsView({ token, profile, showToast }) {
         ]);
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
         const pickTaskIds = (pickTasksAll || []).map(t => t.id);
-        const pickLines = pickTaskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token }) : [];
+        let pickLines = [];
+        if (pickTaskIds.length) {
+          const CHUNK = 60;
+          const chunks = [];
+          for (let i = 0; i < pickTaskIds.length; i += CHUNK) chunks.push(pickTaskIds.slice(i, i + CHUNK));
+          const results = await Promise.all(chunks.map(ch => sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${ch.join(",")})&select=*`, { token })));
+          pickLines = results.flat().filter(Boolean);
+        }
         const agg = {};
         const ensure = (uid) => { if (!agg[uid]) agg[uid] = { pcsPicked: 0, pcsPacked: 0, pcsPutAway: 0, hrs: 0, firstAt: null, lastAt: null }; return agg[uid]; };
         const track = (u, startVal, endVal) => {
