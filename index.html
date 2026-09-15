@@ -3540,7 +3540,32 @@ function PickingView({ token, profile, showToast }) {
         )}
         {pickViewMode === "order" ? (
           <div style={S.panel}>
-            <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
+              <button style={S.secondaryBtnSm} onClick={() => {
+                const sorted = [...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
+                let rowsHtml = "";
+                for (const t of sorted) {
+                  const o = orders[t.order_id];
+                  rowsHtml += `<div class="slip"><div class="bin">BIN #${t.tote_bin_number || "?"}</div><div class="awb">${o?.awb_number || o?.external_order_id || "—"}</div><div class="meta">${o?.courier || ""} ${o?.raw_data?.customer_order_number || o?.raw_data?.customer ? "· " + (o?.raw_data?.customer_order_number || o?.raw_data?.customer) : ""}</div></div>`;
+                }
+                const w = window.open("", "_blank");
+                w.document.write(`<html><head><title>AWB Sheet — ${openTote?.tote_number || ""}</title><style>
+                  body{font-family:Arial;padding:16px;color:#111}
+                  h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
+                  .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
+                  .bin{font-size:22px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px}
+                  .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace}
+                  .meta{color:#555;font-size:12px;text-align:right}
+                </style></head><body>
+                  <h2>AWB Sheet — Tote ${openTote?.tote_number || ""}</h2>
+                  <div class="meta-top">Sorted by physical bin position — print and match parcels bin-wise, no manual sorting needed.</div>
+                  ${rowsHtml}
+                </body></html>`);
+                w.document.close();
+                w.print();
+              }}>🖨 Print AWB Sheet (Bin-wise)</button>
+            </div>
             <table>
               <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
@@ -4147,6 +4172,29 @@ function DispatchView({ token, profile, showToast }) {
   const [courierRepName, setCourierRepName] = useState("");
   const [handoverRemarks, setHandoverRemarks] = useState("");
 
+  const [cancellingId, setCancellingId] = useState(null);
+
+  const cancelLoadSheet = async (ls) => {
+    if (ls.handover_status === "handed_over") { showToast("Yeh load sheet already handover ho chuki hai — cancel nahi ho sakti", "err"); return; }
+    setCancellingId(ls.id);
+    try {
+      const ids = ls.order_ids || [];
+      for (const orderId of ids) {
+        const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
+        for (const l of lines || []) {
+          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty); // restore deducted stock
+          await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty); // re-reserve for this order
+        }
+        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "rtd", dispatched_at: null } });
+      }
+      await sb(`/rest/v1/load_sheets?id=eq.${ls.id}`, { method: "PATCH", token, body: { status: "cancelled", cancelled_by: profile.id, cancelled_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "load_sheet", entity_id: ls.id, user_id: profile.id, action: "cancelled", metadata: { order_count: ids.length } } });
+      showToast(`${ls.load_sheet_number} cancel ho gayi — ${ids.length} orders wapas 'RTD' mein aa gaye, dobara scan kar ke nayi load sheet banayein`);
+      load();
+    } catch (e) { showToast("Cancel failed", "err"); }
+    setCancellingId(null);
+  };
+
   const confirmHandover = async () => {
     if (!handoverModal) return;
     try {
@@ -4286,13 +4334,17 @@ function DispatchView({ token, profile, showToast }) {
         <div style={S.panelTitle}>Recent load sheets</div>
         {loadSheets.map(ls => {
           const handedOver = ls.handover_status === "handed_over";
+          const cancelled = ls.status === "cancelled";
           return (
-          <div key={ls.id} style={{ padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
+          <div key={ls.id} style={{ padding: "10px 0", borderBottom: "1px solid #EFE8D8", opacity: cancelled ? 0.6 : 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#2B2620" }}>{ls.load_sheet_number}</span>
               <span style={{ color: "#6B6355", fontSize: 12 }}>{ls.courier} · {ls.order_ids?.length || 0} orders · {fmtTime(ls.created_at)}</span>
-              <span style={{ ...S.badgeSm, color: handedOver ? "#4CAF7D" : "#F5A623", borderColor: handedOver ? "#4CAF7D" : "#F5A623" }}>{handedOver ? "HANDED OVER" : "READY FOR HANDOVER"}</span>
+              <span style={{ ...S.badgeSm, color: cancelled ? "#E5484D" : handedOver ? "#4CAF7D" : "#F5A623", borderColor: cancelled ? "#E5484D" : handedOver ? "#4CAF7D" : "#F5A623" }}>{cancelled ? "CANCELLED" : handedOver ? "HANDED OVER" : "READY FOR HANDOVER"}</span>
             </div>
+            {cancelled ? (
+              <div style={{ color: "#8A8272", fontSize: 11, marginTop: 6 }}>Cancelled by {profiles[ls.cancelled_by]?.full_name || "—"} · {fmtTime(ls.cancelled_at)} — orders wapas RTD mein bhej diye gaye thay.</div>
+            ) : (
             <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
               <button style={S.secondaryBtnSm} onClick={async () => {
                 const ids = ls.order_ids || [];
@@ -4359,10 +4411,17 @@ function DispatchView({ token, profile, showToast }) {
               {!handedOver && ["admin", "warehouse_lead"].includes(profile.role) && (
                 <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => setHandoverModal(ls)}>✓ Confirm Handover</button>
               )}
+              {!handedOver && ["admin", "warehouse_lead"].includes(profile.role) && (
+                <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} disabled={cancellingId === ls.id}
+                  onClick={() => { if (window.confirm(`${ls.load_sheet_number} cancel karein? Iske ${ls.order_ids?.length || 0} orders wapas 'RTD' mein chale jayenge aur stock restore ho jayega — nayi complete load sheet dobara scan kar ke banani hogi.`)) cancelLoadSheet(ls); }}>
+                  {cancellingId === ls.id ? "Cancelling…" : "✕ Cancel Load Sheet"}
+                </button>
+              )}
               {handedOver && (
                 <span style={{ color: "#6B6355", fontSize: 11, alignSelf: "center" }}>By {profiles[ls.handed_over_by]?.full_name || "—"} · {fmtTime(ls.handed_over_at)} {ls.courier_rep_name ? `· Rep: ${ls.courier_rep_name}` : ""}</span>
               )}
             </div>
+            )}
           </div>
           );
         })}
