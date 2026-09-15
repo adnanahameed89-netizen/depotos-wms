@@ -98,6 +98,12 @@ async function postexProxy(action, payload, token) {
   return data;
 }
 
+// Tolerant PostEx courier match — strips spaces/dots/dashes before comparing, so
+// "PostEx", "Post Ex", "POSTEX", "Postex.", "Post-Ex" etc. are all recognized.
+function isPostex(courierText) {
+  return (courierText || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes("postex");
+}
+
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
 const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Inbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
@@ -2374,6 +2380,43 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [toteFilter, setToteFilter] = useState("");
+  const [lastAssignedTote, setLastAssignedTote] = useState(null);
+  const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
+
+  const printAssignedAwb = async (assignedTote) => {
+    setAwbPrintingBulk(true);
+    try {
+      const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      if (postexOrders.length > 0) {
+        const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
+        const result = await postexProxy("labels", { trackingNumbers }, token);
+        const openPdf = (base64) => {
+          const byteChars = atob(base64);
+          const byteNumbers = new Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+          const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+          window.open(URL.createObjectURL(blob), "_blank");
+        };
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
+        else openPdf(result.pdfBase64);
+      }
+      if (otherOrders.length > 0) {
+        let rowsHtml = "";
+        for (const o of otherOrders) rowsHtml += `<div class="slip"><div class="bin">BIN #${o.binNumber}</div><div class="awb">${o.trackingNumber || "—"}</div><div class="meta">${o.courier || ""}</div></div>`;
+        const w = window.open("", "_blank");
+        w.document.write(`<html><head><title>AWB Sheet — ${assignedTote.toteNumber}</title><style>
+          body{font-family:Arial;padding:16px;color:#111} h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
+          .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
+          .bin{font-size:22px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px}
+          .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace} .meta{color:#555;font-size:12px;text-align:right}
+        </style></head><body><h2>AWB Sheet — Tote ${assignedTote.toteNumber}</h2><div class="meta-top">Sorted by bin position.</div>${rowsHtml}</body></html>`);
+        w.document.close(); w.print();
+      }
+      showToast(`✅ AWB labels ready — ${assignedTote.orders.length} orders, Tote ${assignedTote.toteNumber}. Print karke Packer ko tote ke sath handover kar dein.`);
+    } catch (e) { showToast(`⚠ AWB fetch failed: ${e.message}`, "err"); }
+    setAwbPrintingBulk(false);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -2474,6 +2517,7 @@ function OrdersView({ token, profile, showToast, setView }) {
 
       await sb(`/rest/v1/totes?id=eq.${bulkToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: bulkPickerId } });
       let binNum = 1;
+      const assignedSummary = [];
       for (const { orderId, summaries } of okOrders) {
         const lineAllocations = {};
         for (const { line, summary } of summaries) {
@@ -2481,6 +2525,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
         }
         const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
+        assignedSummary.push({ orderId, binNumber: binNum, trackingNumber: orders[orderId]?.awb_number || orders[orderId]?.external_order_id, courier: orders[orderId]?.courier });
         binNum++;
         for (const { line } of summaries) {
           for (const alloc of lineAllocations[line.product_id]) {
@@ -2490,6 +2535,8 @@ function OrdersView({ token, profile, showToast, setView }) {
         await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "queued" } });
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "reserved_and_assigned_to_tote" } });
       }
+      const toteNumber = totes.find(t => t.id === bulkToteId)?.tote_number || "";
+      setLastAssignedTote({ toteId: bulkToteId, toteNumber, orders: assignedSummary });
       showToast(`${okOrders.length} orders assigned${shortOrders.length ? `, ${shortOrders.length} 'Incomplete' tab mein chale gaye (stock short)` : ""}`);
       setSelectedOrders({}); setBulkToteId(""); setBulkPickerId("");
       load();
@@ -3013,6 +3060,19 @@ function OrdersView({ token, profile, showToast, setView }) {
         </div>
       )}
 
+      {lastAssignedTote && (
+        <div style={{ ...S.panel, borderColor: "#F5A623", background: "#FFF9EE", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
+            <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein, taake woh parcels pe labeling kar sakein.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
+            <button style={S.secondaryBtnSm} onClick={() => setLastAssignedTote(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
+
       <div style={S.panel}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
           <span style={{ color: "#6B6355", fontSize: 12 }}>Received date:</span>
@@ -3184,15 +3244,57 @@ function PickingView({ token, profile, showToast }) {
     try {
       await sb(`/rest/v1/totes?id=eq.${selectedToteId}`, { method: "PATCH", token, body: { status: "picking", assigned_to: toteAssignPicker } });
       let binNum = 1;
+      const assignedSummary = [];
       for (const id of ids) {
+        const task = tasks.find(t => t.id === id);
         await sb(`/rest/v1/pick_tasks?id=eq.${id}`, { method: "PATCH", token, body: { tote_id: selectedToteId, assigned_to: toteAssignPicker, status: "assigned", assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
+        assignedSummary.push({ orderId: task?.order_id, binNumber: binNum, trackingNumber: orders[task?.order_id]?.awb_number || orders[task?.order_id]?.external_order_id, courier: orders[task?.order_id]?.courier });
         binNum++;
       }
       const toteNumber = totes.find(t => t.id === selectedToteId)?.tote_number;
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: selectedToteId, user_id: profile.id, action: "assigned", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
+      setLastAssignedTote({ toteId: selectedToteId, toteNumber, orders: assignedSummary });
       showToast(`${toteNumber} assigned with ${ids.length} orders`);
       setSelectedForTote({}); setToteAssignPicker(""); setSelectedToteId(""); load();
     } catch (e) { showToast("Tote assignment failed", "err"); }
+  };
+
+  const [lastAssignedTote, setLastAssignedTote] = useState(null);
+  const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
+
+  const printAssignedAwb = async (assignedTote) => {
+    setAwbPrintingBulk(true);
+    try {
+      const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      if (postexOrders.length > 0) {
+        const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
+        const result = await postexProxy("labels", { trackingNumbers }, token);
+        const openPdf = (base64) => {
+          const byteChars = atob(base64);
+          const byteNumbers = new Array(byteChars.length);
+          for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+          const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+          window.open(URL.createObjectURL(blob), "_blank");
+        };
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
+        else openPdf(result.pdfBase64);
+      }
+      if (otherOrders.length > 0) {
+        let rowsHtml = "";
+        for (const o of otherOrders) rowsHtml += `<div class="slip"><div class="bin">BIN #${o.binNumber}</div><div class="awb">${o.trackingNumber || "—"}</div><div class="meta">${o.courier || ""}</div></div>`;
+        const w = window.open("", "_blank");
+        w.document.write(`<html><head><title>AWB Sheet — ${assignedTote.toteNumber}</title><style>
+          body{font-family:Arial;padding:16px;color:#111} h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
+          .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
+          .bin{font-size:22px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px}
+          .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace} .meta{color:#555;font-size:12px;text-align:right}
+        </style></head><body><h2>AWB Sheet — Tote ${assignedTote.toteNumber}</h2><div class="meta-top">Sorted by bin position.</div>${rowsHtml}</body></html>`);
+        w.document.close(); w.print();
+      }
+      showToast(`✅ AWB labels ready — ${assignedTote.orders.length} orders, Tote ${assignedTote.toteNumber}. Print karke Packer ko tote ke sath handover kar dein.`);
+    } catch (e) { showToast(`⚠ AWB fetch failed: ${e.message}`, "err"); }
+    setAwbPrintingBulk(false);
   };
 
   const openToteDetail = (tote) => {
@@ -3562,8 +3664,8 @@ function PickingView({ token, profile, showToast }) {
               <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
               <button style={S.secondaryBtnSm} disabled={awbPrinting} onClick={async () => {
                 const sorted = [...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
-                const postexOrders = sorted.filter(t => (orders[t.order_id]?.courier || "").toLowerCase().includes("postex"));
-                const otherOrders = sorted.filter(t => !(orders[t.order_id]?.courier || "").toLowerCase().includes("postex"));
+                const postexOrders = sorted.filter(t => isPostex(orders[t.order_id]?.courier));
+                const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier));
 
                 if (postexOrders.length > 0) {
                   setAwbPrinting(true);
@@ -3768,6 +3870,18 @@ function PickingView({ token, profile, showToast }) {
               </select>
               <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0}>Assign tote</button>
             </div>
+            {lastAssignedTote && (
+              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
+                  <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein.</div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
+                  <button style={S.secondaryBtnSm} onClick={() => setLastAssignedTote(null)}>Dismiss</button>
+                </div>
+              </div>
+            )}
             <table>
               <thead><tr><th style={S.th}></th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Items</th><th style={S.th}>Type</th></tr></thead>
               <tbody>
@@ -4382,7 +4496,8 @@ function DispatchView({ token, profile, showToast }) {
         <button style={S.primaryBtnSm} disabled={syncingTracking} onClick={async () => {
           setSyncingTracking(true);
           try {
-            const dispatched = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(dispatched,handed_over)&courier=ilike.*postex*&courier_status_code=not.eq.0005&select=id,awb_number,external_order_id`, { token });
+            const allDispatched = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(dispatched,handed_over)&courier_status_code=not.eq.0005&select=id,awb_number,external_order_id,courier`, { token });
+            const dispatched = (allDispatched || []).filter(o => isPostex(o.courier));
             if (!dispatched || dispatched.length === 0) { showToast("Sync karne layak koi PostEx order nahi mila (sab already delivered ya koi PostEx order hi nahi)"); setSyncingTracking(false); return; }
             const trackingNumbers = dispatched.map(o => o.awb_number || o.external_order_id).filter(Boolean);
             const result = await postexProxy("track", { trackingNumbers }, token);
