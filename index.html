@@ -2426,6 +2426,7 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [orderTimingSummary, setOrderTimingSummary] = useState(null);
   const [editTracking, setEditTracking] = useState("");
   const [editCourier, setEditCourier] = useState("");
+  const [openPickedQty, setOpenPickedQty] = useState({});
   const [editQty, setEditQty] = useState({});
   const [statusFilter, setStatusFilter] = useState(null);
   const [lineStats, setLineStats] = useState({});
@@ -2780,6 +2781,14 @@ function OrdersView({ token, profile, showToast, setView }) {
     setOpenLines(lines || []);
     setOpenShortages(shortages || []);
 
+    const pickTaskIds = (pickTasks || []).map(t => t.id);
+    const pickedByProduct = {};
+    if (pickTaskIds.length) {
+      const ptLines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickTaskIds.join(",")})&select=*`, { token });
+      for (const l of ptLines || []) pickedByProduct[l.product_id] = (pickedByProduct[l.product_id] || 0) + (l.qty_picked || 0);
+    }
+    setOpenPickedQty(pickedByProduct);
+
     const history = (events || []).map(ev => ({
       ts: ev.created_at, label: ev.action, user: profiles[ev.user_id]?.full_name || "System"
     }));
@@ -2867,6 +2876,15 @@ function OrdersView({ token, profile, showToast, setView }) {
           const p = productCache[l.product_id];
           changes.push({ field: `Qty — ${p?.barcode || p?.name || l.product_id}`, old: String(l.qty), new: String(newQty) });
           await sb(`/rest/v1/sales_order_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty: newQty } });
+          if (newQty < l.qty) {
+            const shortfall = l.qty - newQty;
+            const existingShortage = openShortages.find(s => s.product_id === l.product_id);
+            if (existingShortage) {
+              await sb(`/rest/v1/order_shortage_lines?id=eq.${existingShortage.id}`, { method: "PATCH", token, body: { qty_required: l.qty, qty_available: newQty, not_available_qty: shortfall } });
+            } else {
+              await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: openOrder.id, product_id: l.product_id, qty_required: l.qty, qty_available: newQty, not_available_qty: shortfall } });
+            }
+          }
         }
       }
       for (const c of changes) {
@@ -2882,6 +2900,25 @@ function OrdersView({ token, profile, showToast, setView }) {
     await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { status: "received" } });
     await reserveAndQueue({ ...openOrder, status: "received" });
     setOpenOrder(null);
+  };
+
+  const hasPartialPick = Object.values(openPickedQty).some(q => q > 0);
+
+  const markReadyForDispatch = async () => {
+    const shortfallLines = openLines.filter(l => (openPickedQty[l.product_id] || 0) < l.qty);
+    if (shortfallLines.length > 0) {
+      const names = shortfallLines.map(l => productCache[l.product_id]?.barcode || l.product_id).join(", ");
+      showToast(`⚠ Qty abhi bhi jitna pick hua usse zyada hai (${names}) — pehle qty ko picked amount ke barabar edit karein`, "err");
+      return;
+    }
+    try {
+      await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: openOrder.id, status: "labeled", started_at: new Date().toISOString(), completed_at: new Date().toISOString(), assigned_to: profile.id } });
+      await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { status: "rtd" } });
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openOrder.id, field_changed: "Status", old_value: "incomplete", new_value: "rtd (Lead override — matched to picked qty)", changed_by: profile.id } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openOrder.id, user_id: profile.id, action: "incomplete_resolved_direct_to_dispatch" } });
+      showToast(`✅ Order ${openOrder.external_order_id} — Dispatch ke liye ready, scan kar ke load sheet banayein`);
+      setOpenOrder(null); load();
+    } catch (e) { showToast("Failed — dobara try karein", "err"); }
   };
 
   if (openOrder) {
@@ -2936,7 +2973,14 @@ function OrdersView({ token, profile, showToast, setView }) {
               </tbody>
             </table>
             {canEditIncomplete && openOrder.status === "incomplete" && (
-              <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={retryReserve}>🔄 Retry reserve (after correction/restock)</button>
+              hasPartialPick ? (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Yeh order pehle se partially picked ja chuka hai. Agar upar qty ko us amount tak edit kar diya hai jo actually pick hua tha, to direct Dispatch ke liye bhej sakte hain — dobara pick karne ki zaroorat nahi.</div>
+                  <button style={S.primaryBtnSm} onClick={markReadyForDispatch}>✅ Confirm &amp; Send to Dispatch (no re-pick)</button>
+                </div>
+              ) : (
+                <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={retryReserve}>🔄 Retry reserve (after correction/restock)</button>
+              )
             )}
           </div>
         )}
@@ -2944,7 +2988,7 @@ function OrdersView({ token, profile, showToast, setView }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Line items{openOrder.status === "incomplete" && canEditIncomplete ? " (editable)" : ""}</div>
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th>{hasPartialPick && <th style={S.th}>Picked</th>}<th style={S.th}>Qty</th></tr></thead>
             <tbody>
               {openLines.map(l => {
                 const p = productCache[l.product_id];
@@ -2952,6 +2996,7 @@ function OrdersView({ token, profile, showToast, setView }) {
                   <tr key={l.id}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
+                    {hasPartialPick && <td style={{ ...S.td, color: (openPickedQty[l.product_id] || 0) < l.qty ? "#E5484D" : "#4CAF7D", fontWeight: 600 }}>{openPickedQty[l.product_id] || 0}</td>}
                     <td style={S.td}>
                       {openOrder.status === "incomplete" && canEditIncomplete ? (
                         <input type="number" min={1} style={{ ...S.input, width: 80, padding: "4px 8px" }} value={editQty[l.id] !== undefined ? editQty[l.id] : l.qty} onChange={e => setEditQty({ ...editQty, [l.id]: e.target.value })} />
@@ -5627,7 +5672,7 @@ async function fetchProductsByBarcodes(token, codes) {
 // database. Returns a report the user must review/confirm before import.
 function validateImportRows(rows, map, productLookup, groupField, existingGroupLines) {
   const results = [];
-  const seenInFile = new Set();
+  const seenInFile = {}; // lineKey -> qty of the first occurrence
   rows.forEach((row, i) => {
     const errors = [];
     const groupVal = cleanCode(getVal(row, map, groupField));
@@ -5643,8 +5688,15 @@ function validateImportRows(rows, map, productLookup, groupField, existingGroupL
 
     const lineKey = `${groupVal}|${barcode}`;
     if (groupVal && barcode) {
-      if (seenInFile.has(lineKey)) errors.push("Duplicate line in this file");
-      else seenInFile.add(lineKey);
+      if (lineKey in seenInFile) {
+        if (seenInFile[lineKey] === qty) {
+          errors.push("Duplicate — same item & qty already accepted for this tracking (rejected)");
+        } else {
+          errors.push("Duplicate line in this file (different qty — needs review)");
+        }
+      } else {
+        seenInFile[lineKey] = qty;
+      }
       if (existingGroupLines && existingGroupLines[lineKey]) errors.push("Already exists (previously imported)");
     }
 
@@ -5657,9 +5709,10 @@ function validateImportRows(rows, map, productLookup, groupField, existingGroupL
 
   const validRows = results.filter(r => r.valid);
   const invalidRows = results.filter(r => !r.valid);
+  const alreadyExistsRows = results.filter(r => r.errors.includes("Already exists (previously imported)"));
   return {
     total: results.length,
-    validRows, invalidRows,
+    validRows, invalidRows, alreadyExistsRows,
     invalidBarcodeCount: results.filter(r => r.errors.includes("Barcode not found in Product Master")).length,
     invalidQtyCount: results.filter(r => r.errors.includes("Invalid quantity")).length,
     duplicateCount: results.filter(r => r.errors.some(e => e.startsWith("Duplicate") || e.startsWith("Already exists"))).length,
@@ -6641,6 +6694,22 @@ function ImportReportPanel({ report, onConfirm, onCancel, importing, confirmLabe
         <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.invalidBarcodeCount}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Barcode not found</div></div>
         <div style={S.statCard}><div style={{ fontSize: 22, fontWeight: 700, color: "#F5A623" }}>{report.duplicateCount}</div><div style={{ color: "#6B6355", fontSize: 11 }}>Duplicates</div></div>
       </div>
+
+      {report.alreadyExistsRows && report.alreadyExistsRows.length > 0 && (
+        <div style={{ background: "#FDF0EE", border: "1px solid #E5484D", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+          <div style={{ color: "#E5484D", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>🔁 {report.alreadyExistsRows.length} line(s) — Tracking already processed before</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Yeh tracking numbers pehle kisi purani file mein already import ho chuke hain. Dobara import nahi honge (duplicate order banne se bacha liya) — baaki file normal process hogi.</div>
+          <table>
+            <thead><tr><th style={S.th}>Row #</th><th style={S.th}>Tracking</th><th style={S.th}>Barcode</th></tr></thead>
+            <tbody>
+              {report.alreadyExistsRows.slice(0, 50).map((r, i) => (
+                <tr key={i}><td style={S.td}>{r.rowNum}</td><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#E5484D" }}>{r.groupVal}</td><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{r.barcode}</td></tr>
+              ))}
+            </tbody>
+          </table>
+          {report.alreadyExistsRows.length > 50 && <div style={{ color: "#8A8272", fontSize: 11, marginTop: 6 }}>+{report.alreadyExistsRows.length - 50} more</div>}
+        </div>
+      )}
 
       {report.invalidRows.length > 0 && (
         <>
