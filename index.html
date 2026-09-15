@@ -416,6 +416,7 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [dateTo, setDateTo] = useState(new Date().toISOString().slice(0, 10));
   const [snapshot, setSnapshot] = useState(null);
   const [dailyTrend, setDailyTrend] = useState([]);
+  const [courierPerf, setCourierPerf] = useState([]);
   const [pickerLeaderboard, setPickerLeaderboard] = useState([]);
   const [packerLeaderboard, setPackerLeaderboard] = useState([]);
   const [putawayLeaderboard, setPutawayLeaderboard] = useState([]);
@@ -428,6 +429,8 @@ function DashboardView({ token, profile, setView, showToast }) {
   const isAdmin = profile.role === "admin";
   const trendChartRef = useRef(null);
   const trendChartInstance = useRef(null);
+  const courierChartRef = useRef(null);
+  const courierChartInstance = useRef(null);
   const gaugeChartRef = useRef(null);
   const gaugeChartInstance = useRef(null);
 
@@ -615,6 +618,59 @@ function DashboardView({ token, profile, setView, showToast }) {
     return () => { if (trendChartInstance.current) trendChartInstance.current.destroy(); };
   }, [dailyTrend]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(dispatched,handed_over)&delivery_city=not.is.null&select=courier,delivery_city,courier_status_code,dispatched_at,courier_delivered_at`, { token });
+        const byCity = {};
+        for (const o of rows || []) {
+          if (!byCity[o.delivery_city]) byCity[o.delivery_city] = { total: 0, delivered: 0, returned: 0, days: [] };
+          const b = byCity[o.delivery_city];
+          b.total += 1;
+          if (o.courier_status_code === "0005") {
+            b.delivered += 1;
+            if (o.dispatched_at && o.courier_delivered_at) b.days.push((new Date(o.courier_delivered_at) - new Date(o.dispatched_at)) / 86400000);
+          }
+          if (["0002", "0006", "0007"].includes(o.courier_status_code)) b.returned += 1;
+        }
+        setCourierPerf(Object.entries(byCity)
+          .map(([city, b]) => ({
+            city, total: b.total,
+            avgDays: b.days.length ? b.days.reduce((s, d) => s + d, 0) / b.days.length : null,
+            successPct: b.total ? (b.delivered / b.total) * 100 : 0,
+            returnPct: b.total ? (b.returned / b.total) * 100 : 0
+          }))
+          .sort((a, b) => b.total - a.total).slice(0, 10));
+      } catch (e) {}
+    })();
+  }, [token, profile.warehouse_id, refreshTick]);
+
+  useEffect(() => {
+    if (!courierChartRef.current || courierPerf.length === 0) return;
+    if (courierChartInstance.current) courierChartInstance.current.destroy();
+    courierChartInstance.current = new Chart(courierChartRef.current.getContext("2d"), {
+      data: {
+        labels: courierPerf.map(c => c.city),
+        datasets: [
+          { type: "bar", label: "Avg Delivery Time (days)", data: courierPerf.map(c => c.avgDays !== null ? +c.avgDays.toFixed(1) : null), backgroundColor: "#5B9EE8", yAxisID: "y", order: 3 },
+          { type: "line", label: "Success Rate %", data: courierPerf.map(c => +c.successPct.toFixed(1)), borderColor: "#4CAF7D", backgroundColor: "#4CAF7D", yAxisID: "y1", tension: 0.3, order: 1 },
+          { type: "line", label: "Return Rate %", data: courierPerf.map(c => +c.returnPct.toFixed(1)), borderColor: "#E5484D", backgroundColor: "#E5484D", yAxisID: "y1", tension: 0.3, order: 2 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: true, position: "top", labels: { color: "#6B6355", boxWidth: 12 } } },
+        scales: {
+          y: { position: "left", beginAtZero: true, title: { display: true, text: "Days", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } },
+          y1: { position: "right", beginAtZero: true, max: 100, title: { display: true, text: "Rate %", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { display: false } },
+          x: { ticks: { color: "#6B6355" }, grid: { display: false } }
+        }
+      }
+    });
+    return () => { if (courierChartInstance.current) courierChartInstance.current.destroy(); };
+  }, [courierPerf]);
+
 
 
   useEffect(() => {
@@ -766,6 +822,16 @@ function DashboardView({ token, profile, setView, showToast }) {
           <canvas ref={trendChartRef}></canvas>
         </div>
       </div>
+
+      {courierPerf.length > 0 && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>📍 Courier Last-Mile Performance — City-Wise</div>
+          <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Top 10 cities by volume. Bars = average delivery time (days); Lines = success rate vs. return rate.</div>
+          <div style={{ height: 300, position: "relative" }}>
+            <canvas ref={courierChartRef}></canvas>
+          </div>
+        </div>
+      )}
 
       {fulfillmentVelocity && (
         <div style={S.panel}>
@@ -4493,26 +4559,12 @@ function DispatchView({ token, profile, showToast }) {
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>📡 PostEx Tracking Sync</div>
-        <div style={{ color: "#8A8272", fontSize: 12, marginBottom: 12 }}>Dispatched PostEx orders ki latest status, city, aur delivery time PostEx se khींch kar update karta hai — Courier Performance report isi data pe based hai.</div>
+        <div style={{ color: "#8A8272", fontSize: 12, marginBottom: 12 }}>Dispatched PostEx orders ki latest status, city, aur delivery time PostEx se khींch kar update karta hai — har 3 ghante mein khud-b-khud bhi hota hai, ya yahan se turant chala sakte hain.</div>
         <button style={S.primaryBtnSm} disabled={syncingTracking} onClick={async () => {
           setSyncingTracking(true);
           try {
-            const allDispatched = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(dispatched,handed_over)&courier_status_code=not.eq.0005&select=id,awb_number,external_order_id,courier`, { token });
-            const dispatched = (allDispatched || []).filter(o => isPostex(o.courier));
-            if (!dispatched || dispatched.length === 0) { showToast("Sync karne layak koi PostEx order nahi mila (sab already delivered ya koi PostEx order hi nahi)"); setSyncingTracking(false); return; }
-            const trackingNumbers = dispatched.map(o => o.awb_number || o.external_order_id).filter(Boolean);
-            const result = await postexProxy("track", { trackingNumbers }, token);
-            let updated = 0, delivered = 0;
-            for (const o of dispatched) {
-              const tn = o.awb_number || o.external_order_id;
-              const r = result.results.find(x => x.trackingNumber === tn);
-              if (!r || r.error) continue;
-              const body = { courier_status: r.transactionStatus, courier_status_code: r.statusCode, delivery_city: r.cityName, courier_last_synced_at: new Date().toISOString() };
-              if (r.statusCode === "0005") { body.courier_delivered_at = new Date().toISOString(); delivered++; }
-              await sb(`/rest/v1/sales_orders?id=eq.${o.id}`, { method: "PATCH", token, body });
-              updated++;
-            }
-            showToast(`✅ ${updated} orders sync ho gaye — ${delivered} newly delivered`);
+            const result = await postexProxy("auto-sync", {}, token);
+            showToast(result.total === 0 ? "Sync karne layak koi PostEx order nahi mila" : `✅ ${result.updated} orders sync ho gaye — ${result.delivered} newly delivered`);
           } catch (e) { showToast(`Sync failed: ${e.message}`, "err"); }
           setSyncingTracking(false);
         }}>{syncingTracking ? "Syncing…" : "🔄 Sync PostEx Tracking Now"}</button>
@@ -5284,7 +5336,8 @@ function ReportsView({ token, profile, showToast }) {
         setRows((orders || []).map(o => ({
           "Order #": o.external_order_id, "Courier": o.courier, "Status": o.status,
           "Picker": pickerByOrder[o.id] || "—", "Packer": packerByOrder[o.id] || "—",
-          "Received At": fmtTime(o.received_at), "Dispatched At": o.dispatched_at ? fmtTime(o.dispatched_at) : "—"
+          "Received At": fmtTime(o.received_at), "Dispatched At": o.dispatched_at ? fmtTime(o.dispatched_at) : "—",
+          "Last-Mile Status": o.courier_status || "—", "City": o.delivery_city || "—"
         })));
       } else if (key === "grn_report") {
         const [grns, lines, putawayAllForGrn, profsForGrn] = await Promise.all([
