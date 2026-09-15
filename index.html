@@ -2476,6 +2476,7 @@ function OrdersView({ token, profile, showToast, setView }) {
     const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k]);
     if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
     if (!bulkToteId || !bulkPickerId) { showToast("Tote aur Picker select karein", "err"); return; }
+    const orderById = Object.fromEntries(orders.map(o => [o.id, o]));
     const selectedTote = totes.find(t => t.id === bulkToteId);
     if (!isBulkTote(selectedTote) && ids.length > NORMAL_TOTE_MAX) {
       showToast(`This TOT has a maximum capacity of ${NORMAL_TOTE_MAX} orders. Bulk Trolley select karein zyada orders ke liye.`, "err");
@@ -2525,7 +2526,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
         }
         const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "assigned", tote_id: bulkToteId, assigned_to: bulkPickerId, assigned_at: new Date().toISOString(), tote_bin_number: binNum } });
-        assignedSummary.push({ orderId, binNumber: binNum, trackingNumber: orders[orderId]?.awb_number || orders[orderId]?.external_order_id, courier: orders[orderId]?.courier });
+        assignedSummary.push({ orderId, binNumber: binNum, trackingNumber: orderById[orderId]?.awb_number || orderById[orderId]?.external_order_id, courier: orderById[orderId]?.courier });
         binNum++;
         for (const { line } of summaries) {
           for (const alloc of lineAllocations[line.product_id]) {
