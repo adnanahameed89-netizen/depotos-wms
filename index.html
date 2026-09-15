@@ -2448,6 +2448,7 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [toteFilter, setToteFilter] = useState("");
   const [lastAssignedTote, setLastAssignedTote] = useState(null);
   const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const printAssignedAwb = async (assignedTote) => {
     setAwbPrintingBulk(true);
@@ -2533,6 +2534,11 @@ function OrdersView({ token, profile, showToast, setView }) {
     (!dateTo || new Date(o.received_at) < new Date(new Date(dateTo + "T00:00:00").getTime() + 86400000)) &&
     (!toteFilter || pickTaskInfo[o.id]?.toteId === toteFilter)
   );
+  const PAGE_SIZE = 100;
+  const totalPages = Math.max(1, Math.ceil(displayedOrders.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pagedOrders = displayedOrders.slice((safeCurrentPage - 1) * PAGE_SIZE, safeCurrentPage * PAGE_SIZE);
+  useEffect(() => { setCurrentPage(1); }, [statusFilter, skuFilter, userFilter, dateFrom, dateTo, toteFilter]);
   const singleCount = receivedOrders.filter(o => orderSkuType(o.id) === "single").length;
   const multiCount = receivedOrders.filter(o => orderSkuType(o.id) === "multi").length;
   const selectedCount = Object.values(selectedOrders).filter(Boolean).length;
@@ -2898,6 +2904,10 @@ function OrdersView({ token, profile, showToast, setView }) {
               <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[openOrder.status] || openOrder.status}</span></div>
               <div><div style={S.label}>RECEIVED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
               {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
+              {openOrder.courier_status && <div><div style={S.label}>LAST-MILE STATUS</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier_status}</div></div>}
+              {openOrder.delivery_city && <div><div style={S.label}>CITY</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.delivery_city}</div></div>}
+              {openOrder.receiver_name && <div><div style={S.label}>RECEIVER NAME</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.receiver_name}</div></div>}
+              {openOrder.courier_delivery_date && <div><div style={S.label}>DELIVERY DATE</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier_delivery_date}</div></div>}
             </div>
           )}
         </div>
@@ -3177,7 +3187,7 @@ function OrdersView({ token, profile, showToast, setView }) {
             </tr>
           </thead>
           <tbody>
-            {displayedOrders.map(o => {
+            {pagedOrders.map(o => {
               const stat = lineStats[o.id] || { count: 0, qty: 0 };
               const type = o.status === "received" ? orderSkuType(o.id) : null;
               const pInfo = pickTaskInfo[o.id];
@@ -3219,6 +3229,18 @@ function OrdersView({ token, profile, showToast, setView }) {
             )}
           </tbody>
         </table>
+        {displayedOrders.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 10 }}>
+            <span style={{ color: "#8A8272", fontSize: 12 }}>
+              Showing {(safeCurrentPage - 1) * PAGE_SIZE + 1}–{Math.min(safeCurrentPage * PAGE_SIZE, displayedOrders.length)} of {displayedOrders.length} orders
+            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button style={S.secondaryBtnSm} disabled={safeCurrentPage === 1} onClick={() => setCurrentPage(p => Math.max(1, p - 1))}>← Previous</button>
+              <span style={{ color: "#6B6355", fontSize: 12 }}>Page {safeCurrentPage} of {totalPages}</span>
+              <button style={S.secondaryBtnSm} disabled={safeCurrentPage === totalPages} onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}>Next →</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
