@@ -2796,6 +2796,13 @@ function OrdersView({ token, profile, showToast, setView }) {
     for (const a of audits || []) {
       history.push({ ts: a.changed_at, label: `Amended: ${a.field_changed} — "${a.old_value || "—"}" → "${a.new_value || "—"}"`, user: profiles[a.changed_by]?.full_name || "—" });
     }
+    if (order.courier_status) {
+      const parts = [order.courier_status];
+      if (order.delivery_city) parts.push(`City: ${order.delivery_city}`);
+      if (order.receiver_name) parts.push(`Receiver: ${order.receiver_name}`);
+      if (order.courier_delivery_date) parts.push(`Delivery Date: ${order.courier_delivery_date}`);
+      history.push({ ts: order.courier_delivered_at || order.courier_last_synced_at || order.dispatched_at, label: `Last-mile: ${parts.join(" · ")}`, user: "PostEx (auto-synced)" });
+    }
     history.sort((a, b) => new Date(a.ts) - new Date(b.ts));
     setOpenEvents(history);
 
@@ -2904,10 +2911,6 @@ function OrdersView({ token, profile, showToast, setView }) {
               <div><div style={S.label}>STATUS</div><span style={{ ...S.badgeSm, color: STATUS_COLORS[openOrder.status] || "#5B9EE8", borderColor: STATUS_COLORS[openOrder.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[openOrder.status] || openOrder.status}</span></div>
               <div><div style={S.label}>RECEIVED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.received_at)}</div></div>
               {openOrder.dispatched_at && <div><div style={S.label}>DISPATCHED</div><div style={{ color: "#6B6355", fontSize: 13, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(openOrder.dispatched_at)}</div></div>}
-              {openOrder.courier_status && <div><div style={S.label}>LAST-MILE STATUS</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier_status}</div></div>}
-              {openOrder.delivery_city && <div><div style={S.label}>CITY</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.delivery_city}</div></div>}
-              {openOrder.receiver_name && <div><div style={S.label}>RECEIVER NAME</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.receiver_name}</div></div>}
-              {openOrder.courier_delivery_date && <div><div style={S.label}>DELIVERY DATE</div><div style={{ color: "#2B2620", fontSize: 14 }}>{openOrder.courier_delivery_date}</div></div>}
             </div>
           )}
         </div>
