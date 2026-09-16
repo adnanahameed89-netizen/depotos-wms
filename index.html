@@ -4668,6 +4668,14 @@ function DispatchView({ token, profile, showToast }) {
           } catch (e) { showToast(`Sync failed: ${e.message}`, "err"); }
           setSyncingMnp(false);
         }}>{syncingMnp ? "Syncing…" : "🔄 Sync M&P Tracking Now"}</button>
+        <button style={{ ...S.secondaryBtnSm, marginLeft: 8 }} onClick={async () => {
+          const tn = window.prompt("Debug: ek M&P tracking number daalein (jaise 560680910035842):");
+          if (!tn) return;
+          try {
+            const result = await mnpProxy("debug", { trackingNumber: tn }, token);
+            window.alert(`Status: ${result.httpStatus}\n\nURL: ${result.requestUrl}\n\nRaw response:\n${result.rawResponse}`);
+          } catch (e) { window.alert(`Debug failed: ${e.message}`); }
+        }}>🔍 Debug (raw response)</button>
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
