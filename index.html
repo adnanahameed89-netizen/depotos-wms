@@ -98,10 +98,27 @@ async function postexProxy(action, payload, token) {
   return data;
 }
 
+async function mnpProxy(action, payload, token) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/mnp-proxy`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, apikey: ANON_KEY },
+    body: JSON.stringify({ action, ...payload })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error || `M&P request failed (${res.status})`);
+  return data;
+}
+
 // Tolerant PostEx courier match — strips spaces/dots/dashes before comparing, so
 // "PostEx", "Post Ex", "POSTEX", "Postex.", "Post-Ex" etc. are all recognized.
 function isPostex(courierText) {
   return (courierText || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes("postex");
+}
+
+// Tolerant M&P courier match — "M&P", "M & P", "MNP", "Muller Phipps" etc.
+function isMnp(courierText) {
+  const c = (courierText || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return c.includes("mnp") || c.includes("mullerphipps") || c.includes("muller") || c === "mp" || c === "m";
 }
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
@@ -2810,7 +2827,7 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (order.delivery_city) parts.push(`City: ${order.delivery_city}`);
       if (order.receiver_name) parts.push(`Receiver: ${order.receiver_name}`);
       if (order.courier_delivery_date) parts.push(`Delivery Date: ${order.courier_delivery_date}`);
-      history.push({ ts: order.courier_delivered_at || order.courier_last_synced_at || order.dispatched_at, label: `Last-mile: ${parts.join(" · ")}`, user: "PostEx (auto-synced)" });
+      history.push({ ts: order.courier_delivered_at || order.courier_last_synced_at || order.dispatched_at, label: `Last-mile: ${parts.join(" · ")}`, user: `${order.courier || "Courier"} (auto-synced)` });
     }
     history.sort((a, b) => new Date(a.ts) - new Date(b.ts));
     setOpenEvents(history);
@@ -4470,6 +4487,7 @@ function DispatchView({ token, profile, showToast }) {
 
   const [cancellingId, setCancellingId] = useState(null);
   const [syncingTracking, setSyncingTracking] = useState(false);
+  const [syncingMnp, setSyncingMnp] = useState(false);
 
   const cancelLoadSheet = async (ls) => {
     if (ls.handover_status === "handed_over") { showToast("Yeh load sheet already handover ho chuki hai — cancel nahi ho sakti", "err"); return; }
@@ -4638,6 +4656,18 @@ function DispatchView({ token, profile, showToast }) {
           } catch (e) { showToast(`Sync failed: ${e.message}`, "err"); }
           setSyncingTracking(false);
         }}>{syncingTracking ? "Syncing…" : "🔄 Sync PostEx Tracking Now"}</button>
+      </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>📡 M&amp;P Tracking Sync</div>
+        <div style={{ color: "#8A8272", fontSize: 12, marginBottom: 12 }}>Dispatched M&amp;P orders ki latest status, city, aur receiver name M&amp;P se khींch kar update karta hai.</div>
+        <button style={S.primaryBtnSm} disabled={syncingMnp} onClick={async () => {
+          setSyncingMnp(true);
+          try {
+            const result = await mnpProxy("auto-sync", {}, token);
+            showToast(result.total === 0 ? "Sync karne layak koi M&P order nahi mila" : `✅ ${result.updated} orders sync ho gaye — ${result.delivered} newly delivered`);
+          } catch (e) { showToast(`Sync failed: ${e.message}`, "err"); }
+          setSyncingMnp(false);
+        }}>{syncingMnp ? "Syncing…" : "🔄 Sync M&P Tracking Now"}</button>
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
