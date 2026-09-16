@@ -2517,17 +2517,24 @@ function OrdersView({ token, profile, showToast, setView }) {
     setAwbPrintingBulk(true);
     try {
       const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const mnpOrders = assignedTote.orders.filter(o => isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier) && !isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const openPdf = (base64) => {
+        const byteChars = atob(base64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+        window.open(URL.createObjectURL(blob), "_blank");
+      };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        const openPdf = (base64) => {
-          const byteChars = atob(base64);
-          const byteNumbers = new Array(byteChars.length);
-          for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-          const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-          window.open(URL.createObjectURL(blob), "_blank");
-        };
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
+        else openPdf(result.pdfBase64);
+      }
+      if (mnpOrders.length > 0) {
+        const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
+        const result = await mnpProxy("labels", { trackingNumbers }, token);
         if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
         else openPdf(result.pdfBase64);
       }
@@ -3478,17 +3485,24 @@ function PickingView({ token, profile, showToast }) {
     setAwbPrintingBulk(true);
     try {
       const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const mnpOrders = assignedTote.orders.filter(o => isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier) && !isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
+      const openPdf = (base64) => {
+        const byteChars = atob(base64);
+        const byteNumbers = new Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+        window.open(URL.createObjectURL(blob), "_blank");
+      };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        const openPdf = (base64) => {
-          const byteChars = atob(base64);
-          const byteNumbers = new Array(byteChars.length);
-          for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-          const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-          window.open(URL.createObjectURL(blob), "_blank");
-        };
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
+        else openPdf(result.pdfBase64);
+      }
+      if (mnpOrders.length > 0) {
+        const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
+        const result = await mnpProxy("labels", { trackingNumbers }, token);
         if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
         else openPdf(result.pdfBase64);
       }
@@ -3877,26 +3891,43 @@ function PickingView({ token, profile, showToast }) {
               <button style={S.secondaryBtnSm} disabled={awbPrinting} onClick={async () => {
                 const sorted = [...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
                 const postexOrders = sorted.filter(t => isPostex(orders[t.order_id]?.courier));
-                const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier));
+                const mnpOrders = sorted.filter(t => isMnp(orders[t.order_id]?.courier));
+                const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier) && !isMnp(orders[t.order_id]?.courier));
+
+                const openPdf = (base64) => {
+                  const byteChars = atob(base64);
+                  const byteNumbers = new Array(byteChars.length);
+                  for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+                  const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
+                  window.open(URL.createObjectURL(blob), "_blank");
+                };
 
                 if (postexOrders.length > 0) {
                   setAwbPrinting(true);
                   try {
                     const trackingNumbers = postexOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
                     const result = await postexProxy("labels", { trackingNumbers }, token);
-                    const openPdf = (base64) => {
-                      const byteChars = atob(base64);
-                      const byteNumbers = new Array(byteChars.length);
-                      for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-                      const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-                      window.open(URL.createObjectURL(blob), "_blank");
-                    };
                     if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
                     else openPdf(result.pdfBase64);
                     showToast(`✅ ${postexOrders.length} PostEx label(s) fetched — printing`);
                   } catch (e) {
                     showToast(`⚠ PostEx label fetch failed: ${e.message} — falling back to text sheet`, "err");
                     otherOrders.push(...postexOrders);
+                  }
+                  setAwbPrinting(false);
+                }
+
+                if (mnpOrders.length > 0) {
+                  setAwbPrinting(true);
+                  try {
+                    const trackingNumbers = mnpOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
+                    const result = await mnpProxy("labels", { trackingNumbers }, token);
+                    if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
+                    else openPdf(result.pdfBase64);
+                    showToast(`✅ ${mnpOrders.length} M&P label(s) fetched — printing`);
+                  } catch (e) {
+                    showToast(`⚠ M&P label fetch failed: ${e.message} — falling back to text sheet`, "err");
+                    otherOrders.push(...mnpOrders);
                   }
                   setAwbPrinting(false);
                 }
@@ -4727,14 +4758,6 @@ function DispatchView({ token, profile, showToast }) {
           } catch (e) { showToast(`Sync failed: ${e.message}`, "err"); }
           setSyncingTracking(false);
         }}>{syncingTracking ? "Syncing…" : "🔄 Sync All Tracking Now"}</button>
-        <button style={{ ...S.secondaryBtnSm, marginLeft: 8 }} onClick={async () => {
-          const tn = window.prompt("Debug M&P Label: ek M&P tracking number daalein:");
-          if (!tn) return;
-          try {
-            const result = await mnpProxy("debug-label", { trackingNumber: tn }, token);
-            window.alert(`Status: ${result.httpStatus}\nContent-Type: ${result.contentType}\n\nURL: ${result.requestUrl}\n\nRaw response (first 3000 chars):\n${result.rawResponse}`);
-          } catch (e) { window.alert(`Debug failed: ${e.message}`); }
-        }}>🔍 Debug M&amp;P Label</button>
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
