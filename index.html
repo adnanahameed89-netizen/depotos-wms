@@ -2231,6 +2231,87 @@ function InventoryView({ token, profile, showToast }) {
   const [putawayHistory, setPutawayHistory] = useState({}); // product_id -> [{qty_completed, completed_at}] asc
   const [putawayHistoryByBin, setPutawayHistoryByBin] = useState({}); // "product_id|bin_id" -> [...] asc
   const canImport = ["admin", "warehouse_lead"].includes(profile.role);
+  const canManageCounts = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
+  const [cycleCounts, setCycleCounts] = useState([]);
+  const [activeCount, setActiveCount] = useState(null);
+  const [countLines, setCountLines] = useState([]);
+  const [newScopeType, setNewScopeType] = useState("bin");
+  const [newScopeValue, setNewScopeValue] = useState("");
+  const [startingCount, setStartingCount] = useState(false);
+  const [approvingCount, setApprovingCount] = useState(false);
+
+  const loadCycleCounts = useCallback(async () => {
+    const cc = await sb(`/rest/v1/cycle_counts?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token });
+    setCycleCounts(cc || []);
+  }, [token, profile.warehouse_id]);
+  useEffect(() => { loadCycleCounts(); }, [loadCycleCounts]);
+
+  const openCycleCount = async (cc) => {
+    const lines = await sb(`/rest/v1/cycle_count_lines?cycle_count_id=eq.${cc.id}&select=*`, { token });
+    setActiveCount(cc);
+    setCountLines(lines || []);
+  };
+
+  const startCycleCount = async () => {
+    if (newScopeType !== "all" && !newScopeValue) { showToast("Bin ya Category select karein", "err"); return; }
+    setStartingCount(true);
+    try {
+      let scopedRows = rows;
+      if (newScopeType === "bin") scopedRows = rows.filter(r => r.bin_id === newScopeValue);
+      else if (newScopeType === "category") scopedRows = rows.filter(r => products[r.product_id]?.category === newScopeValue);
+      scopedRows = scopedRows.filter(r => r.on_hand > 0);
+      if (scopedRows.length === 0) { showToast("Is scope mein koi stock nahi mila", "err"); setStartingCount(false); return; }
+
+      const cc = await sb(`/rest/v1/cycle_counts`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { warehouse_id: profile.warehouse_id, scope_type: newScopeType, scope_value: newScopeType === "all" ? null : newScopeValue, status: "counting", created_by: profile.id }
+      });
+      const lineBodies = scopedRows.map(r => ({ cycle_count_id: cc[0].id, product_id: r.product_id, bin_id: r.bin_id, system_qty: r.on_hand }));
+      for (let i = 0; i < lineBodies.length; i += 100) {
+        await sb(`/rest/v1/cycle_count_lines`, { method: "POST", token, body: lineBodies.slice(i, i + 100) });
+      }
+      showToast(`✅ Cycle count shuru — ${lineBodies.length} line(s) count karni hain`);
+      setNewScopeValue("");
+      await loadCycleCounts();
+      openCycleCount(cc[0]);
+    } catch (e) { showToast("Start failed — dobara try karein", "err"); }
+    setStartingCount(false);
+  };
+
+  const saveCountedQty = async (lineId, qty) => {
+    const q = qty === "" ? null : Number(qty);
+    setCountLines(prev => prev.map(l => l.id === lineId ? { ...l, counted_qty: q } : l));
+    await sb(`/rest/v1/cycle_count_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { counted_qty: q, counted_by: profile.id, counted_at: new Date().toISOString() } });
+  };
+
+  const submitForReview = async () => {
+    const uncounted = countLines.filter(l => l.counted_qty === null || l.counted_qty === undefined);
+    if (uncounted.length > 0 && !window.confirm(`${uncounted.length} line(s) abhi count nahi hui — sirf jo count ho chuki hain unhi ka review submit karein?`)) return;
+    await sb(`/rest/v1/cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "pending_approval", submitted_by: profile.id, submitted_at: new Date().toISOString() } });
+    showToast("✅ Review ke liye submit ho gaya");
+    await loadCycleCounts();
+    openCycleCount({ ...activeCount, status: "pending_approval" });
+  };
+
+  const approveAndAdjust = async () => {
+    setApprovingCount(true);
+    try {
+      const toAdjust = countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty);
+      for (const l of toAdjust) {
+        const delta = l.counted_qty - l.system_qty;
+        await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, delta);
+        await sb(`/rest/v1/cycle_count_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { adjusted: true } });
+        const p = products[l.product_id];
+        await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty), new_value: String(l.counted_qty), changed_by: profile.id } });
+      }
+      await sb(`/rest/v1/cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "approved", approved_by: profile.id, approved_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "cycle_count", entity_id: activeCount.id, user_id: profile.id, action: "approved_and_adjusted" } });
+      showToast(`✅ ${toAdjust.length} adjustment(s) apply ho gayi — inventory update ho gayi`);
+      setActiveCount(null); setCountLines([]);
+      await loadCycleCounts(); await loadAll();
+    } catch (e) { showToast("Approve failed — dobara try karein", "err"); }
+    setApprovingCount(false);
+  };
 
   const loadAll = useCallback(async () => {
       const [inv, res, prods, binList, putaway, grnLinesAll, grnAll] = await Promise.all([
@@ -2387,6 +2468,7 @@ function InventoryView({ token, profile, showToast }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <button onClick={() => setTab("ledger")} style={{ ...S.pill, ...(tab === "ledger" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>📒 Inventory Ledger</button>
         <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
+        <button onClick={() => setTab("cyclecount")} style={{ ...S.pill, ...(tab === "cyclecount" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🔢 Cycle Count</button>
       </div>
       <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
 
@@ -2465,6 +2547,118 @@ function InventoryView({ token, profile, showToast }) {
             ⚠ Reservation abhi product-level track hoti hai (jis bin se picking suggest hui hai wahi highlight ho sakti hai, exact bin-split system abhi nahi hai).
           </div>
         </div>
+      )}
+
+      {tab === "cyclecount" && (
+        <>
+          {!activeCount && (
+            <>
+              {canManageCounts && (
+                <div style={S.panel}>
+                  <div style={S.panelTitle}>Naya Cycle Count Shuru Karein</div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <select style={{ ...S.input, minWidth: 140 }} value={newScopeType} onChange={e => { setNewScopeType(e.target.value); setNewScopeValue(""); }}>
+                      <option value="bin">Ek Bin</option>
+                      <option value="category">Category</option>
+                      <option value="all">Poori Warehouse</option>
+                    </select>
+                    {newScopeType === "bin" && (
+                      <select style={{ ...S.input, minWidth: 180 }} value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)}>
+                        <option value="">Bin select karein…</option>
+                        {Object.values(bins).sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+                      </select>
+                    )}
+                    {newScopeType === "category" && (
+                      <select style={{ ...S.input, minWidth: 180 }} value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)}>
+                        <option value="">Category select karein…</option>
+                        {[...new Set(Object.values(products).map(p => p.category).filter(Boolean))].sort().map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    )}
+                    <button style={S.primaryBtnSm} onClick={startCycleCount} disabled={startingCount}>{startingCount ? "Shuru ho raha…" : "▶ Count Shuru Karein"}</button>
+                  </div>
+                  <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>System is scope ke saare products ki current (expected) quantity ka count-sheet bana dega — baaki warehouse operations rukenge nahi.</div>
+                </div>
+              )}
+
+              <div style={S.panel}>
+                <div style={S.panelTitle}>Cycle Counts — History</div>
+                <table>
+                  <thead><tr><th style={S.th}>Scope</th><th style={S.th}>Status</th><th style={S.th}>Started</th><th style={S.th}>Approved</th><th style={S.th}></th></tr></thead>
+                  <tbody>
+                    {cycleCounts.map(cc => (
+                      <tr key={cc.id}>
+                        <td style={S.td}>{cc.scope_type === "all" ? "Poori Warehouse" : cc.scope_type === "bin" ? (bins[cc.scope_value]?.code || cc.scope_value) : cc.scope_value}</td>
+                        <td style={S.td}>
+                          <span style={{ ...S.badgeSm, color: cc.status === "approved" ? "#4CAF7D" : cc.status === "pending_approval" ? "#F5A623" : cc.status === "cancelled" ? "#8A8272" : "#5B9EE8", borderColor: cc.status === "approved" ? "#4CAF7D" : cc.status === "pending_approval" ? "#F5A623" : cc.status === "cancelled" ? "#8A8272" : "#5B9EE8" }}>
+                            {cc.status === "counting" ? "Counting" : cc.status === "pending_approval" ? "Pending Approval" : cc.status === "approved" ? "Approved" : "Cancelled"}
+                          </span>
+                        </td>
+                        <td style={{ ...S.td, color: "#6B6355", fontSize: 11 }}>{fmtTime(cc.created_at)}</td>
+                        <td style={{ ...S.td, color: "#6B6355", fontSize: 11 }}>{cc.approved_at ? fmtTime(cc.approved_at) : "—"}</td>
+                        <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => openCycleCount(cc)}>Open</button></td>
+                      </tr>
+                    ))}
+                    {cycleCounts.length === 0 && <tr><td colSpan={5}><EmptyNote text="Abhi tak koi cycle count nahi hui." /></td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {activeCount && (
+            <div style={S.panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={S.panelTitle}>
+                  Cycle Count — {activeCount.scope_type === "all" ? "Poori Warehouse" : activeCount.scope_type === "bin" ? (bins[activeCount.scope_value]?.code || activeCount.scope_value) : activeCount.scope_value}
+                </div>
+                <button style={S.secondaryBtnSm} onClick={() => { setActiveCount(null); setCountLines([]); }}>← Back to list</button>
+              </div>
+              <table>
+                <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>System Qty</th><th style={S.th}>Counted Qty</th><th style={S.th}>Variance</th></tr></thead>
+                <tbody>
+                  {countLines.map(l => {
+                    const p = products[l.product_id];
+                    const variance = l.counted_qty !== null && l.counted_qty !== undefined ? l.counted_qty - l.system_qty : null;
+                    const canEdit = activeCount.status === "counting";
+                    return (
+                      <tr key={l.id}>
+                        <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                        <td style={S.td}>{p?.name || "—"}</td>
+                        <td style={{ ...S.td, color: "#6B6355" }}>{bins[l.bin_id]?.code || "—"}</td>
+                        <td style={S.td}>{l.system_qty}</td>
+                        <td style={S.td}>
+                          {canEdit ? (
+                            <input type="number" min={0} style={{ ...S.input, width: 90, padding: "4px 8px" }} defaultValue={l.counted_qty ?? ""} onBlur={e => saveCountedQty(l.id, e.target.value)} />
+                          ) : (l.counted_qty ?? "—")}
+                        </td>
+                        <td style={{ ...S.td, color: variance === null ? "#8A8272" : variance === 0 ? "#4CAF7D" : "#E5484D", fontWeight: 600 }}>
+                          {variance === null ? "—" : variance > 0 ? `+${variance}` : variance}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+
+              {activeCount.status === "counting" && canManageCounts && (
+                <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitForReview}>✓ Submit for Review</button>
+              )}
+
+              {activeCount.status === "pending_approval" && canManageCounts && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>
+                    {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty).length} line(s) mein variance hai. Approve karte hi inventory turant naye counted number se match ho jayegi (same-day adjustment).
+                  </div>
+                  <button style={S.primaryBtnSm} disabled={approvingCount} onClick={approveAndAdjust}>{approvingCount ? "Adjust ho raha…" : "✅ Approve & Adjust Inventory"}</button>
+                </div>
+              )}
+
+              {activeCount.status === "approved" && (
+                <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 14 }}>✅ Approved aur inventory adjust ho chuki hai — {fmtTime(activeCount.approved_at)}</div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
