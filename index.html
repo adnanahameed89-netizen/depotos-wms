@@ -2313,7 +2313,16 @@ function InventoryView({ token, profile, showToast }) {
       } else {
         if (!newScopeValue) { showToast("Bin, Aisle, ya Category select karein", "err"); setStartingCount(false); return; }
         if (!newAssignee) { showToast("Kisi staff member ko assign karein", "err"); setStartingCount(false); return; }
-        const cc = await createCountWithLines(newScopeType, newScopeValue, newAssignee, null);
+        let resolvedScopeValue = newScopeValue;
+        if (newScopeType === "bin") {
+          const match = Object.values(bins).find(b => (b.code || "").toLowerCase() === newScopeValue.trim().toLowerCase());
+          if (!match) { showToast(`Bin "${newScopeValue}" nahi mila — sahi code type karein`, "err"); setStartingCount(false); return; }
+          resolvedScopeValue = match.id;
+        } else if (newScopeType === "aisle") {
+          if (!allAisles.includes(newScopeValue.trim().toUpperCase())) { showToast(`Aisle "${newScopeValue}" nahi mila`, "err"); setStartingCount(false); return; }
+          resolvedScopeValue = newScopeValue.trim().toUpperCase();
+        }
+        const cc = await createCountWithLines(newScopeType, resolvedScopeValue, newAssignee, null);
         if (!cc) { showToast("Is scope mein koi stock nahi mila", "err"); setStartingCount(false); return; }
         showToast(`✅ Cycle count assign ho gayi ${staffList.find(s => s.id === newAssignee)?.full_name || ""} ko`);
         setNewScopeValue(""); setNewAssignee("");
@@ -2690,16 +2699,20 @@ function InventoryView({ token, profile, showToast }) {
                       <option value="all">Poori Warehouse (Full Audit)</option>
                     </select>
                     {newScopeType === "bin" && (
-                      <select style={{ ...S.input, minWidth: 180 }} value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)}>
-                        <option value="">Bin select karein…</option>
-                        {Object.values(bins).sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-                      </select>
+                      <>
+                        <input list="binCodesDatalist" style={{ ...S.input, minWidth: 180 }} placeholder="Bin code type karein (jaise A-01-03)" value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)} />
+                        <datalist id="binCodesDatalist">
+                          {Object.values(bins).sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.code} />)}
+                        </datalist>
+                      </>
                     )}
                     {newScopeType === "aisle" && (
-                      <select style={{ ...S.input, minWidth: 140 }} value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)}>
-                        <option value="">Aisle select karein…</option>
-                        {allAisles.map(a => <option key={a} value={a}>Aisle {a}</option>)}
-                      </select>
+                      <>
+                        <input list="aislesDatalist" style={{ ...S.input, minWidth: 100 }} maxLength={3} placeholder="jaise A" value={newScopeValue} onChange={e => setNewScopeValue(e.target.value.toUpperCase())} />
+                        <datalist id="aislesDatalist">
+                          {allAisles.map(a => <option key={a} value={a} />)}
+                        </datalist>
+                      </>
                     )}
                     {newScopeType === "category" && (
                       <select style={{ ...S.input, minWidth: 180 }} value={newScopeValue} onChange={e => setNewScopeValue(e.target.value)}>
