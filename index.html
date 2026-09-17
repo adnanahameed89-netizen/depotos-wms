@@ -215,7 +215,6 @@ function App() {
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "pna" && ["admin", "warehouse_lead"].includes(profile.role) && <PnaView token={session.token} profile={profile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={profile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
@@ -353,11 +352,11 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" },
     { id: "kpi", label: "My KPI", icon: "📈" }
   ];
-  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "pna", label: "PNA", icon: "🔍" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "pna", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "reports", "bins", "totemaster", "users"];
   const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
@@ -2355,17 +2354,45 @@ function InventoryView({ token, profile, showToast }) {
     if (!isAdmin) { showToast("Sirf Admin hi final adjustment approve kar sakta hai", "err"); return; }
     setApprovingCount(true);
     try {
+      const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
+      const pnaBinId = pnaBinRows?.[0]?.id;
       const toAdjust = countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty);
+      let reconciledFromPna = 0;
       for (const l of toAdjust) {
         const delta = l.counted_qty - l.system_qty;
-        await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, delta);
-        await sb(`/rest/v1/cycle_count_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { adjusted: true } });
         const p = products[l.product_id];
-        await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty), new_value: String(l.counted_qty), changed_by: profile.id } });
+        let handledViaReconcile = false;
+
+        // Excess found (counted > system) — check if this product has stock sitting in
+        // PNA-HOLD first. If so, this is a MISPLACED item, not new stock out of nowhere —
+        // transfer it out of PNA instead of recording a raw increase.
+        if (delta > 0 && pnaBinId && l.bin_id !== pnaBinId) {
+          const pnaInvRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${l.product_id}&bin_id=eq.${pnaBinId}&select=*`, { token });
+          const pnaQty = pnaInvRows?.[0]?.on_hand || 0;
+          if (pnaQty > 0) {
+            const reconcileQty = Math.min(pnaQty, delta);
+            await addOnHand(token, profile.warehouse_id, l.product_id, pnaBinId, -reconcileQty);
+            await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, reconcileQty);
+            await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count — Reconciled from PNA-HOLD (${p?.barcode || l.product_id})`, old_value: `PNA-HOLD: ${pnaQty}`, new_value: `${bins[l.bin_id]?.code || "—"}: +${reconcileQty}`, changed_by: profile.id } });
+            reconciledFromPna += reconcileQty;
+            handledViaReconcile = true;
+            const remainder = delta - reconcileQty;
+            if (remainder > 0) {
+              await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, remainder);
+              await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty + reconcileQty), new_value: String(l.counted_qty), changed_by: profile.id } });
+            }
+          }
+        }
+
+        if (!handledViaReconcile) {
+          await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, delta);
+          await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty), new_value: String(l.counted_qty), changed_by: profile.id } });
+        }
+        await sb(`/rest/v1/cycle_count_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { adjusted: true } });
       }
       await sb(`/rest/v1/cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "approved", approved_by: profile.id, approved_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "cycle_count", entity_id: activeCount.id, user_id: profile.id, action: "approved_and_adjusted" } });
-      showToast(`✅ ${toAdjust.length} adjustment(s) apply ho gayi — inventory update ho gayi`);
+      showToast(`✅ ${toAdjust.length} adjustment(s) apply ho gayi${reconciledFromPna > 0 ? ` — ${reconciledFromPna} pcs PNA-HOLD se reconcile hui` : ""}`);
       setActiveCount(null); setCountLines([]);
       await loadCycleCounts(); await loadAll();
     } catch (e) { showToast("Approve failed — dobara try karein", "err"); }
@@ -2496,6 +2523,28 @@ function InventoryView({ token, profile, showToast }) {
     return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
   });
 
+  const [transferRow, setTransferRow] = useState(null); // { product_id, pnaBinId, maxQty }
+  const [transferDestBin, setTransferDestBin] = useState("");
+  const [transferQty, setTransferQty] = useState("");
+  const [transferring, setTransferring] = useState(false);
+
+  const confirmTransferFromPna = async () => {
+    if (!transferDestBin) { showToast("Destination bin select karein", "err"); return; }
+    const qty = Number(transferQty);
+    if (!qty || qty <= 0 || qty > transferRow.maxQty) { showToast(`Qty 1 se ${transferRow.maxQty} ke beech honi chahiye`, "err"); return; }
+    setTransferring(true);
+    try {
+      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferRow.pnaBinId, -qty);
+      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferDestBin, qty);
+      const p = products[transferRow.product_id];
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: transferRow.product_id, field_changed: `PNA-HOLD se mila (${p?.barcode || transferRow.product_id})`, old_value: `PNA-HOLD: ${qty}`, new_value: `${bins[transferDestBin]?.code || "—"}: +${qty}`, changed_by: profile.id } });
+      showToast(`✅ ${qty} pcs PNA-HOLD se ${bins[transferDestBin]?.code || "bin"} mein transfer ho gayi`);
+      setTransferRow(null); setTransferDestBin(""); setTransferQty("");
+      await loadAll();
+    } catch (e) { showToast("Transfer failed — dobara try karein", "err"); }
+    setTransferring(false);
+  };
+
   return (
     <div>
       <SectionTitle title="Inventory" action={
@@ -2573,8 +2622,20 @@ function InventoryView({ token, profile, showToast }) {
 
       {tab === "bins" && (
         <div style={S.panel}>
+          {transferRow && (
+            <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "#2B2620", fontWeight: 600 }}>PNA-HOLD se mila — kahan rakhein?</span>
+              <select style={{ ...S.input, minWidth: 180 }} value={transferDestBin} onChange={e => setTransferDestBin(e.target.value)}>
+                <option value="">Destination bin select karein…</option>
+                {Object.values(bins).filter(b => b.code !== "PNA-HOLD").sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+              </select>
+              <input type="number" min={1} max={transferRow.maxQty} placeholder={`Qty (max ${transferRow.maxQty})`} style={{ ...S.input, width: 140 }} value={transferQty} onChange={e => setTransferQty(e.target.value)} />
+              <button style={S.primaryBtnSm} disabled={transferring} onClick={confirmTransferFromPna}>{transferring ? "Transfer ho raha…" : "✓ Confirm Transfer"}</button>
+              <button style={S.secondaryBtnSm} onClick={() => { setTransferRow(null); setTransferDestBin(""); setTransferQty(""); }}>Cancel</button>
+            </div>
+          )}
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Reserved against order?</th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Reserved against order?</th><th style={S.th}></th></tr></thead>
             <tbody>
               {binRows.map((r, i) => {
                 const p = products[r.product_id];
@@ -2583,11 +2644,12 @@ function InventoryView({ token, profile, showToast }) {
                 const aging = computeAgingDays(r.on_hand, putawayHistoryByBin[`${r.product_id}|${r.bin_id}`]);
                 const days = aging?.days;
                 const agingColor = days == null ? "#8A8272" : days > 60 ? "#E5484D" : days > 30 ? "#F5A623" : "#4CAF7D";
+                const isPnaBin = bin?.code === "PNA-HOLD";
                 return (
                   <tr key={i}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                     <td style={S.td}>{p?.name || "—"}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
+                    <td style={{ ...S.td, color: isPnaBin ? "#E5484D" : "#6B6355", fontWeight: isPnaBin ? 600 : 400 }}>{bin?.code || "Unassigned (awaiting putaway)"}</td>
                     <td style={S.td}>{r.on_hand}</td>
                     <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{days != null ? `${days}d` : "—"}</td>
                     <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{aging?.grnNumber || "—"}</td>
@@ -2596,10 +2658,15 @@ function InventoryView({ token, profile, showToast }) {
                         ? <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Yes · {productReserved} reserved (product-wide)</span>
                         : <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>No</span>}
                     </td>
+                    <td style={S.td}>
+                      {isPnaBin && canAssignCounts && (
+                        <button style={S.secondaryBtnSm} onClick={() => { setTransferRow({ product_id: r.product_id, pnaBinId: r.bin_id, maxQty: r.on_hand }); setTransferDestBin(""); setTransferQty(""); }}>📍 Found Here — Transfer</button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
-              {binRows.length === 0 && <tr><td colSpan={7}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {binRows.length === 0 && <tr><td colSpan={8}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
           <div style={{ marginTop: 10, fontSize: 11, color: "#8A8272" }}>
