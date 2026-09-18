@@ -5567,10 +5567,11 @@ function ReturnsView({ token, profile, showToast }) {
       const rangeReturns = await sb(`/rest/v1/returns?received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
       if (!rangeReturns || rangeReturns.length === 0) { showToast("Is date range mein koi return nahi mili", "err"); setExporting(false); return; }
       const returnIds = rangeReturns.map(r => r.id);
+      const orderIds = [...new Set(rangeReturns.map(r => r.order_id).filter(Boolean))];
       const [lines, profs, ordersData] = await Promise.all([
         sb(`/rest/v1/return_lines?return_id=in.(${returnIds.join(",")})&select=*`, { token }),
         sb(`/rest/v1/profiles?select=*`, { token }),
-        sb(`/rest/v1/sales_orders?id=in.(${[...new Set(rangeReturns.map(r => r.order_id).filter(Boolean))].join(",") || "00000000-0000-0000-0000-000000000000"}&select=*`, { token })
+        orderIds.length ? sb(`/rest/v1/sales_orders?id=in.(${orderIds.join(",")})&select=*`, { token }) : Promise.resolve([])
       ]);
       const productIds = [...new Set((lines || []).map(l => l.product_id))];
       const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
@@ -5584,16 +5585,18 @@ function ReturnsView({ token, profile, showToast }) {
         const p = prodMap[l.product_id];
         return [
           order?.raw_data?.customer_order_number || order?.raw_data?.customer || "—",
-          order?.external_order_id || "—",
+          ret?.tracking_number || order?.external_order_id || "—",
           p?.barcode || "—",
           p?.name || "—",
           l.qty,
-          profMap[ret?.processed_by]?.full_name || "—",
+          l.condition || "—",
+          ret?.origin_city || order?.delivery_city || "—",
+          profMap[ret?.received_by]?.full_name || profMap[ret?.processed_by]?.full_name || "—",
           ret?.received_at ? fmtTime(ret.received_at) : "—"
         ];
       });
       exportCSV(`returns-export-${exportFrom}-to-${exportTo}.csv`,
-        ["Customer #", "Tracking #", "Barcode", "Product Name", "Qty", "User Name", "Date/Time"], rows);
+        ["Customer #", "Tracking #", "Barcode", "Product Name", "Qty", "Condition", "Location", "User Name", "Date/Time"], rows);
       showToast(`${rows.length} rows exported`);
     } catch (e) { showToast("Export failed", "err"); }
     setExporting(false);
@@ -5638,7 +5641,20 @@ function ReturnsView({ token, profile, showToast }) {
     let courierGuess = order?.courier || "Other";
     let courierInfo = null;
 
-    if (!order) {
+    if (order && !order.delivery_city) {
+      // Order exists but hasn't been synced with courier yet — try a fresh single lookup
+      try {
+        if (isPostex(order.courier)) {
+          const p = await postexProxy("track", { trackingNumbers: [code] }, token);
+          const r = p.results?.[0];
+          if (r && !r.error) courierInfo = r;
+        } else if (isMnp(order.courier)) {
+          const m = await mnpProxy("track", { trackingNumbers: [code] }, token);
+          const r = m.results?.[0];
+          if (r) courierInfo = r;
+        }
+      } catch (e) {}
+    } else if (!order) {
       // Not in our system (likely an old order dispatched before this app was used) —
       // try both courier APIs to see if either recognizes this tracking number.
       try {
@@ -5658,7 +5674,7 @@ function ReturnsView({ token, profile, showToast }) {
     try {
       const created = await sb(`/rest/v1/returns`, {
         method: "POST", token, prefer: "return=representation",
-        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending", tracking_number: code, received_by: profile.id }
+        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending", tracking_number: code, received_by: profile.id, origin_city: order?.delivery_city || courierInfo?.cityName || null }
       });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code, courier_info: courierInfo } } });
       if (order) {
@@ -5863,7 +5879,7 @@ function ReturnsView({ token, profile, showToast }) {
           <input type="date" style={{ ...S.input, maxWidth: 160 }} value={exportTo} onChange={e => setExportTo(e.target.value)} />
           <button style={S.primaryBtnSm} onClick={exportReturnsCSV} disabled={exporting}>{exporting ? "Exporting…" : "⬇ Export CSV"}</button>
         </div>
-        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>Columns: Customer #, Tracking #, Barcode, Product Name, Qty, User Name, Date/Time — ek row har return line ke liye.</div>
+        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>Columns: Customer #, Tracking #, Barcode, Product Name, Qty, Condition, Location, User Name, Date/Time — ek row har return line ke liye.</div>
       </div>
 
       {importReport && (
@@ -5895,13 +5911,11 @@ function ReturnsView({ token, profile, showToast }) {
             {returns.map(r => {
               const order = orders.find(o => o.id === r.order_id);
               const agg = returnLineAgg[r.id];
-              const binCodes = agg ? [...agg.binIds].map(id => bins.find(b => b.id === id)?.code).filter(Boolean) : [];
-              const locationLabel = binCodes.length === 0 ? "—" : binCodes.length === 1 ? binCodes[0] : "Multiple";
               return (
                 <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openReturnDetail(r)}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tracking_number || order?.external_order_id || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{agg?.qty || 0}</td>
-                  <td style={{ ...S.td, color: "#6B6355" }}>{locationLabel}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.origin_city || order?.delivery_city || "—"}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: r.status === "pending" ? "#6B6355" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#E0D8C5" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span></td>
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.received_at)}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{staffList.find(s => s.id === r.received_by)?.full_name || "—"}</td>
