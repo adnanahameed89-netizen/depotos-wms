@@ -5536,6 +5536,8 @@ function UsersView({ token, profile, showToast }) {
 /* ================= RETURNS ================= */
 function ReturnsView({ token, profile, showToast }) {
   const [returns, setReturns] = useState([]);
+  const [staffList, setStaffList] = useState([]);
+  const [returnLineAgg, setReturnLineAgg] = useState({});
   const [products, setProducts] = useState({});
   const [orders, setOrders] = useState([]);
   const [orderScanInput, setOrderScanInput] = useState("");
@@ -5596,11 +5598,21 @@ function ReturnsView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [r, o] = await Promise.all([
+      const [r, o, allLines, staff] = await Promise.all([
         sb(`/rest/v1/returns?select=*&order=received_at.desc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/return_lines?select=return_id,qty,bin_id`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
       setReturns(r || []); setOrders(o || []);
+      setStaffList(staff || []);
+      const agg = {};
+      for (const l of allLines || []) {
+        if (!agg[l.return_id]) agg[l.return_id] = { qty: 0, binIds: new Set() };
+        agg[l.return_id].qty += l.qty;
+        if (l.bin_id) agg[l.return_id].binIds.add(l.bin_id);
+      }
+      setReturnLineAgg(agg);
       setBins(await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }) || []);
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id]);
@@ -5610,6 +5622,15 @@ function ReturnsView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : orderScanInput).trim();
     setOrderScanInput("");
     if (!code) return;
+
+    // Lock: one tracking number can only ever have one return record
+    const existingReturn = returns.find(r => r.tracking_number === code);
+    if (existingReturn) {
+      showToast(`⚠ Yeh tracking "${code}" ke liye return already ban chuka hai — wahi khol rahe hain`, "err");
+      openReturnDetail(existingReturn);
+      return;
+    }
+
     const order = orders.find(o => o.external_order_id === code);
     let courierGuess = order?.courier || "Other";
     let courierInfo = null;
@@ -5634,7 +5655,7 @@ function ReturnsView({ token, profile, showToast }) {
     try {
       const created = await sb(`/rest/v1/returns`, {
         method: "POST", token, prefer: "return=representation",
-        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending" }
+        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending", tracking_number: code, received_by: profile.id }
       });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code, courier_info: courierInfo } } });
       if (order) {
@@ -5864,23 +5885,29 @@ function ReturnsView({ token, profile, showToast }) {
           <button style={S.primaryBtnSm} onClick={() => scanOrderTracking()}>Start Return</button>
         </div>
       </div>
-      <div style={S.cardGrid}>
-        {returns.map(r => {
-          const order = orders.find(o => o.id === r.order_id);
-          return (
-            <div key={r.id} style={S.card} onClick={() => openReturnDetail(r)}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span>↩</span>
-                <span style={{ ...S.badgeSm, color: r.status === "pending" ? "#6B6355" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#E0D8C5" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span>
-              </div>
-              <div style={{ color: "#2B2620", fontSize: 14, marginTop: 10 }}>{order?.external_order_id || "No order link"}</div>
-              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>{r.reason || "No reason noted"}</div>
-              {r.str_number && <div style={{ color: "#F5A623", fontSize: 11, marginTop: 6, fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number}</div>}
-              <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{fmtTime(r.received_at)}</div>
-            </div>
-          );
-        })}
-        {returns.length === 0 && <EmptyNote text="No returns logged yet." />}
+      <div style={S.panel}>
+        <table>
+          <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
+          <tbody>
+            {returns.map(r => {
+              const order = orders.find(o => o.id === r.order_id);
+              const agg = returnLineAgg[r.id];
+              const binCodes = agg ? [...agg.binIds].map(id => bins.find(b => b.id === id)?.code).filter(Boolean) : [];
+              const locationLabel = binCodes.length === 0 ? "—" : binCodes.length === 1 ? binCodes[0] : "Multiple";
+              return (
+                <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openReturnDetail(r)}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tracking_number || order?.external_order_id || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{agg?.qty || 0}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{locationLabel}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: r.status === "pending" ? "#6B6355" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#E0D8C5" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span></td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(r.received_at)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{staffList.find(s => s.id === r.received_by)?.full_name || "—"}</td>
+                </tr>
+              );
+            })}
+            {returns.length === 0 && <tr><td colSpan={6}><EmptyNote text="No returns logged yet." /></td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
