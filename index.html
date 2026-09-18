@@ -2475,34 +2475,52 @@ function InventoryView({ token, profile, showToast }) {
     setImporting(false);
   };
 
+  const [importProgress, setImportProgress] = useState(null); // { done, total }
+
   const confirmOpeningStock = async () => {
     if (!openingReport) return;
     setImporting(true);
+    setImportProgress({ done: 0, total: openingReport.valid.length });
+    const binCache = {};
+    const failedRows = [];
+    let count = 0;
+    const BATCH = 15;
     try {
-      const binCache = {};
-      let count = 0;
-      for (const r of openingReport.valid) {
-        let binId = null;
-        if (r.binCode) {
-          if (!binCache[r.binCode]) {
-            let existing = Object.values(bins).find(b => b.code.toLowerCase() === r.binCode.toLowerCase());
-            if (!existing) {
-              const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: profile.warehouse_id, code: r.binCode } });
-              existing = created[0];
+      for (let i = 0; i < openingReport.valid.length; i += BATCH) {
+        const chunk = openingReport.valid.slice(i, i + BATCH);
+        await Promise.all(chunk.map(async (r) => {
+          try {
+            let binId = null;
+            if (r.binCode) {
+              if (!binCache[r.binCode]) {
+                let existing = Object.values(bins).find(b => b.code.toLowerCase() === r.binCode.toLowerCase());
+                if (!existing) {
+                  const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: profile.warehouse_id, code: r.binCode } });
+                  existing = created[0];
+                }
+                binCache[r.binCode] = existing;
+              }
+              binId = binCache[r.binCode].id;
             }
-            binCache[r.binCode] = existing;
+            await addOnHand(token, profile.warehouse_id, r.product.id, binId, r.qty);
+            count++;
+          } catch (e) {
+            failedRows.push({ barcode: r.product?.barcode || r.barcode, reason: (e.message || "").slice(0, 80) });
           }
-          binId = binCache[r.binCode].id;
-        }
-        await addOnHand(token, profile.warehouse_id, r.product.id, binId, r.qty);
-        await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "inventory", entity_id: r.product.id, user_id: profile.id, action: "opening_stock_import", metadata: { qty: r.qty, bin: r.binCode || null } } });
-        count++;
+        }));
+        setImportProgress({ done: Math.min(i + BATCH, openingReport.valid.length), total: openingReport.valid.length });
       }
-      showToast(`${count} opening stock lines imported`);
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "inventory", entity_id: profile.warehouse_id, user_id: profile.id, action: "opening_stock_import", metadata: { imported: count, failed: failedRows.length, file: openingReport.fileName } } });
+      if (failedRows.length > 0) {
+        showToast(`⚠ ${count} imported, ${failedRows.length} fail ho gaye (network/data issue) — inhe dobara try karein: ${failedRows.slice(0, 5).map(f => f.barcode).join(", ")}${failedRows.length > 5 ? "…" : ""}`, "err");
+      } else {
+        showToast(`✅ ${count} opening stock lines imported`);
+      }
       setOpeningReport(null);
       loadAll();
-    } catch (e) { showToast("Import failed", "err"); }
+    } catch (e) { showToast(`Import failed after ${count} lines — dobara try karein`, "err"); }
     setImporting(false);
+    setImportProgress(null);
   };
 
   useEffect(() => { loadAll(); }, [loadAll]);
@@ -2578,8 +2596,16 @@ function InventoryView({ token, profile, showToast }) {
           )}
           <div style={{ display: "flex", gap: 10 }}>
             <button style={S.primaryBtnSm} onClick={confirmOpeningStock} disabled={importing || openingReport.valid.length === 0}>✓ Confirm & add stock ({openingReport.valid.length})</button>
-            <button style={S.secondaryBtnSm} onClick={() => setOpeningReport(null)}>Cancel</button>
+            <button style={S.secondaryBtnSm} onClick={() => setOpeningReport(null)} disabled={importing}>Cancel</button>
           </div>
+          {importProgress && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ background: "#EFE8D8", borderRadius: 6, height: 10, overflow: "hidden" }}>
+                <div style={{ background: "#F5A623", height: "100%", width: `${Math.round((importProgress.done / importProgress.total) * 100)}%`, transition: "width 0.2s" }} />
+              </div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 6 }}>Importing… {importProgress.done} / {importProgress.total}</div>
+            </div>
+          )}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
