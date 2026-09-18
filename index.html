@@ -5611,13 +5611,39 @@ function ReturnsView({ token, profile, showToast }) {
     setOrderScanInput("");
     if (!code) return;
     const order = orders.find(o => o.external_order_id === code);
+    let courierGuess = order?.courier || "Other";
+    let courierInfo = null;
+
+    if (!order) {
+      // Not in our system (likely an old order dispatched before this app was used) —
+      // try both courier APIs to see if either recognizes this tracking number.
+      try {
+        const p = await postexProxy("track", { trackingNumbers: [code] }, token);
+        const r = p.results?.[0];
+        if (r && !r.error && r.transactionStatus) { courierInfo = r; courierGuess = "PostEx"; }
+      } catch (e) {}
+      if (!courierInfo) {
+        try {
+          const m = await mnpProxy("track", { trackingNumbers: [code] }, token);
+          const r = m.results?.[0];
+          if (r && r.transactionStatus) { courierInfo = r; courierGuess = "M&P"; }
+        } catch (e) {}
+      }
+    }
+
     try {
       const created = await sb(`/rest/v1/returns`, {
         method: "POST", token, prefer: "return=representation",
-        body: { order_id: order ? order.id : null, courier: order?.courier || "Other", status: "pending" }
+        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending" }
       });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code } } });
-      showToast(order ? `Order mila — ${order.courier}` : "Order database mein nahi mila, phir bhi return record ban gaya");
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code, courier_info: courierInfo } } });
+      if (order) {
+        showToast(`Order mila — ${order.courier}`);
+      } else if (courierInfo) {
+        showToast(`⚠ Order database mein nahi mila (purana order) — lekin ${courierGuess} se detail mil gayi: ${courierInfo.transactionStatus}${courierInfo.cityName ? `, ${courierInfo.cityName}` : ""}. Return record ban gaya, items scan karein.`);
+      } else {
+        showToast("Order database mein nahi mila, courier se bhi detail nahi mili — phir bhi return record ban gaya, items scan karein");
+      }
       load();
       setMatchedOrder(order || null);
       setOpenLines([]);
