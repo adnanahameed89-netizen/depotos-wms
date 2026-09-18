@@ -1842,8 +1842,8 @@ function PutawayView({ token, profile, showToast }) {
   const load = useCallback(async () => {
     try {
       const [u, mine, b, s] = await Promise.all([
-        sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=is.null&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=eq.${profile.id}&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/putaway_tasks?status=eq.pending&assigned_to=is.null&return_line_id=is.null&select=*&order=id.asc`, { token }),
+        sb(`/rest/v1/putaway_tasks?status=eq.pending&or=(assigned_to.eq.${profile.id},and(assigned_to.is.null,return_line_id.not.is.null))&select=*&order=id.asc`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
@@ -1930,7 +1930,10 @@ function PutawayView({ token, profile, showToast }) {
       const body = done
         ? { qty_completed: newCompleted, status: "completed", bin_id: binId, completed_at: new Date().toISOString() }
         : { qty_completed: newCompleted, bin_id: binId };
-      if (isFirstCommit) body.started_at = new Date().toISOString();
+      if (isFirstCommit) {
+        body.started_at = new Date().toISOString();
+        if (!task.assigned_to) body.assigned_to = profile.id; // claim unassigned (return-origin) tasks for accountability
+      }
       await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: binId, qty, mode: putawayMode } } });
       return { done, newCompleted };
