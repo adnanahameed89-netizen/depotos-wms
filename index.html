@@ -1240,24 +1240,28 @@ function DashboardV2View({ token, profile, showToast }) {
         setMonthly(monthArr);
 
         // ---- Order composition (last 60 days) — for carton size forecasting ----
-        const compCutoff = new Date(now.getTime() - 60 * 86400000).toISOString();
-        const recentOrderIds = (orders || []).filter(o => o.received_at >= compCutoff).map(o => o.id);
-        if (recentOrderIds.length > 0) {
-          const compLines = [];
-          const CHUNK = 150;
-          for (let i = 0; i < recentOrderIds.length; i += CHUNK) {
-            const idsChunk = recentOrderIds.slice(i, i + CHUNK);
-            const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
-            compLines.push(...(rows || []));
+        // Wrapped in its own try/catch so a failure here (e.g. a very large order
+        // volume) never blocks the rest of the dashboard's data from loading.
+        try {
+          const compCutoff = new Date(now.getTime() - 60 * 86400000).toISOString();
+          const recentOrderIds = (orders || []).filter(o => o.received_at >= compCutoff).map(o => o.id);
+          if (recentOrderIds.length > 0) {
+            const compLines = [];
+            const CHUNK = 60;
+            for (let i = 0; i < recentOrderIds.length; i += CHUNK) {
+              const idsChunk = recentOrderIds.slice(i, i + CHUNK);
+              const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
+              compLines.push(...(rows || []));
+            }
+            const byOrder = {};
+            for (const l of compLines) {
+              if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
+              byOrder[l.order_id].products.add(l.product_id);
+              byOrder[l.order_id].totalQty += l.qty;
+            }
+            setOrderComposition(Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty })));
           }
-          const byOrder = {};
-          for (const l of compLines) {
-            if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
-            byOrder[l.order_id].products.add(l.product_id);
-            byOrder[l.order_id].totalQty += l.qty;
-          }
-          setOrderComposition(Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty })));
-        }
+        } catch (e) { /* carton forecasting is best-effort — rest of dashboard still loads */ }
 
         // ---- Inventory value + SKU count + total qty + department breakdown ----
         let totalValue = 0;
