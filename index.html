@@ -109,6 +109,22 @@ async function mnpProxy(action, payload, token) {
   return data;
 }
 
+// M&P's label endpoint fetches a full PDF per tracking number inside the Edge Function —
+// sending too many at once in a single invocation exceeds Supabase's per-request CPU/memory/
+// time limits (HTTP 546). This chunks the request into small batches (5 at a time) so each
+// invocation stays light, and merges all the resulting PDF batches back into one array.
+async function fetchMnpLabelsChunked(trackingNumbers, token) {
+  const CHUNK = 5;
+  const allBatches = [];
+  for (let i = 0; i < trackingNumbers.length; i += CHUNK) {
+    const chunk = trackingNumbers.slice(i, i + CHUNK);
+    const result = await mnpProxy("labels", { trackingNumbers: chunk }, token);
+    if (result.pdfBase64Batches) allBatches.push(...result.pdfBase64Batches);
+    else if (result.pdfBase64) allBatches.push(result.pdfBase64);
+  }
+  return allBatches;
+}
+
 // Tolerant PostEx courier match — strips spaces/dots/dashes before comparing, so
 // "PostEx", "Post Ex", "POSTEX", "Postex.", "Post-Ex" etc. are all recognized.
 function isPostex(courierText) {
@@ -3258,33 +3274,37 @@ function OrdersView({ token, profile, showToast, setView }) {
   const [toteFilter, setToteFilter] = useState("");
   const [lastAssignedTote, setLastAssignedTote] = useState(null);
   const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
+  const [fetchedLabelPdfs, setFetchedLabelPdfs] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [returnedOrderIds, setReturnedOrderIds] = useState(new Set());
 
   const printAssignedAwb = async (assignedTote) => {
     setAwbPrintingBulk(true);
+    setFetchedLabelPdfs([]);
     try {
       const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
       const mnpOrders = assignedTote.orders.filter(o => isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
       const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier) && !isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const openPdf = (base64) => {
+      // Collect PDFs as clickable links instead of auto-opening windows — browsers silently
+      // block the 2nd+ window.open() call after an async fetch, which was why only PostEx
+      // labels ever opened when M&P was also present. A manually-clicked link is never blocked.
+      const collectPdf = (base64, label) => {
         const byteChars = atob(base64);
         const byteNumbers = new Array(byteChars.length);
         for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
         const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-        window.open(URL.createObjectURL(blob), "_blank");
+        setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
       };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-        else openPdf(result.pdfBase64);
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
+        else collectPdf(result.pdfBase64, "PostEx Labels");
       }
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
-        const result = await mnpProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-        else openPdf(result.pdfBase64);
+        const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
+        pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -4016,15 +4036,27 @@ function OrdersView({ token, profile, showToast, setView }) {
       )}
 
       {lastAssignedTote && (
-        <div style={{ ...S.panel, borderColor: "#F5A623", background: "#FFF9EE", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
-            <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein, taake woh parcels pe labeling kar sakein.</div>
+        <div style={{ ...S.panel, borderColor: "#F5A623", background: "#FFF9EE" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein, taake woh parcels pe labeling kar sakein.</div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
+              <button style={S.secondaryBtnSm} onClick={() => { setLastAssignedTote(null); setFetchedLabelPdfs([]); }}>Dismiss</button>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
-            <button style={S.secondaryBtnSm} onClick={() => setLastAssignedTote(null)}>Dismiss</button>
-          </div>
+          {fetchedLabelPdfs.length > 0 && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #F0D9A0" }}>
+              <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega (click karein, browser popup block nahi karega):</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {fetchedLabelPdfs.map((p, i) => (
+                  <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -4228,31 +4260,35 @@ function PickingView({ token, profile, showToast }) {
 
   const [lastAssignedTote, setLastAssignedTote] = useState(null);
   const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
+  const [fetchedLabelPdfs, setFetchedLabelPdfs] = useState([]);
 
   const printAssignedAwb = async (assignedTote) => {
     setAwbPrintingBulk(true);
+    setFetchedLabelPdfs([]);
     try {
       const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
       const mnpOrders = assignedTote.orders.filter(o => isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
       const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier) && !isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const openPdf = (base64) => {
+      // Collect PDFs as clickable links instead of auto-opening windows — browsers silently
+      // block the 2nd+ window.open() call after an async fetch, which was why only PostEx
+      // labels ever opened when M&P was also present. A manually-clicked link is never blocked.
+      const collectPdf = (base64, label) => {
         const byteChars = atob(base64);
         const byteNumbers = new Array(byteChars.length);
         for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
         const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-        window.open(URL.createObjectURL(blob), "_blank");
+        setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
       };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-        else openPdf(result.pdfBase64);
+        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
+        else collectPdf(result.pdfBase64, "PostEx Labels");
       }
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
-        const result = await mnpProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-        else openPdf(result.pdfBase64);
+        const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
+        pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -4642,22 +4678,23 @@ function PickingView({ token, profile, showToast }) {
                 const mnpOrders = sorted.filter(t => isMnp(orders[t.order_id]?.courier));
                 const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier) && !isMnp(orders[t.order_id]?.courier));
 
-                const openPdf = (base64) => {
+                const collectPdf = (base64, label) => {
                   const byteChars = atob(base64);
                   const byteNumbers = new Array(byteChars.length);
                   for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
                   const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-                  window.open(URL.createObjectURL(blob), "_blank");
+                  setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
                 };
+                setFetchedLabelPdfs([]);
 
                 if (postexOrders.length > 0) {
                   setAwbPrinting(true);
                   try {
                     const trackingNumbers = postexOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
                     const result = await postexProxy("labels", { trackingNumbers }, token);
-                    if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-                    else openPdf(result.pdfBase64);
-                    showToast(`✅ ${postexOrders.length} PostEx label(s) fetched — printing`);
+                    if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
+                    else collectPdf(result.pdfBase64, "PostEx Labels");
+                    showToast(`✅ ${postexOrders.length} PostEx label(s) fetched — link neeche milega`);
                   } catch (e) {
                     showToast(`⚠ PostEx label fetch failed: ${e.message} — falling back to text sheet`, "err");
                     otherOrders.push(...postexOrders);
@@ -4669,10 +4706,9 @@ function PickingView({ token, profile, showToast }) {
                   setAwbPrinting(true);
                   try {
                     const trackingNumbers = mnpOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
-                    const result = await mnpProxy("labels", { trackingNumbers }, token);
-                    if (result.pdfBase64Batches) result.pdfBase64Batches.forEach(openPdf);
-                    else openPdf(result.pdfBase64);
-                    showToast(`✅ ${mnpOrders.length} M&P label(s) fetched — printing`);
+                    const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
+                    pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
+                    showToast(`✅ ${mnpOrders.length} M&P label(s) fetched — link neeche milega`);
                   } catch (e) {
                     showToast(`⚠ M&P label fetch failed: ${e.message} — falling back to text sheet`, "err");
                     otherOrders.push(...mnpOrders);
@@ -4704,6 +4740,16 @@ function PickingView({ token, profile, showToast }) {
                 }
               }}>{awbPrinting ? "Fetching labels…" : "🖨 Print AWB Sheet (Bin-wise)"}</button>
             </div>
+            {fetchedLabelPdfs.length > 0 && (
+              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega:</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {fetchedLabelPdfs.map((p, i) => (
+                    <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
+                  ))}
+                </div>
+              </div>
+            )}
             <table>
               <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
@@ -4862,15 +4908,27 @@ function PickingView({ token, profile, showToast }) {
               <button style={S.primaryBtnSm} onClick={createTote} disabled={selectedCount === 0}>Assign tote</button>
             </div>
             {lastAssignedTote && (
-              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
-                  <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein.</div>
+              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
+                    <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein.</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
+                    <button style={S.secondaryBtnSm} onClick={() => { setLastAssignedTote(null); setFetchedLabelPdfs([]); }}>Dismiss</button>
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
-                  <button style={S.secondaryBtnSm} onClick={() => setLastAssignedTote(null)}>Dismiss</button>
-                </div>
+                {fetchedLabelPdfs.length > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #F0D9A0" }}>
+                    <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega:</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {fetchedLabelPdfs.map((p, i) => (
+                        <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <table>
