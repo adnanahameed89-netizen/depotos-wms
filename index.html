@@ -5810,6 +5810,7 @@ function ReturnsView({ token, profile, showToast }) {
         {matchedOrder && (
           <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ Original order match mil gaya — customer/courier auto-linked. Original items reference ke liye order detail dekhein.</div>
         )}
+        {openReturn.status === "pending" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan each returned product</div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -5833,6 +5834,7 @@ function ReturnsView({ token, profile, showToast }) {
             <button style={S.primaryBtnSm} onClick={() => scanReturnItem()}>Scan</button>
           </div>
         </div>
+        )}
         <div style={S.panel}>
           <div style={S.panelTitle}>Items scanned</div>
           <table>
@@ -5854,8 +5856,11 @@ function ReturnsView({ token, profile, showToast }) {
               {openLines.length === 0 && <tr><td colSpan={5}><EmptyNote text="No items scanned yet." /></td></tr>}
             </tbody>
           </table>
-          {openLines.length > 0 && (
+          {openLines.length > 0 && openReturn.status === "pending" && (
             <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitReturn}>✓ Submit return — Good items Put Away queue mein jayenge</button>
+          )}
+          {openReturn.status !== "pending" && (
+            <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 14 }}>✅ Yeh return already submit ho chuka hai ({openReturn.status}) — dobara submit karne ki zaroorat nahi.</div>
           )}
         </div>
       </div>
