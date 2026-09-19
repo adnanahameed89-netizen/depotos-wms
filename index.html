@@ -1554,6 +1554,7 @@ function DashboardV2View({ token, profile, showToast }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
         <div style={dPanel}>
           <div style={dHead}>Inventory by Department</div>
+          <div style={{ color: "#F87171", fontSize: 10, marginTop: 4 }}>DEBUG (temporary): {JSON.stringify(categoryBreakdown)}</div>
           <div style={{ height: 220, position: "relative", marginTop: 10 }}><canvas ref={categoryChartRef}></canvas></div>
         </div>
         <div style={dPanel}>
@@ -4522,30 +4523,51 @@ function PickingView({ token, profile, showToast }) {
     }
   };
 
+  const pickBarcodeInputRef = useRef(null);
   const scanToteBarcode = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
+    if (!navigator.onLine) {
+      showToast("🔌 Aap OFFLINE hain — scanning rok di gayi hai. Internet wapas aane par dobara scan karein, kuch bhi miss nahi hoga.", "err");
+      pickBarcodeInputRef.current?.focus();
+      return;
+    }
     const c = cleanCode(code);
     const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
-    if (!p) { showToast("Barcode/SKU match nahi hua", "err"); return; }
-    if (!activeGroup) { showToast("Is tote ki saari locations complete ho chuki hain", "err"); return; }
+    if (!p) { showToast("Barcode/SKU match nahi hua", "err"); pickBarcodeInputRef.current?.focus(); return; }
+    if (!activeGroup) { showToast("Is tote ki saari locations complete ho chuki hain", "err"); pickBarcodeInputRef.current?.focus(); return; }
     if (p.id !== activeGroup.product_id) {
       showToast(`❌ Pehle current location complete karein — Bin ${bins[activeGroup.bin_id]?.code || "?"}`, "err");
+      pickBarcodeInputRef.current?.focus();
       return;
     }
     const ref = activeGroup.refs.find(r => r.allocated < r.qty_required);
-    if (!ref) { showToast("Allocation error — dobara try karein", "err"); return; }
-    ref.allocated += 1;
+    if (!ref) { showToast("Allocation error — dobara try karein", "err"); pickBarcodeInputRef.current?.focus(); return; }
+
+    // Persist FIRST, and wait for confirmation, before updating the screen — this is what
+    // guarantees "jahan tak scan ho chuka wahi se continue" is actually true after a reload.
+    // A scan is only shown as counted once the server has genuinely confirmed it.
+    const newAllocated = ref.allocated + 1;
+    try {
+      await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: newAllocated } });
+    } catch (e) {
+      showToast("⚠ Scan save nahi hui (network issue) — please dobara try karein. Kuch bhi record nahi hua, wapas se scan karein.", "err");
+      pickBarcodeInputRef.current?.focus();
+      return;
+    }
+
+    ref.allocated = newAllocated;
     activeGroup.scanned += 1;
     setConsolidated([...consolidated]);
     setLastScannedProduct(p);
     const order = orders[ref.order_id];
     setLastScanInfo({ product: p, toteBin: ref.toteBin, orderRef: order?.external_order_id });
     showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
-    // Persist this scan immediately — never rely solely on the later "finalize" step to save progress
-    sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: ref.allocated } }).catch(() => {});
+    pickBarcodeInputRef.current?.focus();
+
     // Server-authoritative: only sets started_at if it's still NULL in the DB right now.
+    // Best-effort — a failure here doesn't affect pick progress, only a display timestamp.
     const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
     if (startTask) {
       sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}&started_at=is.null`, { method: "PATCH", token, body: { started_at: new Date().toISOString() } }).catch(() => {});
@@ -4716,7 +4738,7 @@ function PickingView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan product — the system will guide you through the sequence</div>
           <div style={{ display: "flex", gap: 10 }}>
-            <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+            <input autoFocus ref={pickBarcodeInputRef} style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && scanToteBarcode()} />
             <CameraScanButton onScan={(text) => scanToteBarcode(text)} />
@@ -5243,21 +5265,23 @@ function PackingView({ token, profile, showToast }) {
     } catch (e) { showToast("Damage marking failed", "err"); }
   };
 
+  const packBarcodeInputRef = useRef(null);
   const scanBarcode = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
     setBarcodeInput("");
     if (!code) return;
     const c = cleanCode(code);
     const p = Object.values(products).find(x => cleanCode(x.barcode) === c || cleanCode(x.sku) === c);
-    if (!p) { showToast("Barcode/SKU match nahi hua — is order ka nahi hai", "err"); return; }
+    if (!p) { showToast("Barcode/SKU match nahi hua — is order ka nahi hai", "err"); packBarcodeInputRef.current?.focus(); return; }
     const line = requiredLines.find(l => l.product_id === p.id);
-    if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); return; }
+    if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); packBarcodeInputRef.current?.focus(); return; }
     const current = scans[p.id] || 0;
-    if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); return; }
+    if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); packBarcodeInputRef.current?.focus(); return; }
     const newScans = { ...scans, [p.id]: current + 1 };
     setScans(newScans);
     setLastScannedProduct(p);
     showToast(`Scanned: ${p.barcode}`);
+    packBarcodeInputRef.current?.focus();
     try {
       await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { scans: JSON.stringify(newScans) } });
       // Server-authoritative: only sets started_at if it's still NULL in the DB right now —
@@ -5305,7 +5329,7 @@ function PackingView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Scan each item to verify</div>
           <div style={{ display: "flex", gap: 10 }}>
-            <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+            <input autoFocus ref={packBarcodeInputRef} style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && scanBarcode()} />
             <CameraScanButton onScan={(text) => scanBarcode(text)} />
