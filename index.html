@@ -355,6 +355,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
   const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
     : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
+    : profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
   const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "reports", "bins", "totemaster", "users"];
   const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
@@ -5338,7 +5339,8 @@ function UsersView({ token, profile, showToast }) {
     admin: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports", "bins", "totemaster", "users"],
     warehouse_lead: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"],
     supervisor: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"],
-    returns_agent: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"]
+    returns_agent: ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "returns", "reports"],
+    putaway_officer: ["dashboard", "receiving", "putaway", "returns", "inventory"]
   };
 
   const openEditAccess = (u) => {
