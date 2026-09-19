@@ -11,6 +11,7 @@
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script src="https://unpkg.com/chart.js@4.4.4/dist/chart.umd.js"></script>
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; background: #F4EFE6; font-family: 'Space Grotesk', sans-serif; }
@@ -123,6 +124,25 @@ async function fetchMnpLabelsChunked(trackingNumbers, token) {
     else if (result.pdfBase64) allBatches.push(result.pdfBase64);
   }
   return allBatches;
+}
+
+// Merges multiple base64-encoded PDFs (fetched in small resilient batches to avoid server
+// resource limits) into ONE combined PDF, so the Lead can open/print a single document
+// instead of clicking through many small ones.
+async function mergePdfsToUrl(base64Array) {
+  const { PDFDocument } = PDFLib;
+  const merged = await PDFDocument.create();
+  for (const b64 of base64Array) {
+    try {
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const src = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(src, src.getPageIndices());
+      pages.forEach(p => merged.addPage(p));
+    } catch (e) { /* skip a single corrupt/unreadable PDF rather than failing the whole merge */ }
+  }
+  const mergedBytes = await merged.save();
+  const blob = new Blob([mergedBytes], { type: "application/pdf" });
+  return URL.createObjectURL(blob);
 }
 
 // Tolerant PostEx courier match — strips spaces/dots/dashes before comparing, so
@@ -369,8 +389,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" },
     { id: "kpi", label: "My KPI", icon: "📈" }
   ];
-  const baseItems = profile.role === "admin" ? [...items, { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [...items, { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [items[0], { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, ...items.slice(1), { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [items[0], { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, ...items.slice(1), { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
@@ -1164,6 +1184,9 @@ function DashboardV2View({ token, profile, showToast }) {
   const [safetyBuffer, setSafetyBuffer] = useState(10);
   const [invValue, setInvValue] = useState(0);
   const [skuCount, setSkuCount] = useState(0);
+  const [totalQty, setTotalQty] = useState(0);
+  const [cartonThresholds, setCartonThresholds] = useState({ small: 2, medium: 5, large: 10 }); // upper bound of qty for each bucket; Jumbo = above 'large'
+  const [orderComposition, setOrderComposition] = useState([]); // [{orderId, skuCount, totalQty}]
   const [binUtil, setBinUtil] = useState({ used: 0, total: 0 });
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
   const [fastMoving, setFastMoving] = useState([]);
@@ -1216,9 +1239,30 @@ function DashboardV2View({ token, profile, showToast }) {
         const monthArr = Object.values(monthBuckets);
         setMonthly(monthArr);
 
-        // ---- Inventory value + SKU count + category breakdown ----
+        // ---- Order composition (last 60 days) — for carton size forecasting ----
+        const compCutoff = new Date(now.getTime() - 60 * 86400000).toISOString();
+        const recentOrderIds = (orders || []).filter(o => o.received_at >= compCutoff).map(o => o.id);
+        if (recentOrderIds.length > 0) {
+          const compLines = [];
+          const CHUNK = 150;
+          for (let i = 0; i < recentOrderIds.length; i += CHUNK) {
+            const idsChunk = recentOrderIds.slice(i, i + CHUNK);
+            const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
+            compLines.push(...(rows || []));
+          }
+          const byOrder = {};
+          for (const l of compLines) {
+            if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
+            byOrder[l.order_id].products.add(l.product_id);
+            byOrder[l.order_id].totalQty += l.qty;
+          }
+          setOrderComposition(Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty })));
+        }
+
+        // ---- Inventory value + SKU count + total qty + department breakdown ----
         let totalValue = 0;
-        const catAgg = {};
+        let totalQty = 0;
+        const deptAgg = {};
         const skuSet = new Set();
         for (const r of invRows || []) {
           if (r.on_hand <= 0) continue;
@@ -1226,12 +1270,14 @@ function DashboardV2View({ token, profile, showToast }) {
           const p = prodMap[r.product_id];
           const price = p?.sales_price || 0;
           totalValue += price * r.on_hand;
-          const cat = p?.category || "Uncategorized";
-          catAgg[cat] = (catAgg[cat] || 0) + r.on_hand;
+          totalQty += r.on_hand;
+          const dept = p?.department || "Unassigned";
+          deptAgg[dept] = (deptAgg[dept] || 0) + r.on_hand;
         }
         setInvValue(totalValue);
         setSkuCount(skuSet.size);
-        setCategoryBreakdown(Object.entries(catAgg).sort((a, b) => b[1] - a[1]).slice(0, 8));
+        setTotalQty(totalQty);
+        setCategoryBreakdown(Object.entries(deptAgg).sort((a, b) => b[1] - a[1]).slice(0, 8));
 
         // ---- Bin utilization ----
         const occupiedBinIds = new Set((invRows || []).filter(r => r.on_hand > 0 && r.bin_id).map(r => r.bin_id));
@@ -1294,6 +1340,29 @@ function DashboardV2View({ token, profile, showToast }) {
   const runRateForecast = currentMonthData && daysElapsed > 0 ? Math.round((currentMonthData.count / daysElapsed) * daysInMonth) : 0;
   const procurementTarget = Math.round(runRateForecast * (1 + safetyBuffer / 100));
 
+  // Carton forecasting — classify each historical order into a carton size bucket
+  // (by total piece qty) and Single-SKU vs Multi-SKU, then apply that same
+  // distribution to the forecasted order volume to predict cartons needed per size.
+  const cartonBucket = (qty) => {
+    if (qty <= cartonThresholds.small) return "Small";
+    if (qty <= cartonThresholds.medium) return "Medium";
+    if (qty <= cartonThresholds.large) return "Large";
+    return "Jumbo";
+  };
+  const cartonSizes = ["Small", "Medium", "Large", "Jumbo"];
+  const cartonStats = Object.fromEntries(cartonSizes.map(s => [s, { single: 0, multi: 0 }]));
+  for (const o of orderComposition) {
+    const bucket = cartonBucket(o.totalQty);
+    if (o.skuCount <= 1) cartonStats[bucket].single++;
+    else cartonStats[bucket].multi++;
+  }
+  const totalHistoricalOrders = orderComposition.length || 1;
+  const cartonPrediction = cartonSizes.map(size => {
+    const { single, multi } = cartonStats[size];
+    const pct = ((single + multi) / totalHistoricalOrders) * 100;
+    return { size, single, multi, pct, predicted: Math.round((pct / 100) * procurementTarget) };
+  });
+
   const sortedMonthly = sortMode === "low-high" ? [...monthly].sort((a, b) => a.count - b.count) : monthly;
 
   useEffect(() => {
@@ -1342,7 +1411,7 @@ function DashboardV2View({ token, profile, showToast }) {
           { label: "This Month Actual", value: currentMonthData?.count || 0, sub: "Orders through today", color: TXT },
           { label: "Run-Rate Forecast", value: runRateForecast, sub: "Simple MTD projection", color: "#4ADE80" },
           { label: "Procurement Target", value: procurementTarget, sub: `Forecast + ${safetyBuffer}% buffer`, color: AMBER },
-          { label: "Inventory Value", value: invValue.toLocaleString(undefined, { maximumFractionDigits: 0 }), sub: `${skuCount} active SKUs`, color: "#60A5FA" }
+          { label: "Inventory Value", value: invValue.toLocaleString(undefined, { maximumFractionDigits: 0 }), sub: `${skuCount} active SKUs · ${totalQty.toLocaleString()} total qty`, color: "#60A5FA" }
         ].map((c, i) => (
           <div key={i} style={{ ...dPanel, position: "relative", overflow: "hidden" }}>
             <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: c.color, opacity: 0.08, filter: "blur(10px)" }} />
@@ -1397,6 +1466,60 @@ function DashboardV2View({ token, profile, showToast }) {
         </div>
       </div>
 
+      <div style={{ ...dPanel, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
+          <div style={dHead}>📦 Carton Size Forecasting — Ordering Intelligence</div>
+          <div style={{ color: MUTED, fontSize: 11 }}>Based on last 60 days · {orderComposition.length} orders analyzed</div>
+        </div>
+        <div style={{ color: MUTED, fontSize: 11, marginBottom: 16 }}>Har carton size ki qty-range set karein (kitne pieces tak) — system historical order pattern se predict karega aane wale forecast ({procurementTarget} orders) ke liye kitne cartons har size mein chahiye.</div>
+
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20, alignItems: "flex-end" }}>
+          <div>
+            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>SMALL up to (pcs)</div>
+            <input type="number" min={1} value={cartonThresholds.small} onChange={e => setCartonThresholds({ ...cartonThresholds, small: Number(e.target.value) })}
+              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
+          </div>
+          <div>
+            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>MEDIUM up to (pcs)</div>
+            <input type="number" min={1} value={cartonThresholds.medium} onChange={e => setCartonThresholds({ ...cartonThresholds, medium: Number(e.target.value) })}
+              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
+          </div>
+          <div>
+            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>LARGE up to (pcs)</div>
+            <input type="number" min={1} value={cartonThresholds.large} onChange={e => setCartonThresholds({ ...cartonThresholds, large: Number(e.target.value) })}
+              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
+          </div>
+          <div style={{ color: MUTED, fontSize: 11, paddingBottom: 8 }}>JUMBO = above {cartonThresholds.large} pcs</div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style={S.th}>Carton Size</th>
+              <th style={S.th}>Single-SKU Orders (history)</th>
+              <th style={S.th}>Multi-SKU Orders (history)</th>
+              <th style={S.th}>Historical Share</th>
+              <th style={S.th}>Predicted Cartons Needed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cartonPrediction.map(row => (
+              <tr key={row.size}>
+                <td style={{ ...S.td, color: TXT, fontWeight: 600 }}>{row.size}</td>
+                <td style={{ ...S.td, color: "#60A5FA" }}>{row.single}</td>
+                <td style={{ ...S.td, color: "#C084FC" }}>{row.multi}</td>
+                <td style={{ ...S.td, color: MUTED }}>{row.pct.toFixed(1)}%</td>
+                <td style={{ ...S.td, color: AMBER, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{row.predicted}</td>
+              </tr>
+            ))}
+            {orderComposition.length === 0 && (
+              <tr><td colSpan={5}><div style={{ color: MUTED, textAlign: "center", padding: 16 }}>Last 60 din mein koi order data nahi mila.</div></td></tr>
+            )}
+          </tbody>
+        </table>
+        <div style={{ color: MUTED, fontSize: 10, marginTop: 10 }}>Prediction = (is size ki historical order %) × (aane wale forecast ka total order count). Thresholds badalte hi turant recalculate hota hai.</div>
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
         <div style={dPanel}>
           <div style={dHead}>🚀 Top 5 Fast-Moving — Last 30 Days</div>
@@ -1426,7 +1549,7 @@ function DashboardV2View({ token, profile, showToast }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
         <div style={dPanel}>
-          <div style={dHead}>Inventory by Category</div>
+          <div style={dHead}>Inventory by Department</div>
           <div style={{ height: 220, position: "relative", marginTop: 10 }}><canvas ref={categoryChartRef}></canvas></div>
         </div>
         <div style={dPanel}>
@@ -3288,23 +3411,18 @@ function OrdersView({ token, profile, showToast, setView }) {
       // Collect PDFs as clickable links instead of auto-opening windows — browsers silently
       // block the 2nd+ window.open() call after an async fetch, which was why only PostEx
       // labels ever opened when M&P was also present. A manually-clicked link is never blocked.
-      const collectPdf = (base64, label) => {
-        const byteChars = atob(base64);
-        const byteNumbers = new Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-        const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-        setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
-      };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
-        else collectPdf(result.pdfBase64, "PostEx Labels");
+        const batches = result.pdfBase64Batches || [result.pdfBase64];
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
-        const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
+        const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -4261,6 +4379,8 @@ function PickingView({ token, profile, showToast }) {
   const [lastAssignedTote, setLastAssignedTote] = useState(null);
   const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
   const [fetchedLabelPdfs, setFetchedLabelPdfs] = useState([]);
+  const [awbSelected, setAwbSelected] = useState({});
+  useEffect(() => { setAwbSelected({}); setFetchedLabelPdfs([]); }, [openTote?.id]);
 
   const printAssignedAwb = async (assignedTote) => {
     setAwbPrintingBulk(true);
@@ -4272,23 +4392,18 @@ function PickingView({ token, profile, showToast }) {
       // Collect PDFs as clickable links instead of auto-opening windows — browsers silently
       // block the 2nd+ window.open() call after an async fetch, which was why only PostEx
       // labels ever opened when M&P was also present. A manually-clicked link is never blocked.
-      const collectPdf = (base64, label) => {
-        const byteChars = atob(base64);
-        const byteNumbers = new Array(byteChars.length);
-        for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-        const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-        setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
-      };
       if (postexOrders.length > 0) {
         const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
         const result = await postexProxy("labels", { trackingNumbers }, token);
-        if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
-        else collectPdf(result.pdfBase64, "PostEx Labels");
+        const batches = result.pdfBase64Batches || [result.pdfBase64];
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
-        const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
+        const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -4670,21 +4785,28 @@ function PickingView({ token, profile, showToast }) {
         )}
         {pickViewMode === "order" ? (
           <div style={S.panel}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ color: "#8A8272", fontSize: 11 }}>{Object.values(awbSelected).filter(Boolean).length} selected</span>
+                <button style={S.secondaryBtnSm} onClick={() => setAwbSelected(Object.fromEntries(toteTasks.map(t => [t.id, true])))}>Select All</button>
+                <button style={S.secondaryBtnSm} onClick={() => {
+                  const pendingIds = toteTasks.filter(t => {
+                    const lines = taskLines[t.id] || [];
+                    const required = lines.reduce((s, l) => s + l.qty_required, 0);
+                    const picked = lines.reduce((s, l) => { const g = consolidated.find(gr => gr.product_id === l.product_id); const ref = g?.refs.find(r => r.line_id === l.id); return s + (ref?.allocated || 0); }, 0);
+                    return !(picked >= required && required > 0);
+                  }).map(t => t.id);
+                  setAwbSelected(Object.fromEntries(pendingIds.map(id => [id, true])));
+                }}>Only Pending (not yet picked)</button>
+                <button style={S.secondaryBtnSm} onClick={() => setAwbSelected({})}>Clear</button>
               <button style={S.secondaryBtnSm} disabled={awbPrinting} onClick={async () => {
-                const sorted = [...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
+                const sorted = [...toteTasks].filter(t => awbSelected[t.id]).sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
+                if (sorted.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
                 const postexOrders = sorted.filter(t => isPostex(orders[t.order_id]?.courier));
                 const mnpOrders = sorted.filter(t => isMnp(orders[t.order_id]?.courier));
                 const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier) && !isMnp(orders[t.order_id]?.courier));
 
-                const collectPdf = (base64, label) => {
-                  const byteChars = atob(base64);
-                  const byteNumbers = new Array(byteChars.length);
-                  for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
-                  const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" });
-                  setFetchedLabelPdfs(prev => [...prev, { label, url: URL.createObjectURL(blob) }]);
-                };
                 setFetchedLabelPdfs([]);
 
                 if (postexOrders.length > 0) {
@@ -4692,8 +4814,9 @@ function PickingView({ token, profile, showToast }) {
                   try {
                     const trackingNumbers = postexOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
                     const result = await postexProxy("labels", { trackingNumbers }, token);
-                    if (result.pdfBase64Batches) result.pdfBase64Batches.forEach((b, i) => collectPdf(b, `PostEx Labels — Part ${i + 1}`));
-                    else collectPdf(result.pdfBase64, "PostEx Labels");
+                    const batches = result.pdfBase64Batches || [result.pdfBase64];
+                    const mergedUrl = await mergePdfsToUrl(batches);
+                    setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
                     showToast(`✅ ${postexOrders.length} PostEx label(s) fetched — link neeche milega`);
                   } catch (e) {
                     showToast(`⚠ PostEx label fetch failed: ${e.message} — falling back to text sheet`, "err");
@@ -4706,8 +4829,9 @@ function PickingView({ token, profile, showToast }) {
                   setAwbPrinting(true);
                   try {
                     const trackingNumbers = mnpOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
-                    const pdfBatches = await fetchMnpLabelsChunked(trackingNumbers, token);
-                    pdfBatches.forEach((b, i) => collectPdf(b, `M&P Labels — Part ${i + 1}`));
+                    const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
+                    const mergedUrl = await mergePdfsToUrl(batches);
+                    setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
                     showToast(`✅ ${mnpOrders.length} M&P label(s) fetched — link neeche milega`);
                   } catch (e) {
                     showToast(`⚠ M&P label fetch failed: ${e.message} — falling back to text sheet`, "err");
@@ -4739,6 +4863,7 @@ function PickingView({ token, profile, showToast }) {
                   w.print();
                 }
               }}>{awbPrinting ? "Fetching labels…" : "🖨 Print AWB Sheet (Bin-wise)"}</button>
+              </div>
             </div>
             {fetchedLabelPdfs.length > 0 && (
               <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 12 }}>
@@ -4751,7 +4876,7 @@ function PickingView({ token, profile, showToast }) {
               </div>
             )}
             <table>
-              <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
+              <thead><tr><th style={S.th}></th><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
                 {[...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99)).map(t => {
                   const o = orders[t.order_id];
@@ -4766,6 +4891,7 @@ function PickingView({ token, profile, showToast }) {
                   const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#6B6355";
                   return (
                     <tr key={t.id}>
+                      <td style={S.td}><input type="checkbox" checked={!!awbSelected[t.id]} onChange={e => setAwbSelected({ ...awbSelected, [t.id]: e.target.checked })} /></td>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{String(t.tote_bin_number || "?").padStart(2, "0")}</td>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{o?.external_order_id || "—"}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{o?.courier || "—"}</td>
