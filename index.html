@@ -201,6 +201,7 @@ function App() {
         <TopBar profile={profile} onMenuClick={() => setSidebarOpen(true)} />
         <div style={S.content} className="depotos-content">
           {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} showToast={showToast} />}
+          {view === "dashboardv2" && <DashboardV2View token={session.token} profile={profile} showToast={showToast} />}
           {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
@@ -352,13 +353,13 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" },
     { id: "kpi", label: "My KPI", icon: "📈" }
   ];
-  const baseItems = profile.role === "admin" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [...items, { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [...items, { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
     : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -1135,6 +1136,299 @@ function DashboardView({ token, profile, setView, showToast }) {
             </div>
           </div>
         ) : <EmptyNote text="Loading…" />}
+      </div>
+    </div>
+  );
+}
+
+/* ================= DASHBOARD V2 — Forecasting & Inventory Intelligence ================= */
+function DashboardV2View({ token, profile, showToast }) {
+  const [loading, setLoading] = useState(true);
+  const [monthly, setMonthly] = useState([]); // [{label, count, isCurrent, isFuture}]
+  const [safetyBuffer, setSafetyBuffer] = useState(10);
+  const [invValue, setInvValue] = useState(0);
+  const [skuCount, setSkuCount] = useState(0);
+  const [binUtil, setBinUtil] = useState({ used: 0, total: 0 });
+  const [categoryBreakdown, setCategoryBreakdown] = useState([]);
+  const [fastMoving, setFastMoving] = useState([]);
+  const [slowMoving, setSlowMoving] = useState([]);
+  const [ageingBuckets, setAgeingBuckets] = useState([]);
+  const [recentTx, setRecentTx] = useState([]);
+  const [products, setProducts] = useState({});
+  const [sortMode, setSortMode] = useState("chrono");
+
+  const categoryChartRef = useRef(null);
+  const categoryChartInstance = useRef(null);
+  const monthlyChartRef = useRef(null);
+  const monthlyChartInstance = useRef(null);
+  const ageingChartRef = useRef(null);
+  const ageingChartInstance = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets] = await Promise.all([
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
+          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
+          sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/pick_task_lines?select=product_id,qty_picked,pick_task_id`, { token }),
+          sb(`/rest/v1/pick_tasks?status=eq.picked&select=id,completed_at`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.desc&limit=15`, { token }),
+          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=grn_number,created_at&order=created_at.desc&limit=10`, { token }),
+          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=load_sheet_number,created_at,order_ids&order=created_at.desc&limit=10`, { token })
+        ]);
+
+        const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+        setProducts(prodMap);
+        const now = new Date();
+
+        // ---- Monthly order volume (last 4 months incl. current) ----
+        const monthBuckets = {};
+        for (let i = 3; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          monthBuckets[key] = { label: d.toLocaleString("default", { month: "short", year: "2-digit" }), count: 0, year: d.getFullYear(), month: d.getMonth(), isCurrent: i === 0 };
+        }
+        for (const o of orders || []) {
+          if (!o.received_at) continue;
+          const d = new Date(o.received_at);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          if (monthBuckets[key]) monthBuckets[key].count++;
+        }
+        const monthArr = Object.values(monthBuckets);
+        setMonthly(monthArr);
+
+        // ---- Inventory value + SKU count + category breakdown ----
+        let totalValue = 0;
+        const catAgg = {};
+        const skuSet = new Set();
+        for (const r of invRows || []) {
+          if (r.on_hand <= 0) continue;
+          skuSet.add(r.product_id);
+          const p = prodMap[r.product_id];
+          const price = p?.sales_price || 0;
+          totalValue += price * r.on_hand;
+          const cat = p?.category || "Uncategorized";
+          catAgg[cat] = (catAgg[cat] || 0) + r.on_hand;
+        }
+        setInvValue(totalValue);
+        setSkuCount(skuSet.size);
+        setCategoryBreakdown(Object.entries(catAgg).sort((a, b) => b[1] - a[1]).slice(0, 8));
+
+        // ---- Bin utilization ----
+        const occupiedBinIds = new Set((invRows || []).filter(r => r.on_hand > 0 && r.bin_id).map(r => r.bin_id));
+        setBinUtil({ used: occupiedBinIds.size, total: (bins || []).length });
+
+        // ---- Fast / Slow moving (last 30 days pick velocity) ----
+        const taskCompletedMap = Object.fromEntries((pickTasks || []).map(t => [t.id, t.completed_at]));
+        const cutoff = new Date(now.getTime() - 30 * 86400000);
+        const velocity = {};
+        for (const l of pickLines || []) {
+          const completedAt = taskCompletedMap[l.pick_task_id];
+          if (!completedAt || new Date(completedAt) < cutoff) continue;
+          velocity[l.product_id] = (velocity[l.product_id] || 0) + (l.qty_picked || 0);
+        }
+        const onHandByProduct = {};
+        for (const r of invRows || []) onHandByProduct[r.product_id] = (onHandByProduct[r.product_id] || 0) + r.on_hand;
+        const stockedProductIds = Object.keys(onHandByProduct).filter(id => onHandByProduct[id] > 0);
+        const velocityRanked = stockedProductIds.map(id => ({ id, qty: velocity[id] || 0, onHand: onHandByProduct[id] }));
+        setFastMoving([...velocityRanked].sort((a, b) => b.qty - a.qty).slice(0, 5));
+        setSlowMoving([...velocityRanked].sort((a, b) => a.qty - b.qty).slice(0, 5));
+
+        // ---- Stock ageing buckets (using putaway completion as received-date proxy) ----
+        const lastMovementByProduct = {};
+        for (const t of putawayTasks || []) {
+          if (!lastMovementByProduct[t.product_id] || new Date(t.completed_at) > new Date(lastMovementByProduct[t.product_id])) {
+            lastMovementByProduct[t.product_id] = t.completed_at;
+          }
+        }
+        const allPutaway = await sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,completed_at&order=completed_at.asc`, { token });
+        const firstMovementByProduct = {};
+        for (const t of allPutaway || []) {
+          if (!firstMovementByProduct[t.product_id]) firstMovementByProduct[t.product_id] = t.completed_at;
+        }
+        const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+        for (const id of stockedProductIds) {
+          const ref = firstMovementByProduct[id];
+          const days = ref ? Math.floor((now - new Date(ref)) / 86400000) : 0;
+          if (days <= 30) buckets["0-30"]++;
+          else if (days <= 60) buckets["31-60"]++;
+          else if (days <= 90) buckets["61-90"]++;
+          else buckets["90+"]++;
+        }
+        setAgeingBuckets(Object.entries(buckets));
+
+        // ---- Recent transactions feed ----
+        const tx = [
+          ...(grnRows || []).map(g => ({ type: "GRN Received", label: g.grn_number, ts: g.created_at })),
+          ...(loadSheets || []).map(l => ({ type: "Dispatched", label: `${l.load_sheet_number} (${l.order_ids?.length || 0} orders)`, ts: l.created_at }))
+        ].sort((a, b) => new Date(b.ts) - new Date(a.ts)).slice(0, 10);
+        setRecentTx(tx);
+      } catch (e) { showToast("Load failed", "err"); }
+      setLoading(false);
+    })();
+  }, [token, profile.warehouse_id]);
+
+  // Forecast math
+  const currentMonthData = monthly.find(m => m.isCurrent);
+  const daysInMonth = currentMonthData ? new Date(currentMonthData.year, currentMonthData.month + 1, 0).getDate() : 30;
+  const daysElapsed = new Date().getDate();
+  const runRateForecast = currentMonthData && daysElapsed > 0 ? Math.round((currentMonthData.count / daysElapsed) * daysInMonth) : 0;
+  const procurementTarget = Math.round(runRateForecast * (1 + safetyBuffer / 100));
+
+  const sortedMonthly = sortMode === "low-high" ? [...monthly].sort((a, b) => a.count - b.count) : monthly;
+
+  useEffect(() => {
+    if (!monthlyChartRef.current || monthly.length === 0) return;
+    if (monthlyChartInstance.current) monthlyChartInstance.current.destroy();
+    monthlyChartInstance.current = new Chart(monthlyChartRef.current.getContext("2d"), {
+      type: "bar",
+      data: { labels: monthly.map(m => m.label), datasets: [{ label: "Orders", data: monthly.map(m => m.count), backgroundColor: monthly.map(m => m.isCurrent ? "#F5A623" : "#5B9EE8") }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, x: { ticks: { color: "#6B6355" }, grid: { display: false } } } }
+    });
+    return () => { if (monthlyChartInstance.current) monthlyChartInstance.current.destroy(); };
+  }, [monthly]);
+
+  useEffect(() => {
+    if (!categoryChartRef.current || categoryBreakdown.length === 0) return;
+    if (categoryChartInstance.current) categoryChartInstance.current.destroy();
+    const colors = ["#F5A623", "#5B9EE8", "#4CAF7D", "#B084F5", "#E5484D", "#D9A441", "#8A8272", "#6B9E9E"];
+    categoryChartInstance.current = new Chart(categoryChartRef.current.getContext("2d"), {
+      type: "doughnut",
+      data: { labels: categoryBreakdown.map(c => c[0]), datasets: [{ data: categoryBreakdown.map(c => c[1]), backgroundColor: colors }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { color: "#6B6355", boxWidth: 12, font: { size: 10 } } } } }
+    });
+    return () => { if (categoryChartInstance.current) categoryChartInstance.current.destroy(); };
+  }, [categoryBreakdown]);
+
+  useEffect(() => {
+    if (!ageingChartRef.current || ageingBuckets.length === 0) return;
+    if (ageingChartInstance.current) ageingChartInstance.current.destroy();
+    ageingChartInstance.current = new Chart(ageingChartRef.current.getContext("2d"), {
+      type: "bar",
+      data: { labels: ageingBuckets.map(b => `${b[0]} days`), datasets: [{ label: "SKUs", data: ageingBuckets.map(b => b[1]), backgroundColor: ["#4CAF7D", "#F5A623", "#D9484D", "#E5484D"] }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, x: { ticks: { color: "#6B6355" }, grid: { display: false } } } }
+    });
+    return () => { if (ageingChartInstance.current) ageingChartInstance.current.destroy(); };
+  }, [ageingBuckets]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8A8272" }}>Loading Dashboard V2…</div>;
+
+  return (
+    <div>
+      <div style={S.panelTitle}>📈 Dashboard V2 — Forecasting &amp; Inventory Intelligence</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
+        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>THIS MONTH ACTUAL</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{currentMonthData?.count || 0}</div>
+          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Orders through today</div>
+        </div>
+        <div style={{ background: "#F0F9F4", borderRadius: 10, padding: "14px 16px", border: "1px solid #B7E4C7" }}>
+          <div style={{ color: "#4CAF7D", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>RUN-RATE FORECAST</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{runRateForecast}</div>
+          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Simple MTD run-rate projection</div>
+        </div>
+        <div style={{ background: "#FFF9EE", borderRadius: 10, padding: "14px 16px", border: "1px solid #F0D9A0" }}>
+          <div style={{ color: "#D9A441", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PROCUREMENT TARGET</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{procurementTarget}</div>
+          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Forecast + {safetyBuffer}% safety buffer</div>
+        </div>
+        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
+          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL INVENTORY VALUE</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{invValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{skuCount} active SKUs</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <div style={S.panelTitle}>Monthly Order Volume — Last 4 Months</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setSortMode("chrono")} style={{ ...S.pill, ...(sortMode === "chrono" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Chronological</button>
+              <button onClick={() => setSortMode("low-high")} style={{ ...S.pill, ...(sortMode === "low-high" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Low → High</button>
+            </div>
+          </div>
+          <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Current month (amber) is partial — compare carefully against full months.</div>
+          <div style={{ height: 240, position: "relative" }}><canvas ref={monthlyChartRef}></canvas></div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Packaging / Procurement Planning</div>
+          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>Safety buffer: {safetyBuffer}%</div>
+          <input type="range" min={0} max={50} value={safetyBuffer} onChange={e => setSafetyBuffer(Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
+            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 10, textAlign: "center" }}>
+              <div style={{ color: "#6B6355", fontSize: 10 }}>Forecast</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#2B2620" }}>{runRateForecast}</div>
+            </div>
+            <div style={{ background: "#FFF9EE", borderRadius: 8, padding: 10, textAlign: "center" }}>
+              <div style={{ color: "#6B6355", fontSize: 10 }}>Target</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#2B2620" }}>{procurementTarget}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
+        <div style={S.panel}>
+          <div style={S.panelTitle}>🚀 Top 5 Fast-Moving Items (Last 30 Days)</div>
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Picked Qty</th><th style={S.th}>On Hand</th></tr></thead>
+            <tbody>
+              {fastMoving.map(f => (
+                <tr key={f.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[f.id]?.barcode || "—"}</td><td style={S.td}>{products[f.id]?.name || "—"}</td><td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{f.qty}</td><td style={{ ...S.td, color: "#6B6355" }}>{f.onHand}</td></tr>
+              ))}
+              {fastMoving.length === 0 && <tr><td colSpan={4}><EmptyNote text="No picking activity in last 30 days." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>🐢 Top 5 Slow / Non-Moving Items</div>
+          <table>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Picked Qty</th><th style={S.th}>On Hand</th></tr></thead>
+            <tbody>
+              {slowMoving.map(f => (
+                <tr key={f.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[f.id]?.barcode || "—"}</td><td style={S.td}>{products[f.id]?.name || "—"}</td><td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{f.qty}</td><td style={{ ...S.td, color: "#6B6355" }}>{f.onHand}</td></tr>
+              ))}
+              {slowMoving.length === 0 && <tr><td colSpan={4}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Inventory by Category</div>
+          <div style={{ height: 220, position: "relative" }}><canvas ref={categoryChartRef}></canvas></div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Stock Ageing Analysis</div>
+          <div style={{ height: 220, position: "relative" }}><canvas ref={ageingChartRef}></canvas></div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
+        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", textAlign: "center" }}>
+          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>SPACE UTILIZATION</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{binUtil.total > 0 ? Math.round((binUtil.used / binUtil.total) * 100) : 0}%</div>
+          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{binUtil.used} / {binUtil.total} bins occupied</div>
+        </div>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Recent Transactions</div>
+        <table>
+          <thead><tr><th style={S.th}>Type</th><th style={S.th}>Reference</th><th style={S.th}>Date/Time</th></tr></thead>
+          <tbody>
+            {recentTx.map((t, i) => (
+              <tr key={i}><td style={S.td}><span style={{ ...S.badgeSm, color: t.type === "GRN Received" ? "#5B9EE8" : "#4CAF7D", borderColor: t.type === "GRN Received" ? "#5B9EE8" : "#4CAF7D" }}>{t.type}</span></td><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{t.label}</td><td style={{ ...S.td, color: "#6B6355", fontSize: 11 }}>{fmtTime(t.ts)}</td></tr>
+            ))}
+            {recentTx.length === 0 && <tr><td colSpan={3}><EmptyNote text="No recent activity." /></td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   );
