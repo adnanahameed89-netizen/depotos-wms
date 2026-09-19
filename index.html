@@ -4850,10 +4850,10 @@ function PickingView({ token, profile, showToast }) {
             <div style={S.panel}>
               {rows.length === 0 ? <EmptyNote text="No trolley currently assigned for picking." /> : (
                 <table>
-                  <thead><tr><th style={S.th}>Trolley</th><th style={S.th}>Assigned Picker</th><th style={S.th}>Orders Remaining</th><th style={S.th}>Status</th></tr></thead>
+                  <thead><tr><th style={S.th}>Trolley</th><th style={S.th}>Assigned Picker</th><th style={S.th}>Orders Remaining</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
                   <tbody>
                     {rows.map(r => (
-                      <tr key={r.tote.id}>
+                      <tr key={r.tote.id} style={{ cursor: "pointer" }} onClick={() => openToteDetail(r.tote)}>
                         <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tote.tote_number}</td>
                         <td style={S.td}>{pickers.find(p => p.id === r.tote.assigned_to)?.full_name || "—"}</td>
                         <td style={{ ...S.td, color: "#6B6355" }}>{r.remaining}</td>
@@ -4862,6 +4862,7 @@ function PickingView({ token, profile, showToast }) {
                             ? <span style={{ ...S.badgeSm, color: "#4CAF7D", borderColor: "#4CAF7D" }}>🟢 In Process</span>
                             : <span style={{ ...S.badgeSm, color: "#8A8272", borderColor: "#8A8272" }}>⏳ Queued</span>}
                         </td>
+                        <td style={S.td}><button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); openToteDetail(r.tote); }}>Open</button></td>
                       </tr>
                     ))}
                   </tbody>
