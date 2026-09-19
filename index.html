@@ -1281,24 +1281,13 @@ function DashboardV2View({ token, profile, showToast }) {
   const sortedMonthly = sortMode === "low-high" ? [...monthly].sort((a, b) => a.count - b.count) : monthly;
 
   useEffect(() => {
-    if (!monthlyChartRef.current || monthly.length === 0) return;
-    if (monthlyChartInstance.current) monthlyChartInstance.current.destroy();
-    monthlyChartInstance.current = new Chart(monthlyChartRef.current.getContext("2d"), {
-      type: "bar",
-      data: { labels: monthly.map(m => m.label), datasets: [{ label: "Orders", data: monthly.map(m => m.count), backgroundColor: monthly.map(m => m.isCurrent ? "#F5A623" : "#5B9EE8") }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, x: { ticks: { color: "#6B6355" }, grid: { display: false } } } }
-    });
-    return () => { if (monthlyChartInstance.current) monthlyChartInstance.current.destroy(); };
-  }, [monthly]);
-
-  useEffect(() => {
     if (!categoryChartRef.current || categoryBreakdown.length === 0) return;
     if (categoryChartInstance.current) categoryChartInstance.current.destroy();
-    const colors = ["#F5A623", "#5B9EE8", "#4CAF7D", "#B084F5", "#E5484D", "#D9A441", "#8A8272", "#6B9E9E"];
+    const colors = ["#F5A623", "#60A5FA", "#4ADE80", "#C4A0FF", "#F87171", "#F0C868", "#8F8879", "#5EC9C9"];
     categoryChartInstance.current = new Chart(categoryChartRef.current.getContext("2d"), {
       type: "doughnut",
-      data: { labels: categoryBreakdown.map(c => c[0]), datasets: [{ data: categoryBreakdown.map(c => c[1]), backgroundColor: colors }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { color: "#6B6355", boxWidth: 12, font: { size: 10 } } } } }
+      data: { labels: categoryBreakdown.map(c => c[0]), datasets: [{ data: categoryBreakdown.map(c => c[1]), backgroundColor: colors, borderColor: "#0F0D0A", borderWidth: 2 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "right", labels: { color: "#B5AC98", boxWidth: 12, font: { size: 10 } } } } }
     });
     return () => { if (categoryChartInstance.current) categoryChartInstance.current.destroy(); };
   }, [categoryBreakdown]);
@@ -1308,125 +1297,149 @@ function DashboardV2View({ token, profile, showToast }) {
     if (ageingChartInstance.current) ageingChartInstance.current.destroy();
     ageingChartInstance.current = new Chart(ageingChartRef.current.getContext("2d"), {
       type: "bar",
-      data: { labels: ageingBuckets.map(b => `${b[0]} days`), datasets: [{ label: "SKUs", data: ageingBuckets.map(b => b[1]), backgroundColor: ["#4CAF7D", "#F5A623", "#D9484D", "#E5484D"] }] },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } }, x: { ticks: { color: "#6B6355" }, grid: { display: false } } } }
+      data: { labels: ageingBuckets.map(b => `${b[0]} days`), datasets: [{ label: "SKUs", data: ageingBuckets.map(b => b[1]), backgroundColor: ["#4ADE80", "#F5A623", "#FB923C", "#F87171"], borderRadius: 6 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: "#8F8879" }, grid: { color: "rgba(255,255,255,0.06)" } }, x: { ticks: { color: "#8F8879" }, grid: { display: false } } } }
     });
     return () => { if (ageingChartInstance.current) ageingChartInstance.current.destroy(); };
   }, [ageingBuckets]);
 
-  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#8A8272" }}>Loading Dashboard V2…</div>;
+  if (loading) return <div style={{ padding: 60, textAlign: "center", color: "#8F8879", background: "#0F0D0A", borderRadius: 12, fontFamily: "'Space Grotesk', sans-serif" }}>Loading Dashboard V2…</div>;
+
+  const DARK_BG = "#0F0D0A", CARD_BG = "#1B160E", CARD_BORDER = "rgba(245,166,35,0.14)";
+  const TXT = "#F0EDE4", MUTED = "#8F8879", AMBER = "#F5A623";
+  const dPanel = { background: CARD_BG, border: `1px solid ${CARD_BORDER}`, borderRadius: 14, padding: "18px 20px" };
+  const dHead = { fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, fontWeight: 700, color: TXT, marginBottom: 4 };
+  const dTh = { textAlign: "left", padding: "8px 10px", fontSize: 10, letterSpacing: 0.5, color: MUTED, borderBottom: `1px solid rgba(255,255,255,0.08)`, fontFamily: "'IBM Plex Mono', monospace" };
+  const dTd = { padding: "9px 10px", fontSize: 12.5, color: TXT, borderBottom: "1px solid rgba(255,255,255,0.05)" };
+  const monthColors = ["#4ADE80", "#60A5FA", "#F5A623", "#C4A0FF", "#5EC9C9"];
+  const maxMonthVal = Math.max(...monthly.map(m => m.count), 1);
 
   return (
-    <div>
-      <div style={S.panelTitle}>📈 Dashboard V2 — Forecasting &amp; Inventory Intelligence</div>
+    <div style={{ background: DARK_BG, margin: "-16px", padding: 20, borderRadius: 14, minHeight: "100vh" }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: TXT }}>Forecasting &amp; Inventory Intelligence</div>
+        <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>Live command view — orders, movement, and stock health across the warehouse</div>
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
-        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>THIS MONTH ACTUAL</div>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{currentMonthData?.count || 0}</div>
-          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Orders through today</div>
-        </div>
-        <div style={{ background: "#F0F9F4", borderRadius: 10, padding: "14px 16px", border: "1px solid #B7E4C7" }}>
-          <div style={{ color: "#4CAF7D", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>RUN-RATE FORECAST</div>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{runRateForecast}</div>
-          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Simple MTD run-rate projection</div>
-        </div>
-        <div style={{ background: "#FFF9EE", borderRadius: 10, padding: "14px 16px", border: "1px solid #F0D9A0" }}>
-          <div style={{ color: "#D9A441", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PROCUREMENT TARGET</div>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{procurementTarget}</div>
-          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Forecast + {safetyBuffer}% safety buffer</div>
-        </div>
-        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL INVENTORY VALUE</div>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{invValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
-          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{skuCount} active SKUs</div>
-        </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 18 }} className="depotos-statgrid">
+        {[
+          { label: "This Month Actual", value: currentMonthData?.count || 0, sub: "Orders through today", color: TXT },
+          { label: "Run-Rate Forecast", value: runRateForecast, sub: "Simple MTD projection", color: "#4ADE80" },
+          { label: "Procurement Target", value: procurementTarget, sub: `Forecast + ${safetyBuffer}% buffer`, color: AMBER },
+          { label: "Inventory Value", value: invValue.toLocaleString(undefined, { maximumFractionDigits: 0 }), sub: `${skuCount} active SKUs`, color: "#60A5FA" }
+        ].map((c, i) => (
+          <div key={i} style={{ ...dPanel, position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: c.color, opacity: 0.08, filter: "blur(10px)" }} />
+            <div style={{ color: MUTED, fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>{c.label}</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 30, fontWeight: 700, color: c.color, marginTop: 6, textShadow: `0 0 24px ${c.color}33` }}>{c.value}</div>
+            <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>{c.sub}</div>
+          </div>
+        ))}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
-        <div style={S.panel}>
+        <div style={dPanel}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <div style={S.panelTitle}>Monthly Order Volume — Last 4 Months</div>
+            <div style={dHead}>Monthly Orders — {sortMode === "low-high" ? "Lowest to Highest" : "Chronological"}</div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => setSortMode("chrono")} style={{ ...S.pill, ...(sortMode === "chrono" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Chronological</button>
-              <button onClick={() => setSortMode("low-high")} style={{ ...S.pill, ...(sortMode === "low-high" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Low → High</button>
+              <button onClick={() => setSortMode("low-high")} style={{ background: sortMode === "low-high" ? AMBER : "transparent", color: sortMode === "low-high" ? "#1A1206" : MUTED, border: `1px solid ${sortMode === "low-high" ? AMBER : "rgba(255,255,255,0.15)"}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, cursor: "pointer" }}>Low → High</button>
+              <button onClick={() => setSortMode("chrono")} style={{ background: sortMode === "chrono" ? AMBER : "transparent", color: sortMode === "chrono" ? "#1A1206" : MUTED, border: `1px solid ${sortMode === "chrono" ? AMBER : "rgba(255,255,255,0.15)"}`, borderRadius: 20, padding: "5px 12px", fontSize: 11, cursor: "pointer" }}>Chronological</button>
             </div>
           </div>
-          <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Current month (amber) is partial — compare carefully against full months.</div>
-          <div style={{ height: 240, position: "relative" }}><canvas ref={monthlyChartRef}></canvas></div>
+          <div style={{ color: MUTED, fontSize: 11, marginBottom: 16 }}>Each bar = orders that month. The current month is partial.</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {sortedMonthly.map((m, i) => (
+              <div key={i}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: TXT, fontWeight: 600 }}>{m.label} {m.isCurrent && <span style={{ color: MUTED, fontWeight: 400 }}>· partial</span>}</span>
+                </div>
+                <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 20, height: 26, position: "relative", overflow: "hidden" }}>
+                  <div style={{ background: monthColors[i % monthColors.length], height: "100%", width: `${(m.count / maxMonthVal) * 100}%`, borderRadius: 20, transition: "width 0.4s ease", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 10 }}>
+                    <span style={{ color: "#0F0D0A", fontSize: 12, fontWeight: 700, fontFamily: "'IBM Plex Mono', monospace" }}>{m.count.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Packaging / Procurement Planning</div>
-          <div style={{ color: "#6B6355", fontSize: 12, marginTop: 4 }}>Safety buffer: {safetyBuffer}%</div>
-          <input type="range" min={0} max={50} value={safetyBuffer} onChange={e => setSafetyBuffer(Number(e.target.value))} style={{ width: "100%", marginTop: 8 }} />
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 10, textAlign: "center" }}>
-              <div style={{ color: "#6B6355", fontSize: 10 }}>Forecast</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#2B2620" }}>{runRateForecast}</div>
+        <div style={dPanel}>
+          <div style={dHead}>Procurement Planning</div>
+          <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>Adjust safety buffer</div>
+          <div style={{ color: AMBER, fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 10 }}>{safetyBuffer}%</div>
+          <input type="range" min={0} max={50} value={safetyBuffer} onChange={e => setSafetyBuffer(Number(e.target.value))}
+            style={{ width: "100%", marginTop: 10, accentColor: AMBER }} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 20 }}>
+            <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
+              <div style={{ color: MUTED, fontSize: 10 }}>Forecast</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: TXT, fontFamily: "'Space Grotesk', sans-serif" }}>{runRateForecast}</div>
             </div>
-            <div style={{ background: "#FFF9EE", borderRadius: 8, padding: 10, textAlign: "center" }}>
-              <div style={{ color: "#6B6355", fontSize: 10 }}>Target</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "#2B2620" }}>{procurementTarget}</div>
+            <div style={{ background: "rgba(245,166,35,0.1)", borderRadius: 10, padding: "12px 10px", textAlign: "center", border: `1px solid ${CARD_BORDER}` }}>
+              <div style={{ color: AMBER, fontSize: 10 }}>Target</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: AMBER, fontFamily: "'Space Grotesk', sans-serif" }}>{procurementTarget}</div>
             </div>
           </div>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
-        <div style={S.panel}>
-          <div style={S.panelTitle}>🚀 Top 5 Fast-Moving Items (Last 30 Days)</div>
-          <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Picked Qty</th><th style={S.th}>On Hand</th></tr></thead>
+        <div style={dPanel}>
+          <div style={dHead}>🚀 Top 5 Fast-Moving — Last 30 Days</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+            <thead><tr><th style={dTh}>Barcode</th><th style={dTh}>Product</th><th style={dTh}>Picked</th><th style={dTh}>On Hand</th></tr></thead>
             <tbody>
               {fastMoving.map(f => (
-                <tr key={f.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[f.id]?.barcode || "—"}</td><td style={S.td}>{products[f.id]?.name || "—"}</td><td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{f.qty}</td><td style={{ ...S.td, color: "#6B6355" }}>{f.onHand}</td></tr>
+                <tr key={f.id}><td style={{ ...dTd, fontFamily: "'IBM Plex Mono', monospace", color: AMBER }}>{products[f.id]?.barcode || "—"}</td><td style={dTd}>{products[f.id]?.name || "—"}</td><td style={{ ...dTd, color: "#4ADE80", fontWeight: 700 }}>{f.qty}</td><td style={{ ...dTd, color: MUTED }}>{f.onHand}</td></tr>
               ))}
-              {fastMoving.length === 0 && <tr><td colSpan={4}><EmptyNote text="No picking activity in last 30 days." /></td></tr>}
+              {fastMoving.length === 0 && <tr><td colSpan={4} style={{ ...dTd, color: MUTED, textAlign: "center" }}>No picking activity in last 30 days.</td></tr>}
             </tbody>
           </table>
         </div>
-        <div style={S.panel}>
-          <div style={S.panelTitle}>🐢 Top 5 Slow / Non-Moving Items</div>
-          <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Picked Qty</th><th style={S.th}>On Hand</th></tr></thead>
+        <div style={dPanel}>
+          <div style={dHead}>🐢 Top 5 Slow / Non-Moving</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+            <thead><tr><th style={dTh}>Barcode</th><th style={dTh}>Product</th><th style={dTh}>Picked</th><th style={dTh}>On Hand</th></tr></thead>
             <tbody>
               {slowMoving.map(f => (
-                <tr key={f.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[f.id]?.barcode || "—"}</td><td style={S.td}>{products[f.id]?.name || "—"}</td><td style={{ ...S.td, color: "#E5484D", fontWeight: 600 }}>{f.qty}</td><td style={{ ...S.td, color: "#6B6355" }}>{f.onHand}</td></tr>
+                <tr key={f.id}><td style={{ ...dTd, fontFamily: "'IBM Plex Mono', monospace", color: AMBER }}>{products[f.id]?.barcode || "—"}</td><td style={dTd}>{products[f.id]?.name || "—"}</td><td style={{ ...dTd, color: "#F87171", fontWeight: 700 }}>{f.qty}</td><td style={{ ...dTd, color: MUTED }}>{f.onHand}</td></tr>
               ))}
-              {slowMoving.length === 0 && <tr><td colSpan={4}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {slowMoving.length === 0 && <tr><td colSpan={4} style={{ ...dTd, color: MUTED, textAlign: "center" }}>No inventory recorded yet.</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Inventory by Category</div>
-          <div style={{ height: 220, position: "relative" }}><canvas ref={categoryChartRef}></canvas></div>
+        <div style={dPanel}>
+          <div style={dHead}>Inventory by Category</div>
+          <div style={{ height: 220, position: "relative", marginTop: 10 }}><canvas ref={categoryChartRef}></canvas></div>
         </div>
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Stock Ageing Analysis</div>
-          <div style={{ height: 220, position: "relative" }}><canvas ref={ageingChartRef}></canvas></div>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
-        <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", textAlign: "center" }}>
-          <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>SPACE UTILIZATION</div>
-          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{binUtil.total > 0 ? Math.round((binUtil.used / binUtil.total) * 100) : 0}%</div>
-          <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>{binUtil.used} / {binUtil.total} bins occupied</div>
+        <div style={dPanel}>
+          <div style={dHead}>Stock Ageing Analysis</div>
+          <div style={{ height: 220, position: "relative", marginTop: 10 }}><canvas ref={ageingChartRef}></canvas></div>
         </div>
       </div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Recent Transactions</div>
-        <table>
-          <thead><tr><th style={S.th}>Type</th><th style={S.th}>Reference</th><th style={S.th}>Date/Time</th></tr></thead>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 14, marginBottom: 16 }} className="depotos-statgrid">
+        <div style={{ ...dPanel, textAlign: "center" }}>
+          <div style={{ color: MUTED, fontSize: 11, fontFamily: "'IBM Plex Mono', monospace" }}>SPACE UTILIZATION</div>
+          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#C4A0FF", marginTop: 6 }}>{binUtil.total > 0 ? Math.round((binUtil.used / binUtil.total) * 100) : 0}%</div>
+          <div style={{ color: MUTED, fontSize: 11, marginTop: 4 }}>{binUtil.used} / {binUtil.total} bins occupied</div>
+        </div>
+      </div>
+
+      <div style={dPanel}>
+        <div style={dHead}>Recent Transactions</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+          <thead><tr><th style={dTh}>Type</th><th style={dTh}>Reference</th><th style={dTh}>Date/Time</th></tr></thead>
           <tbody>
             {recentTx.map((t, i) => (
-              <tr key={i}><td style={S.td}><span style={{ ...S.badgeSm, color: t.type === "GRN Received" ? "#5B9EE8" : "#4CAF7D", borderColor: t.type === "GRN Received" ? "#5B9EE8" : "#4CAF7D" }}>{t.type}</span></td><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{t.label}</td><td style={{ ...S.td, color: "#6B6355", fontSize: 11 }}>{fmtTime(t.ts)}</td></tr>
+              <tr key={i}>
+                <td style={dTd}><span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 10.5, border: `1px solid ${t.type === "GRN Received" ? "#60A5FA" : "#4ADE80"}`, color: t.type === "GRN Received" ? "#60A5FA" : "#4ADE80" }}>{t.type}</span></td>
+                <td style={{ ...dTd, fontFamily: "'IBM Plex Mono', monospace" }}>{t.label}</td>
+                <td style={{ ...dTd, color: MUTED, fontSize: 11 }}>{fmtTime(t.ts)}</td>
+              </tr>
             ))}
-            {recentTx.length === 0 && <tr><td colSpan={3}><EmptyNote text="No recent activity." /></td></tr>}
+            {recentTx.length === 0 && <tr><td colSpan={3} style={{ ...dTd, color: MUTED, textAlign: "center" }}>No recent activity.</td></tr>}
           </tbody>
         </table>
       </div>
