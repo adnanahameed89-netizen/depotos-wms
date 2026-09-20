@@ -1956,17 +1956,73 @@ function ProductsView({ token, profile, showToast }) {
     setImporting(false);
   };
 
+  const [fixingImages, setFixingImages] = useState(false);
+  const [imageFixSummary, setImageFixSummary] = useState(null);
+
+  const handleImageUrlFixFile = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    setFixingImages(true); setImageFixSummary(null);
+    try {
+      const rows = await parseSheet(file);
+      if (rows.length === 0) { showToast("File khali hai", "err"); setFixingImages(false); return; }
+      const map = buildColumnMap(Object.keys(rows[0]));
+      if (!map.barcode) { showToast("Barcode column nahi mila file mein", "err"); setFixingImages(false); return; }
+      const rawBarcodes = [...new Set(rows.map(row => cleanCode(getVal(row, map, "barcode"))).filter(Boolean))];
+      const barcodeToProduct = {};
+      const LOOKUP_CHUNK = 60;
+      for (let i = 0; i < rawBarcodes.length; i += LOOKUP_CHUNK) {
+        const chunk = rawBarcodes.slice(i, i + LOOKUP_CHUNK);
+        const found = await sb(`/rest/v1/products?barcode=in.(${chunk.join(",")})&select=id,barcode`, { token });
+        for (const p of found || []) barcodeToProduct[cleanCode(p.barcode)] = p;
+      }
+      let updated = 0, notFound = 0, skipped = 0;
+      const notFoundCodes = [];
+      for (const row of rows) {
+        const barcode = cleanCode(getVal(row, map, "barcode"));
+        const rawImageUrl = String(getVal(row, map, "imageUrl") || "").trim();
+        if (!barcode || !rawImageUrl) { skipped++; continue; }
+        const clearIt = rawImageUrl.toUpperCase() === "CLEAR";
+        const imageUrl = clearIt ? null : rawImageUrl;
+        const p = barcodeToProduct[barcode];
+        if (!p) { notFound++; notFoundCodes.push(barcode); continue; }
+        try {
+          await sb(`/rest/v1/products?id=eq.${p.id}`, { method: "PATCH", token, body: { image_url: imageUrl } });
+          updated++;
+        } catch (e) { notFound++; notFoundCodes.push(`${barcode} (save failed)`); }
+      }
+      setImageFixSummary(`✅ ${updated} product(s) ki image URL update ho gayi (sirf image, baaki kuch nahi chheda). ${notFound} barcode nahi mile. ${skipped} rows skip hui (barcode/URL missing).${notFoundCodes.length ? " Not found: " + notFoundCodes.slice(0, 10).join(", ") + (notFoundCodes.length > 10 ? "…" : "") : ""}`);
+      showToast(`✅ ${updated} image URLs update ho gayin`);
+      load();
+    } catch (e) { showToast(`Update failed: ${(e.message || "").slice(0, 100)}`, "err"); }
+    setFixingImages(false);
+  };
+
   return (
     <div>
       <SectionTitle title="Product Master" action={
-        <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
-          {importing ? "Importing…" : "📤 Upload catalogue (CSV/Excel)"}
-          <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleCatalogueFile} disabled={importing} />
-        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+            {fixingImages ? "Updating…" : "🖼 Update Image URLs Only"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleImageUrlFixFile} disabled={fixingImages} />
+          </label>
+          <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+            {importing ? "Importing…" : "📤 Upload catalogue (CSV/Excel)"}
+            <input type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={handleCatalogueFile} disabled={importing} />
+          </label>
+        </div>
       } />
+      {imageFixSummary && (
+        <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{imageFixSummary}</div>
+      )}
       {importSummary && (
         <div style={{ ...S.panel, borderColor: "#4CAF7D", color: "#4CAF7D", fontSize: 12 }}>{importSummary}</div>
       )}
+      <div style={{ marginBottom: 10, fontSize: 11, color: "#8A8272" }}>
+        🖼 <b>Update Image URLs Only</b>: file mein sirf 2 columns chahiye — <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>barcode, image_url</span>. Yeh SIRF image_url field update karta hai — naam, category, price, department sab waise hi rahenge, koi risk nahi.
+        <br />⚠ Agar kisi barcode ki image URL <b>bilkul khaali cell</b> chhoड़ें, woh row <b>skip</b> ho jayegi (kuch change nahi hoga). Agar image ko <b>jaan-boojh kar hata (clear) karna hai</b>, to us cell mein literally <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>CLEAR</span> likhein.
+      </div>
       <div style={{ marginBottom: 10, fontSize: 11, color: "#8A8272" }}>
         CSV columns expected: <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#6B6355" }}>department, product_category, barcode, product_name, sales_price, image_url</span>
         {totalCount !== null && <span> · Catalogue mein {totalCount.toLocaleString()} products hain</span>}
@@ -7256,6 +7312,22 @@ function BinsView({ token, profile, showToast }) {
     setImporting(false);
   };
 
+  const deleteBin = async (bin) => {
+    if (!window.confirm(`Bin "${bin.code}" delete karein? Agar isme abhi stock hai ya yeh kisi task se linked hai, delete nahi ho payegi.`)) return;
+    try {
+      await sb(`/rest/v1/bins?id=eq.${bin.id}`, { method: "DELETE", token });
+      showToast(`✅ Bin "${bin.code}" delete ho gayi`);
+      load();
+    } catch (e) {
+      const msg = (e.message || "").toLowerCase();
+      if (msg.includes("foreign key") || msg.includes("violates")) {
+        showToast(`⚠ "${bin.code}" delete nahi ho sakti — isme stock hai ya kisi task/history se linked hai`, "err");
+      } else {
+        showToast("Delete failed", "err");
+      }
+    }
+  };
+
   return (
     <div>
       <SectionTitle title="Bin Master (locations)" action={
@@ -7277,8 +7349,9 @@ function BinsView({ token, profile, showToast }) {
       </div>
       <div style={S.cardGrid}>
         {bins.map(b => (
-          <div key={b.id} style={{ ...S.card, cursor: "default" }}>
+          <div key={b.id} style={{ ...S.card, cursor: "default", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
+            <button onClick={() => deleteBin(b)} style={{ background: "transparent", border: "none", color: "#E5484D", cursor: "pointer", fontSize: 14 }} title="Delete bin">🗑</button>
           </div>
         ))}
         {bins.length === 0 && <EmptyNote text="No bin locations — upload a file or add manually." />}
