@@ -7312,6 +7312,40 @@ function BinsView({ token, profile, showToast }) {
     setImporting(false);
   };
 
+  const [selectedBins, setSelectedBins] = useState({});
+  const [aisleFrom, setAisleFrom] = useState("");
+  const [aisleTo, setAisleTo] = useState("");
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const binAisle = (code) => (code || "").split("-")[0];
+  const filteredBins = bins.filter(b => {
+    const aisle = binAisle(b.code);
+    if (aisleFrom && aisle.toUpperCase() < aisleFrom.toUpperCase()) return false;
+    if (aisleTo && aisle.toUpperCase() > aisleTo.toUpperCase()) return false;
+    return true;
+  });
+  const selectedCount = Object.values(selectedBins).filter(Boolean).length;
+
+  const bulkDeleteBins = async () => {
+    const ids = Object.keys(selectedBins).filter(id => selectedBins[id]);
+    if (ids.length === 0) return;
+    if (!window.confirm(`${ids.length} bins delete karein? Jo bins stock/task se linked hain woh skip ho jayengi.`)) return;
+    setBulkDeleting(true);
+    let deleted = 0, blocked = 0;
+    const blockedCodes = [];
+    for (const id of ids) {
+      const bin = bins.find(b => b.id === id);
+      try {
+        await sb(`/rest/v1/bins?id=eq.${id}`, { method: "DELETE", token });
+        deleted++;
+      } catch (e) { blocked++; blockedCodes.push(bin?.code || id); }
+    }
+    showToast(`✅ ${deleted} bins delete ho gayi${blocked > 0 ? ` — ${blocked} skip hui (in use): ${blockedCodes.slice(0, 8).join(", ")}${blockedCodes.length > 8 ? "…" : ""}` : ""}`, blocked > 0 ? "err" : undefined);
+    setSelectedBins({});
+    setBulkDeleting(false);
+    load();
+  };
+
   const deleteBin = async (bin) => {
     if (!window.confirm(`Bin "${bin.code}" delete karein? Agar isme abhi stock hai ya yeh kisi task se linked hai, delete nahi ho payegi.`)) return;
     try {
@@ -7347,14 +7381,33 @@ function BinsView({ token, profile, showToast }) {
           ⚠ Sirf yahan se bin locations bante hain — staff Putaway ya Returns screen se koi nayi location nahi khol sakte, sirf yahan uploaded list mein se select karenge.
         </div>
       </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Bulk Select &amp; Delete (by Aisle Range)</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "#6B6355" }}>Aisle</span>
+          <input style={{ ...S.input, width: 70 }} placeholder="A" value={aisleFrom} onChange={e => setAisleFrom(e.target.value.toUpperCase())} />
+          <span style={{ fontSize: 12, color: "#6B6355" }}>to</span>
+          <input style={{ ...S.input, width: 70 }} placeholder="F" value={aisleTo} onChange={e => setAisleTo(e.target.value.toUpperCase())} />
+          <button style={S.secondaryBtnSm} onClick={() => { setAisleFrom(""); setAisleTo(""); }}>Clear filter</button>
+          <span style={{ marginLeft: "auto", fontSize: 12, color: "#8A8272" }}>{filteredBins.length} bins matched</span>
+          <button style={S.secondaryBtnSm} onClick={() => setSelectedBins(Object.fromEntries(filteredBins.map(b => [b.id, true])))}>Select All (filtered)</button>
+          <button style={S.secondaryBtnSm} onClick={() => setSelectedBins({})}>Clear Selection</button>
+          <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} disabled={selectedCount === 0 || bulkDeleting} onClick={bulkDeleteBins}>
+            {bulkDeleting ? "Deleting…" : `🗑 Delete Selected (${selectedCount})`}
+          </button>
+        </div>
+      </div>
       <div style={S.cardGrid}>
-        {bins.map(b => (
+        {filteredBins.map(b => (
           <div key={b.id} style={{ ...S.card, cursor: "default", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="checkbox" checked={!!selectedBins[b.id]} onChange={e => setSelectedBins({ ...selectedBins, [b.id]: e.target.checked })} />
+              <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
+            </div>
             <button onClick={() => deleteBin(b)} style={{ background: "transparent", border: "none", color: "#E5484D", cursor: "pointer", fontSize: 14 }} title="Delete bin">🗑</button>
           </div>
         ))}
-        {bins.length === 0 && <EmptyNote text="No bin locations — upload a file or add manually." />}
+        {filteredBins.length === 0 && <EmptyNote text="No bin locations match this filter." />}
       </div>
     </div>
   );
