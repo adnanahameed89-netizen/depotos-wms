@@ -6496,6 +6496,37 @@ function ReturnsView({ token, profile, showToast }) {
     } catch (e) { showToast("Add failed", "err"); }
   };
 
+  const isAdminOrLead = ["admin", "warehouse_lead"].includes(profile.role);
+
+  const requestDeleteReturn = async () => {
+    const reason = window.prompt("Yeh return galti se kyun bana? (optional, Admin/Lead ko dikhega)");
+    try {
+      await sb(`/rest/v1/returns?id=eq.${openReturn.id}`, { method: "PATCH", token, body: { delete_requested: true, delete_requested_by: profile.id, delete_requested_at: new Date().toISOString(), delete_reason: reason || null } });
+      showToast("✅ Delete request bhej di gayi — Admin/Lead approve karenge");
+      setOpenReturn({ ...openReturn, delete_requested: true, delete_requested_by: profile.id, delete_requested_at: new Date().toISOString(), delete_reason: reason || null });
+      load();
+    } catch (e) { showToast("Request failed", "err"); }
+  };
+
+  const approveDeleteReturn = async (ret) => {
+    if (!window.confirm("Confirm karein — yeh return record permanently delete ho jayega.")) return;
+    try {
+      await sb(`/rest/v1/returns?id=eq.${ret.id}`, { method: "DELETE", token });
+      showToast("✅ Return delete ho gaya");
+      setOpenReturn(null);
+      load();
+    } catch (e) { showToast("Delete failed", "err"); }
+  };
+
+  const rejectDeleteReturn = async (ret) => {
+    try {
+      await sb(`/rest/v1/returns?id=eq.${ret.id}`, { method: "PATCH", token, body: { delete_requested: false, delete_requested_by: null, delete_requested_at: null, delete_reason: null } });
+      showToast("Request reject ho gayi — return normal reh gaya");
+      setOpenReturn({ ...ret, delete_requested: false });
+      load();
+    } catch (e) { showToast("Failed", "err"); }
+  };
+
   const submitReturn = async () => {
     try {
       let anyGood = false, anyDamaged = false;
@@ -6640,6 +6671,25 @@ function ReturnsView({ token, profile, showToast }) {
           {openReturn.status !== "pending" && (
             <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 14 }}>✅ Yeh return already submit ho chuka hai ({openReturn.status}) — dobara submit karne ki zaroorat nahi.</div>
           )}
+          {openReturn.status === "pending" && !openReturn.delete_requested && (
+            <button style={{ ...S.secondaryBtnSm, marginTop: 14, color: "#E5484D", borderColor: "#E5484D" }} onClick={requestDeleteReturn}>🗑 Galti se ban gaya — Delete Request bhejein</button>
+          )}
+          {openReturn.delete_requested && !isAdminOrLead && (
+            <div style={{ color: "#F5A623", fontSize: 12, marginTop: 14 }}>⏳ Delete request bhej di gayi hai — Admin/Warehouse Lead ki approval ka intezar hai.</div>
+          )}
+          {openReturn.delete_requested && isAdminOrLead && (
+            <div style={{ background: "#FDF0EE", border: "1px solid #E5484D", borderRadius: 8, padding: 12, marginTop: 14 }}>
+              <div style={{ color: "#E5484D", fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🗑 Delete Request Pending</div>
+              <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>
+                By {staffList.find(s => s.id === openReturn.delete_requested_by)?.full_name || "—"} · {fmtTime(openReturn.delete_requested_at)}
+                {openReturn.delete_reason ? ` — "${openReturn.delete_reason}"` : ""}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} onClick={() => approveDeleteReturn(openReturn)}>✓ Approve &amp; Delete</button>
+                <button style={S.secondaryBtnSm} onClick={() => rejectDeleteReturn(openReturn)}>✕ Reject Request</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -6689,6 +6739,28 @@ function ReturnsView({ token, profile, showToast }) {
           <button style={S.primaryBtnSm} onClick={() => scanOrderTracking()}>Start Return</button>
         </div>
       </div>
+      {isAdminOrLead && returns.filter(r => r.delete_requested).length > 0 && (
+        <div style={{ ...S.panel, borderColor: "#E5484D" }}>
+          <div style={{ color: "#E5484D", fontWeight: 700, fontSize: 14, marginBottom: 10 }}>🗑 Pending Delete Requests — {returns.filter(r => r.delete_requested).length}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {returns.filter(r => r.delete_requested).map(r => (
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#FDF0EE", borderRadius: 8, padding: "10px 14px", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontWeight: 600 }}>{r.tracking_number || "—"}</div>
+                  <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>
+                    By {staffList.find(s => s.id === r.delete_requested_by)?.full_name || "—"} · {fmtTime(r.delete_requested_at)}
+                    {r.delete_reason ? ` — "${r.delete_reason}"` : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} onClick={() => approveDeleteReturn(r)}>✓ Approve &amp; Delete</button>
+                  <button style={S.secondaryBtnSm} onClick={() => rejectDeleteReturn(r)}>✕ Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={S.panel}>
         <table>
           <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
