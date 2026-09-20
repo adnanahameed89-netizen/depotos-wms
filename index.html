@@ -1185,8 +1185,15 @@ function DashboardV2View({ token, profile, showToast }) {
   const [invValue, setInvValue] = useState(0);
   const [skuCount, setSkuCount] = useState(0);
   const [totalQty, setTotalQty] = useState(0);
-  const [cartonThresholds, setCartonThresholds] = useState({ small: 2, medium: 5, large: 10 }); // upper bound of qty for each bucket; Jumbo = above 'large'
   const [orderComposition, setOrderComposition] = useState([]); // [{orderId, skuCount, totalQty}]
+  const [monthlyHistory, setMonthlyHistory] = useState([]); // [{key, label, daysInMonth, daysCovered, orders, pieces, status, bySize:{}, ordersPerDay}]
+  const [cartonTypes, setCartonTypes] = useState([]);
+  const [cartonPOs, setCartonPOs] = useState([]);
+  const [showCartonSetup, setShowCartonSetup] = useState(false);
+  const [showCartonPOForm, setShowCartonPOForm] = useState(false);
+  const [newCartonType, setNewCartonType] = useState({ name: "", min_qty: "", max_qty: "", lead_time_days: 7, safety_buffer_pct: 20 });
+  const [newPO, setNewPO] = useState({ carton_type_id: "", qty: "", expected_date: "" });
+  const [savingCarton, setSavingCarton] = useState(false);
   const [binUtil, setBinUtil] = useState({ used: 0, total: 0 });
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
   const [fastMoving, setFastMoving] = useState([]);
@@ -1207,7 +1214,7 @@ function DashboardV2View({ token, profile, showToast }) {
     (async () => {
       setLoading(true);
       try {
-        const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets] = await Promise.all([
+        const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets, cTypes, cPOs] = await Promise.all([
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
           sb(`/rest/v1/products?select=*&limit=20000`, { token }),
           sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
@@ -1216,8 +1223,12 @@ function DashboardV2View({ token, profile, showToast }) {
           sb(`/rest/v1/pick_tasks?status=eq.picked&select=id,completed_at`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.desc&limit=15`, { token }),
           sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=grn_number,created_at&order=created_at.desc&limit=10`, { token }),
-          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=load_sheet_number,created_at,order_ids&order=created_at.desc&limit=10`, { token })
+          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=load_sheet_number,created_at,order_ids&order=created_at.desc&limit=10`, { token }),
+          sb(`/rest/v1/carton_types?warehouse_id=eq.${profile.warehouse_id}&select=*&order=sort_order.asc`, { token }),
+          sb(`/rest/v1/carton_purchase_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
         ]);
+        setCartonTypes(cTypes || []);
+        setCartonPOs(cPOs || []);
 
         const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
         setProducts(prodMap);
@@ -1239,28 +1250,68 @@ function DashboardV2View({ token, profile, showToast }) {
         const monthArr = Object.values(monthBuckets);
         setMonthly(monthArr);
 
-        // ---- Order composition (last 60 days) — for carton size forecasting ----
-        // Wrapped in its own try/catch so a failure here (e.g. a very large order
-        // volume) never blocks the rest of the dashboard's data from loading.
+        // ---- Order composition (last 4 calendar months) — for monthly history + carton forecasting ----
+        // Wrapped in its own try/catch so a failure here never blocks the rest of the dashboard.
         try {
-          const compCutoff = new Date(now.getTime() - 60 * 86400000).toISOString();
-          const recentOrderIds = (orders || []).filter(o => o.received_at >= compCutoff).map(o => o.id);
-          if (recentOrderIds.length > 0) {
-            const compLines = [];
-            const CHUNK = 60;
-            for (let i = 0; i < recentOrderIds.length; i += CHUNK) {
-              const idsChunk = recentOrderIds.slice(i, i + CHUNK);
-              const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
-              compLines.push(...(rows || []));
+          const classifySize = (qty) => {
+            for (const ct of (cTypes || [])) {
+              if (qty >= ct.min_qty && (ct.max_qty == null || qty <= ct.max_qty)) return ct.name;
             }
-            const byOrder = {};
-            for (const l of compLines) {
-              if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
-              byOrder[l.order_id].products.add(l.product_id);
-              byOrder[l.order_id].totalQty += l.qty;
-            }
-            setOrderComposition(Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty })));
+            return "Unclassified";
+          };
+          const histStart = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString();
+          const histOrders = (orders || []).filter(o => o.received_at >= histStart);
+          const histOrderIds = histOrders.map(o => o.id);
+          const compLines = [];
+          const CHUNK = 60;
+          for (let i = 0; i < histOrderIds.length; i += CHUNK) {
+            const idsChunk = histOrderIds.slice(i, i + CHUNK);
+            const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
+            compLines.push(...(rows || []));
           }
+          const byOrder = {};
+          for (const l of compLines) {
+            if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
+            byOrder[l.order_id].products.add(l.product_id);
+            byOrder[l.order_id].totalQty += l.qty;
+          }
+          const compArr = Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty }));
+          setOrderComposition(compArr);
+
+          // Build monthly history buckets (last 4 months, oldest first)
+          const hist = [];
+          for (let i = 3; i >= 0; i--) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            hist.push({
+              key: `${d.getFullYear()}-${d.getMonth()}`, y: d.getFullYear(), mo: d.getMonth(),
+              label: d.toLocaleString("default", { month: "short", year: "2-digit" }),
+              daysInMonth: daysInMonthOf(d.getFullYear(), d.getMonth()),
+              isCurrent: i === 0, orders: 0, pieces: 0, bySize: {}
+            });
+          }
+          const histByKey = Object.fromEntries(hist.map(h => [h.key, h]));
+          for (const o of histOrders) {
+            const d = new Date(o.received_at);
+            const key = `${d.getFullYear()}-${d.getMonth()}`;
+            const bucket = histByKey[key];
+            if (!bucket) continue;
+            bucket.orders++;
+            const comp = byOrder[o.id];
+            if (comp) {
+              bucket.pieces += comp.totalQty;
+              const size = classifySize(comp.totalQty);
+              bucket.bySize[size] = (bucket.bySize[size] || 0) + 1;
+            } else {
+              bucket.bySize["Unclassified"] = (bucket.bySize["Unclassified"] || 0) + 1;
+            }
+          }
+          const todayDate = now.getDate();
+          setMonthlyHistory(hist.map(h => ({
+            ...h,
+            daysCovered: h.isCurrent ? todayDate : h.daysInMonth,
+            status: h.isCurrent ? "Partial" : "Complete",
+            ordersPerDay: Math.round((h.orders / (h.isCurrent ? todayDate : h.daysInMonth)) * 10) / 10
+          })));
         } catch (e) { /* carton forecasting is best-effort — rest of dashboard still loads */ }
 
         // ---- Inventory value + SKU count + total qty + department breakdown ----
@@ -1344,28 +1395,131 @@ function DashboardV2View({ token, profile, showToast }) {
   const runRateForecast = currentMonthData && daysElapsed > 0 ? Math.round((currentMonthData.count / daysElapsed) * daysInMonth) : 0;
   const procurementTarget = Math.round(runRateForecast * (1 + safetyBuffer / 100));
 
-  // Carton forecasting — classify each historical order into a carton size bucket
-  // (by total piece qty) and Single-SKU vs Multi-SKU, then apply that same
-  // distribution to the forecasted order volume to predict cartons needed per size.
-  const cartonBucket = (qty) => {
-    if (qty <= cartonThresholds.small) return "Small";
-    if (qty <= cartonThresholds.medium) return "Medium";
-    if (qty <= cartonThresholds.large) return "Large";
-    return "Jumbo";
+  const loadCartonData = async () => {
+    const [cTypes, cPOs] = await Promise.all([
+      sb(`/rest/v1/carton_types?warehouse_id=eq.${profile.warehouse_id}&select=*&order=sort_order.asc`, { token }),
+      sb(`/rest/v1/carton_purchase_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
+    ]);
+    setCartonTypes(cTypes || []);
+    setCartonPOs(cPOs || []);
   };
-  const cartonSizes = ["Small", "Medium", "Large", "Jumbo"];
-  const cartonStats = Object.fromEntries(cartonSizes.map(s => [s, { single: 0, multi: 0 }]));
-  for (const o of orderComposition) {
-    const bucket = cartonBucket(o.totalQty);
-    if (o.skuCount <= 1) cartonStats[bucket].single++;
-    else cartonStats[bucket].multi++;
+
+  const addCartonType = async () => {
+    if (!newCartonType.name.trim() || newCartonType.min_qty === "") { showToast("Naam aur Min Qty zaroori hain", "err"); return; }
+    setSavingCarton(true);
+    try {
+      await sb(`/rest/v1/carton_types`, {
+        method: "POST", token, body: {
+          warehouse_id: profile.warehouse_id, name: newCartonType.name.trim(),
+          min_qty: Number(newCartonType.min_qty), max_qty: newCartonType.max_qty === "" ? null : Number(newCartonType.max_qty),
+          lead_time_days: Number(newCartonType.lead_time_days) || 7, safety_buffer_pct: Number(newCartonType.safety_buffer_pct) || 20,
+          sort_order: cartonTypes.length
+        }
+      });
+      showToast(`✅ Carton type "${newCartonType.name}" add ho gayi`);
+      setNewCartonType({ name: "", min_qty: "", max_qty: "", lead_time_days: 7, safety_buffer_pct: 20 });
+      await loadCartonData();
+    } catch (e) { showToast("Add failed — dobara try karein", "err"); }
+    setSavingCarton(false);
+  };
+
+  const deleteCartonType = async (id) => {
+    if (!window.confirm("Yeh carton type delete karein? Iski saari purchase order history bhi chali jayegi.")) return;
+    try {
+      await sb(`/rest/v1/carton_types?id=eq.${id}`, { method: "DELETE", token });
+      showToast("Carton type delete ho gayi");
+      await loadCartonData();
+    } catch (e) { showToast("Delete failed", "err"); }
+  };
+
+  const adjustOnHand = async (id, newValue) => {
+    try {
+      await sb(`/rest/v1/carton_types?id=eq.${id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, Number(newValue) || 0), updated_at: new Date().toISOString() } });
+      await loadCartonData();
+    } catch (e) { showToast("Update failed", "err"); }
+  };
+
+  const addCartonPO = async () => {
+    if (!newPO.carton_type_id || !newPO.qty) { showToast("Carton type aur Qty select karein", "err"); return; }
+    setSavingCarton(true);
+    try {
+      await sb(`/rest/v1/carton_purchase_orders`, {
+        method: "POST", token, body: {
+          warehouse_id: profile.warehouse_id, carton_type_id: newPO.carton_type_id, qty: Number(newPO.qty),
+          expected_date: newPO.expected_date || null, status: "pending", created_by: profile.id
+        }
+      });
+      showToast(`✅ ${newPO.qty} cartons order ki gayi`);
+      setNewPO({ carton_type_id: "", qty: "", expected_date: "" });
+      setShowCartonPOForm(false);
+      await loadCartonData();
+    } catch (e) { showToast("Order add failed", "err"); }
+    setSavingCarton(false);
+  };
+
+  const markPOReceived = async (po) => {
+    try {
+      await sb(`/rest/v1/carton_purchase_orders?id=eq.${po.id}`, { method: "PATCH", token, body: { status: "received", received_at: new Date().toISOString() } });
+      const ct = cartonTypes.find(c => c.id === po.carton_type_id);
+      if (ct) await sb(`/rest/v1/carton_types?id=eq.${ct.id}`, { method: "PATCH", token, body: { on_hand: ct.on_hand + po.qty } });
+      showToast(`✅ ${po.qty} cartons receive ho gayi — On Hand mein add ho gayi`);
+      await loadCartonData();
+    } catch (e) { showToast("Update failed", "err"); }
+  };
+
+  // Carton size classification against the configured carton_types ranges
+  const classifyCartonSize = (qty) => {
+    for (const ct of cartonTypes) {
+      if (qty >= ct.min_qty && (ct.max_qty == null || qty <= ct.max_qty)) return ct.name;
+    }
+    return "Unclassified";
+  };
+
+  const daysInMonthOf = (y, m) => new Date(y, m + 1, 0).getDate();
+  const thisMonthDaysInMonth = daysInMonthOf(new Date().getFullYear(), new Date().getMonth());
+  const daysElapsedThisMonth = new Date().getDate();
+  const thisMonthHist = monthlyHistory.find(m => m.isCurrent);
+  const lastCompleteMonth = [...monthlyHistory].reverse().find(m => !m.isCurrent);
+
+  const thisMonthMTD = thisMonthHist?.orders || 0;
+  const thisMonthProjected = daysElapsedThisMonth > 0 ? Math.round((thisMonthMTD / daysElapsedThisMonth) * thisMonthDaysInMonth) : 0;
+  const growthTrendPct = lastCompleteMonth && lastCompleteMonth.orders > 0
+    ? ((thisMonthProjected - lastCompleteMonth.orders) / lastCompleteMonth.orders) * 100
+    : 0;
+  const nextMonthForecast = Math.round(thisMonthProjected * (1 + growthTrendPct / 100));
+  const totalOrdersAllMonths = monthlyHistory.reduce((s, m) => s + m.orders, 0);
+
+  const nextMonthDate = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1);
+  const nextMonthDaysInMonth = daysInMonthOf(nextMonthDate.getFullYear(), nextMonthDate.getMonth());
+  const daysRemainingThisMonth = Math.max(0, thisMonthDaysInMonth - daysElapsedThisMonth);
+
+  // Historical mix % per carton size — computed across all analyzed months combined
+  const combinedSizeCounts = {};
+  let combinedTotal = 0;
+  for (const m of monthlyHistory) {
+    for (const [size, count] of Object.entries(m.bySize)) {
+      combinedSizeCounts[size] = (combinedSizeCounts[size] || 0) + count;
+      combinedTotal += count;
+    }
   }
-  const totalHistoricalOrders = orderComposition.length || 1;
-  const cartonPrediction = cartonSizes.map(size => {
-    const { single, multi } = cartonStats[size];
-    const pct = ((single + multi) / totalHistoricalOrders) * 100;
-    return { size, single, multi, pct, predicted: Math.round((pct / 100) * procurementTarget) };
+
+  const cartonPlan = cartonTypes.map(ct => {
+    const mixPct = combinedTotal > 0 ? ((combinedSizeCounts[ct.name] || 0) / combinedTotal) * 100 : 0;
+    const restOfMonthOrders = Math.max(0, thisMonthProjected - thisMonthMTD);
+    const restOfThisMonth = Math.round((mixPct / 100) * restOfMonthOrders);
+    const nextMonthNeed = Math.round((mixPct / 100) * nextMonthForecast);
+    const dailyUse = nextMonthDaysInMonth > 0 ? nextMonthNeed / nextMonthDaysInMonth : 0;
+    const onOrder = cartonPOs.filter(po => po.carton_type_id === ct.id && po.status === "pending").reduce((s, po) => s + po.qty, 0);
+    const coverDays = dailyUse > 0 ? (ct.on_hand + onOrder) / dailyUse : 0;
+    const required = Math.round(dailyUse * ct.lead_time_days * (1 + ct.safety_buffer_pct / 100));
+    const netToOrder = Math.max(0, required - ct.on_hand - onOrder);
+    return {
+      ...ct, mixPct, restOfThisMonth, nextMonthNeed, dailyUse: Math.round(dailyUse * 10) / 10,
+      onOrder, coverDays: Math.round(coverDays * 10) / 10, required, netToOrder,
+      status: netToOrder > 0 ? "Order Now" : coverDays < ct.lead_time_days ? "Watch" : "OK"
+    };
   });
+  const totalCartonsToOrder = cartonPlan.reduce((s, c) => s + c.netToOrder, 0);
 
   const sortedMonthly = sortMode === "low-high" ? [...monthly].sort((a, b) => a.count - b.count) : monthly;
 
@@ -1458,58 +1612,156 @@ function DashboardV2View({ token, profile, showToast }) {
         </div>
       </div>
 
+      <div style={{ marginBottom: 4 }}>
+        <div style={{ ...dHead, fontSize: 16 }}>📦 Material Forecasting — Carton Ordering Intelligence</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
+        {[
+          { label: "Total Orders", value: totalOrdersAllMonths.toLocaleString(), color: TXT },
+          { label: "This Month (MTD)", value: thisMonthMTD.toLocaleString(), color: "#60A5FA" },
+          { label: "This Month Projected", value: thisMonthProjected.toLocaleString(), color: "#4ADE80" },
+          { label: "Next Month Forecast", value: nextMonthForecast.toLocaleString(), color: AMBER },
+          { label: "Growth Trend", value: `${growthTrendPct >= 0 ? "+" : ""}${growthTrendPct.toFixed(1)}%`, color: growthTrendPct >= 0 ? "#4ADE80" : "#F87171" },
+          { label: "Total Cartons to Order", value: totalCartonsToOrder.toLocaleString(), color: "#F87171" }
+        ].map((c, i) => (
+          <div key={i} style={{ ...dPanel, padding: "14px 16px", textAlign: "center" }}>
+            <div style={{ color: MUTED, fontSize: 9.5, letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{c.label.toUpperCase()}</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 22, fontWeight: 700, color: c.color, marginTop: 6 }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...dPanel, marginBottom: 16 }}>
+        <div style={dHead}>Monthly Order &amp; Carton-Size History</div>
+        <div style={{ color: MUTED, fontSize: 11, marginBottom: 12 }}>Har mahine ki actual demand, size-wise breakdown ke sath. Current month "Partial" hai jab tak khatam na ho.</div>
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead>
+              <tr>
+                <th style={S.th}>Month</th><th style={S.th}>Days Covered</th><th style={S.th}>Orders</th><th style={S.th}>Pieces</th><th style={S.th}>Status</th>
+                {cartonTypes.map(ct => <th key={ct.id} style={S.th}>{ct.name}</th>)}
+                <th style={S.th}>Unclassified</th><th style={S.th}>Orders/Day</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthlyHistory.map(m => (
+                <tr key={m.key}>
+                  <td style={{ ...S.td, color: TXT, fontWeight: 600 }}>{m.label}</td>
+                  <td style={{ ...S.td, color: MUTED }}>{m.daysCovered}/{m.daysInMonth}</td>
+                  <td style={{ ...S.td, color: "#60A5FA", fontWeight: 600 }}>{m.orders.toLocaleString()}</td>
+                  <td style={{ ...S.td, color: MUTED }}>{m.pieces.toLocaleString()}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: m.status === "Partial" ? AMBER : "#4ADE80", borderColor: m.status === "Partial" ? AMBER : "#4ADE80" }}>{m.status}</span></td>
+                  {cartonTypes.map(ct => <td key={ct.id} style={{ ...S.td, color: MUTED }}>{m.bySize[ct.name] || 0}</td>)}
+                  <td style={{ ...S.td, color: MUTED }}>{m.bySize["Unclassified"] || 0}</td>
+                  <td style={{ ...S.td, color: TXT, fontFamily: "'IBM Plex Mono', monospace" }}>{m.ordersPerDay}</td>
+                </tr>
+              ))}
+              {monthlyHistory.length === 0 && <tr><td colSpan={7 + cartonTypes.length}><div style={{ color: MUTED, textAlign: "center", padding: 16 }}>Data load ho rahi hai…</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div style={{ ...dPanel, marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
-          <div style={dHead}>📦 Carton Size Forecasting — Ordering Intelligence</div>
-          <div style={{ color: MUTED, fontSize: 11 }}>Based on last 60 days · {orderComposition.length} orders analyzed</div>
-        </div>
-        <div style={{ color: MUTED, fontSize: 11, marginBottom: 16 }}>Har carton size ki qty-range set karein (kitne pieces tak) — system historical order pattern se predict karega aane wale forecast ({procurementTarget} orders) ke liye kitne cartons har size mein chahiye.</div>
-
-        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20, alignItems: "flex-end" }}>
-          <div>
-            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>SMALL up to (pcs)</div>
-            <input type="number" min={1} value={cartonThresholds.small} onChange={e => setCartonThresholds({ ...cartonThresholds, small: Number(e.target.value) })}
-              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
+          <div style={dHead}>Carton Ordering Plan — What To Order Now</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setShowCartonSetup(v => !v)} style={{ background: "transparent", color: AMBER, border: `1px solid ${AMBER}`, borderRadius: 20, padding: "6px 14px", fontSize: 11, cursor: "pointer" }}>⚙ Manage Carton Types</button>
+            <button onClick={() => setShowCartonPOForm(v => !v)} style={{ background: AMBER, color: "#1A1206", border: "none", borderRadius: 20, padding: "6px 14px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}>+ Record Purchase Order</button>
           </div>
-          <div>
-            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>MEDIUM up to (pcs)</div>
-            <input type="number" min={1} value={cartonThresholds.medium} onChange={e => setCartonThresholds({ ...cartonThresholds, medium: Number(e.target.value) })}
-              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
-          </div>
-          <div>
-            <div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>LARGE up to (pcs)</div>
-            <input type="number" min={1} value={cartonThresholds.large} onChange={e => setCartonThresholds({ ...cartonThresholds, large: Number(e.target.value) })}
-              style={{ width: 80, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT, fontFamily: "'IBM Plex Mono', monospace" }} />
-          </div>
-          <div style={{ color: MUTED, fontSize: 11, paddingBottom: 8 }}>JUMBO = above {cartonThresholds.large} pcs</div>
         </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th style={S.th}>Carton Size</th>
-              <th style={S.th}>Single-SKU Orders (history)</th>
-              <th style={S.th}>Multi-SKU Orders (history)</th>
-              <th style={S.th}>Historical Share</th>
-              <th style={S.th}>Predicted Cartons Needed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cartonPrediction.map(row => (
-              <tr key={row.size}>
-                <td style={{ ...S.td, color: TXT, fontWeight: 600 }}>{row.size}</td>
-                <td style={{ ...S.td, color: "#60A5FA" }}>{row.single}</td>
-                <td style={{ ...S.td, color: "#C084FC" }}>{row.multi}</td>
-                <td style={{ ...S.td, color: MUTED }}>{row.pct.toFixed(1)}%</td>
-                <td style={{ ...S.td, color: AMBER, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{row.predicted}</td>
+        {showCartonSetup && (
+          <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 14, marginBottom: 16 }}>
+            <div style={{ color: MUTED, fontSize: 11, marginBottom: 10 }}>Carton types define karein (jaise Small, Medium, Large, Jumbo) — pieces-per-order range, lead time, aur safety buffer%.</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 14 }}>
+              <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Name</div><input value={newCartonType.name} onChange={e => setNewCartonType({ ...newCartonType, name: e.target.value })} placeholder="e.g. Small" style={{ width: 110, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+              <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Min Pcs</div><input type="number" value={newCartonType.min_qty} onChange={e => setNewCartonType({ ...newCartonType, min_qty: e.target.value })} style={{ width: 70, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+              <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Max Pcs (blank=no limit)</div><input type="number" value={newCartonType.max_qty} onChange={e => setNewCartonType({ ...newCartonType, max_qty: e.target.value })} style={{ width: 90, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+              <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Lead Time (days)</div><input type="number" value={newCartonType.lead_time_days} onChange={e => setNewCartonType({ ...newCartonType, lead_time_days: e.target.value })} style={{ width: 70, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+              <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Buffer %</div><input type="number" value={newCartonType.safety_buffer_pct} onChange={e => setNewCartonType({ ...newCartonType, safety_buffer_pct: e.target.value })} style={{ width: 70, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+              <button disabled={savingCarton} onClick={addCartonType} style={{ background: AMBER, color: "#1A1206", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Add Type</button>
+            </div>
+            <table>
+              <thead><tr><th style={S.th}>Name</th><th style={S.th}>Range (pcs)</th><th style={S.th}>On Hand</th><th style={S.th}>Lead Time</th><th style={S.th}>Buffer%</th><th style={S.th}></th></tr></thead>
+              <tbody>
+                {cartonTypes.map(ct => (
+                  <tr key={ct.id}>
+                    <td style={{ ...S.td, color: TXT, fontWeight: 600 }}>{ct.name}</td>
+                    <td style={{ ...S.td, color: MUTED }}>{ct.min_qty} – {ct.max_qty ?? "∞"}</td>
+                    <td style={S.td}><input type="number" defaultValue={ct.on_hand} onBlur={e => adjustOnHand(ct.id, e.target.value)} style={{ width: 80, padding: "4px 8px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></td>
+                    <td style={{ ...S.td, color: MUTED }}>{ct.lead_time_days}d</td>
+                    <td style={{ ...S.td, color: MUTED }}>{ct.safety_buffer_pct}%</td>
+                    <td style={S.td}><button onClick={() => deleteCartonType(ct.id)} style={{ background: "transparent", color: "#F87171", border: "none", cursor: "pointer", fontSize: 12 }}>🗑</button></td>
+                  </tr>
+                ))}
+                {cartonTypes.length === 0 && <tr><td colSpan={6}><div style={{ color: MUTED, textAlign: "center", padding: 12 }}>Koi carton type nahi bani abhi tak — upar se add karein.</div></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {showCartonPOForm && (
+          <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 14, marginBottom: 16, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Carton Type</div>
+              <select value={newPO.carton_type_id} onChange={e => setNewPO({ ...newPO, carton_type_id: e.target.value })} style={{ width: 140, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }}>
+                <option value="">Select…</option>
+                {cartonTypes.map(ct => <option key={ct.id} value={ct.id}>{ct.name}</option>)}
+              </select>
+            </div>
+            <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Qty Ordered</div><input type="number" value={newPO.qty} onChange={e => setNewPO({ ...newPO, qty: e.target.value })} style={{ width: 100, padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+            <div><div style={{ color: MUTED, fontSize: 10, marginBottom: 4 }}>Expected Date</div><input type="date" value={newPO.expected_date} onChange={e => setNewPO({ ...newPO, expected_date: e.target.value })} style={{ padding: "6px 10px", borderRadius: 6, border: `1px solid ${CARD_BORDER}`, background: "rgba(255,255,255,0.05)", color: TXT }} /></div>
+            <button disabled={savingCarton} onClick={addCartonPO} style={{ background: AMBER, color: "#1A1206", border: "none", borderRadius: 6, padding: "7px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Record Order</button>
+          </div>
+        )}
+
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead>
+              <tr>
+                <th style={S.th}>Carton Type</th><th style={S.th}>Size Rule</th><th style={S.th}>Mix %</th><th style={S.th}>Rest of Month</th><th style={S.th}>Next Month Need</th>
+                <th style={S.th}>Daily Use</th><th style={S.th}>On Hand</th><th style={S.th}>On Order</th><th style={S.th}>Cover (Days)</th><th style={S.th}>Required</th><th style={S.th}>NET TO ORDER</th><th style={S.th}>Status</th>
               </tr>
-            ))}
-            {orderComposition.length === 0 && (
-              <tr><td colSpan={5}><div style={{ color: MUTED, textAlign: "center", padding: 16 }}>Last 60 din mein koi order data nahi mila.</div></td></tr>
-            )}
-          </tbody>
-        </table>
-        <div style={{ color: MUTED, fontSize: 10, marginTop: 10 }}>Prediction = (is size ki historical order %) × (aane wale forecast ka total order count). Thresholds badalte hi turant recalculate hota hai.</div>
+            </thead>
+            <tbody>
+              {cartonPlan.map(row => (
+                <tr key={row.id}>
+                  <td style={{ ...S.td, color: TXT, fontWeight: 600 }}>{row.name}</td>
+                  <td style={{ ...S.td, color: MUTED, fontSize: 11 }}>{row.min_qty}–{row.max_qty ?? "∞"} pcs</td>
+                  <td style={{ ...S.td, color: MUTED }}>{row.mixPct.toFixed(1)}%</td>
+                  <td style={{ ...S.td, color: MUTED }}>{row.restOfThisMonth}</td>
+                  <td style={{ ...S.td, color: "#60A5FA" }}>{row.nextMonthNeed}</td>
+                  <td style={{ ...S.td, color: MUTED }}>{row.dailyUse}</td>
+                  <td style={{ ...S.td, color: "#4ADE80" }}>{row.on_hand}</td>
+                  <td style={{ ...S.td, color: "#C4A0FF" }}>{row.onOrder}</td>
+                  <td style={{ ...S.td, color: row.coverDays < row.lead_time_days ? "#F87171" : MUTED }}>{row.coverDays}d</td>
+                  <td style={{ ...S.td, color: MUTED }}>{row.required}</td>
+                  <td style={{ ...S.td, color: row.netToOrder > 0 ? "#F87171" : "#4ADE80", fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", fontSize: 15 }}>{row.netToOrder}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: row.status === "Order Now" ? "#F87171" : row.status === "Watch" ? AMBER : "#4ADE80", borderColor: row.status === "Order Now" ? "#F87171" : row.status === "Watch" ? AMBER : "#4ADE80" }}>{row.status}</span></td>
+                </tr>
+              ))}
+              {cartonPlan.length === 0 && <tr><td colSpan={12}><div style={{ color: MUTED, textAlign: "center", padding: 16 }}>Pehle "Manage Carton Types" se carton types define karein.</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        {cartonPOs.filter(po => po.status === "pending").length > 0 && (
+          <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${CARD_BORDER}` }}>
+            <div style={{ color: MUTED, fontSize: 11, marginBottom: 8 }}>Pending Purchase Orders — receive hone par "Mark Received" dabayein (On Hand mein khud add ho jayegi):</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cartonPOs.filter(po => po.status === "pending").map(po => {
+                const ct = cartonTypes.find(c => c.id === po.carton_type_id);
+                return (
+                  <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 12px" }}>
+                    <span style={{ color: TXT, fontSize: 12 }}>{ct?.name || "—"} — {po.qty} cartons {po.expected_date ? `· ETA ${po.expected_date}` : ""}</span>
+                    <button onClick={() => markPOReceived(po)} style={{ background: "#4ADE80", color: "#0F2E1A", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>✓ Mark Received</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }} className="depotos-gauge-row">
