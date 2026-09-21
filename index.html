@@ -453,7 +453,7 @@ function Toast({ toast }) {
 
 /* ================= DASHBOARD ================= */
 function DashboardView({ token, profile, setView, showToast }) {
-  const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0, returnOrders: 0 });
+  const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, grnPendingQty: 0, grnCompleteQty: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0, ordersPendingQty: 0, ordersCompletedQty: 0, returnOrders: 0 });
   const [fulfillmentKpis, setFulfillmentKpis] = useState({ totalOrders: 0, dispatched: 0, pending: 0, avgBucketSize: 0, avgFulfillmentHrs: null });
   const [kpi24, setKpi24] = useState({ onTime: 0, delayed: 0, rate: null });
   const [holidays, setHolidays] = useState([]);
@@ -505,25 +505,43 @@ function DashboardView({ token, profile, setView, showToast }) {
   useEffect(() => {
     const loadDashboard = async () => {
       try {
-        const [grns, putawayPending, orders, holidayRows, unresolvedRtv, returnsAll] = await Promise.all([
-          sb(`/rest/v1/grn?select=status`, { token }),
+        const [grns, putawayPending, orders, holidayRows, unresolvedRtv, returnsAll, grnLinesAll] = await Promise.all([
+          sb(`/rest/v1/grn?select=id,status`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.pending&select=qty,qty_completed`, { token }),
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/holidays?select=*&order=holiday_date.asc`, { token }),
           sb(`/rest/v1/rtv_returns?status=eq.pending&select=short_qty`, { token }),
-          sb(`/rest/v1/returns?select=id`, { token })
+          sb(`/rest/v1/returns?select=id`, { token }),
+          sb(`/rest/v1/grn_lines?select=grn_id,qty_expected`, { token })
         ]);
         setHolidays(holidayRows || []);
         const holidayDates = new Set((holidayRows || []).map(h => new Date(h.holiday_date).toDateString()));
 
-        const grnPending = (grns || []).filter(g => g.status !== "completed").length;
-        const grnComplete = (grns || []).filter(g => g.status === "completed").length;
+        const grnPendingIds = new Set((grns || []).filter(g => g.status !== "completed").map(g => g.id));
+        const grnCompleteIds = new Set((grns || []).filter(g => g.status === "completed").map(g => g.id));
+        const grnPending = grnPendingIds.size;
+        const grnComplete = grnCompleteIds.size;
+        const grnPendingQty = (grnLinesAll || []).filter(l => grnPendingIds.has(l.grn_id)).reduce((s, l) => s + (l.qty_expected || 0), 0);
+        const grnCompleteQty = (grnLinesAll || []).filter(l => grnCompleteIds.has(l.grn_id)).reduce((s, l) => s + (l.qty_expected || 0), 0);
         const rtvPendingQty = (unresolvedRtv || []).reduce((s, r) => s + (r.short_qty || 0), 0);
         const pcsPendingPutaway = (putawayPending || []).reduce((s, t) => s + (t.qty - (t.qty_completed || 0)), 0) + rtvPendingQty;
-        const ordersCompleted = (orders || []).filter(o => ["dispatched", "handed_over"].includes(o.status)).length;
-        const ordersPending = (orders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned", "incomplete"].includes(o.status)).length;
+        const ordersCompletedIds = new Set((orders || []).filter(o => ["dispatched", "handed_over"].includes(o.status)).map(o => o.id));
+        const ordersPendingIds = new Set((orders || []).filter(o => ["received", "queued", "picking", "rtd", "scanned", "incomplete"].includes(o.status)).map(o => o.id));
+        const ordersCompleted = ordersCompletedIds.size;
+        const ordersPending = ordersPendingIds.size;
         const returnOrders = (returnsAll || []).length;
-        setOverall({ grnPending, grnComplete, pcsPendingPutaway, ordersCompleted, ordersPending, returnOrders });
+        const orderIdsForQty = [...ordersCompletedIds, ...ordersPendingIds];
+        let ordersPendingQty = 0, ordersCompletedQty = 0;
+        const QCHUNK = 60;
+        for (let i = 0; i < orderIdsForQty.length; i += QCHUNK) {
+          const chunk = orderIdsForQty.slice(i, i + QCHUNK);
+          const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${chunk.join(",")})&select=order_id,qty`, { token }) || [];
+          for (const l of lines) {
+            if (ordersPendingIds.has(l.order_id)) ordersPendingQty += l.qty;
+            else if (ordersCompletedIds.has(l.order_id)) ordersCompletedQty += l.qty;
+          }
+        }
+        setOverall({ grnPending, grnComplete, grnPendingQty, grnCompleteQty, pcsPendingPutaway, ordersCompleted, ordersPending, ordersPendingQty, ordersCompletedQty, returnOrders });
 
         const dispatchedWithDates = (orders || []).filter(o => o.received_at && o.dispatched_at);
         let onTime = 0, delayed = 0;
@@ -1077,10 +1095,12 @@ function DashboardView({ token, profile, setView, showToast }) {
           <div style={{ background: "#D9A441", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("receiving")}>
             <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>GRN PENDING</div>
             <div style={{ color: "#1A1206", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.grnPending}</div>
+            <div style={{ color: "#4A340C", fontSize: 11, marginTop: 2 }}>{overall.grnPendingQty.toLocaleString()} pcs</div>
           </div>
           <div style={{ background: "#1D4D3E", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("receiving")}>
             <div style={{ color: "#8FCBB4", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>GRN COMPLETE</div>
             <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.grnComplete}</div>
+            <div style={{ color: "#8FCBB4", fontSize: 11, marginTop: 2 }}>{overall.grnCompleteQty.toLocaleString()} pcs</div>
           </div>
           <div style={{ background: "#A6472F", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("putaway")}>
             <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PCS PENDING PUTAWAY</div>
@@ -1089,10 +1109,12 @@ function DashboardView({ token, profile, setView, showToast }) {
           <div style={{ background: "#5B9EE8", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
             <div style={{ color: "#0D2A47", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ORDERS PENDING</div>
             <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.ordersPending}</div>
+            <div style={{ color: "#0D2A47", fontSize: 11, marginTop: 2 }}>{overall.ordersPendingQty.toLocaleString()} pcs</div>
           </div>
           <div style={{ background: "#1A1A1A", border: "1px solid #2C2C2C", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
             <div style={{ color: "#9B9B9B", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ORDERS COMPLETED</div>
             <div style={{ color: "#FFFFFF", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{overall.ordersCompleted}</div>
+            <div style={{ color: "#9B9B9B", fontSize: 11, marginTop: 2 }}>{overall.ordersCompletedQty.toLocaleString()} pcs</div>
           </div>
           <div style={{ background: "#B084F5", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("returns")}>
             <div style={{ color: "#2E1A47", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>RETURN ORDERS</div>
@@ -3323,9 +3345,10 @@ function InventoryView({ token, profile, showToast }) {
   })();
 
   const binRows = rows.filter(r => r.on_hand > 0).filter(r => {
-    const p = products[r.product_id];
     if (!q) return true;
-    return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q);
+    const p = products[r.product_id];
+    const bin = Array.isArray(bins) ? bins.find(b => b.id === r.bin_id) : bins[r.bin_id];
+    return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q) || (bin?.code || "").toLowerCase().includes(q);
   });
 
   const [transferRow, setTransferRow] = useState(null); // { product_id, pnaBinId, maxQty }
@@ -3391,7 +3414,7 @@ function InventoryView({ token, profile, showToast }) {
         <button onClick={() => setTab("bins")} style={{ ...S.pill, ...(tab === "bins" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🗺 Bin-wise Inventory</button>
         <button onClick={() => setTab("cyclecount")} style={{ ...S.pill, ...(tab === "cyclecount" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>🔢 Cycle Count</button>
       </div>
-      <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder="🔍 Search by barcode or product name…" value={query} onChange={e => setQuery(e.target.value)} />
+      <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder={tab === "bins" ? "🔍 Search barcode, product name, or bin location…" : "🔍 Search by barcode or product name…"} value={query} onChange={e => setQuery(e.target.value)} />
 
       {tab === "ledger" && (
         <div style={S.panel}>
