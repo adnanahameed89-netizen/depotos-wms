@@ -6642,7 +6642,7 @@ function ReturnsView({ token, profile, showToast }) {
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: openReturn.id, user_id: profile.id, action: "submitted", metadata: { str_number: strNumber, good: anyGood, damaged: anyDamaged } } });
       showToast(anyGood ? "Return submitted — good items Putaway queue mein bhej diye" : strNumber ? `Processed — STR: ${strNumber}` : "Return submitted");
       setOpenReturn(null); load();
-    } catch (e) { showToast("Submit failed", "err"); }
+    } catch (e) { showToast(`Submit failed: ${(e.message || "").slice(0, 150)}`, "err"); }
   };
 
   const handleReturnsImportFile = async (e) => {
