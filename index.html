@@ -194,7 +194,7 @@ function App() {
   // Admins (and anyone else with no fixed warehouse_id) pick which warehouse to work in;
   // staff tied to one warehouse skip straight into it — each side only ever queries its
   // own warehouse_id, so one warehouse's staff never sees the other's entities.
-  const needsWarehouseSelect = !!profile && !profile.warehouse_id;
+  const needsWarehouseSelect = !!profile && (profile.role === "admin" || !profile.warehouse_id);
   useEffect(() => {
     if (session && profile) {
       sb(`/rest/v1/warehouses?select=*`, { token: session.token }).then(setWarehouses).catch(() => {});
@@ -277,6 +277,7 @@ function App() {
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkoutbound" && <StockingOutboundView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
@@ -446,7 +447,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
   ];
   const STOCKING_ITEMS = [
     { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
-    { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" }
+    { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" },
+    { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" }
   ];
   const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
   const ecomExtras = warehouseType !== "stocking";
@@ -455,8 +457,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -6318,13 +6320,14 @@ function UsersView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
+      const whFilter = profile.warehouse_id ? `&warehouse_id=eq.${profile.warehouse_id}` : "";
       const [u, w] = await Promise.all([
-        sb(`/rest/v1/profiles?select=*&order=full_name.asc`, { token }),
+        sb(`/rest/v1/profiles?select=*${whFilter}&order=full_name.asc`, { token }),
         sb(`/rest/v1/warehouses?select=*`, { token })
       ]);
       setUsers(u || []); setWarehouses(w || []);
     } catch (e) { showToast("Load failed", "err"); }
-  }, [token]);
+  }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
 
   const addUser = async () => {
@@ -6346,7 +6349,7 @@ function UsersView({ token, profile, showToast }) {
 
       await sb(`/rest/v1/profiles`, {
         method: "POST", token,
-        body: { id: newUserId, full_name: form.full_name.trim(), role: form.role, warehouse_id: form.role === "admin" ? null : form.warehouse_id || null }
+        body: { id: newUserId, full_name: form.full_name.trim(), role: form.role, warehouse_id: form.role === "admin" ? null : profile.warehouse_id || null }
       });
       showToast(`${form.full_name} add ho gaye — email: ${form.email}`);
       setForm({ full_name: "", email: "", password: "", role: "picker", warehouse_id: profile.warehouse_id || "" });
@@ -6370,7 +6373,7 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Delete failed", "err"); }
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", outbound_officer: "Outbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 
   return (
     <div>
@@ -6385,21 +6388,21 @@ function UsersView({ token, profile, showToast }) {
             <option value="picker">Picker</option>
             <option value="packer">Packer</option>
             <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
+            <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
             <option value="dispatcher">Dispatcher</option>
             <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
             <option value="admin">Admin</option>
           </select>
           {form.role !== "admin" && (
-            <select style={{ ...S.input, minWidth: 160 }} value={form.warehouse_id} onChange={e => setForm({ ...form, warehouse_id: e.target.value })}>
-              <option value="">Select warehouse</option>
-              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
+            <div style={{ ...S.input, minWidth: 160, display: "flex", alignItems: "center", color: "#8A8272", background: "#F4EFE6" }}>
+              📍 {warehouses.find(w => w.id === profile.warehouse_id)?.name || "Current warehouse"}
+            </div>
           )}
           <button style={S.primaryBtnSm} onClick={addUser} disabled={busy}>{busy ? "Adding…" : "+ Add staff"}</button>
         </div>
         <div style={{ marginTop: 12, fontSize: 11, color: "#8A8272" }}>
-          ⚠ Naya staff member is email/password se seedha login kar sakega. Real email inbox zaroori nahi (jab tak "Confirm email" Supabase mein off hai).
+          ⚠ Naya staff member is email/password se seedha login kar sakega. Real email inbox zaroori nahi (jab tak "Confirm email" Supabase mein off hai). Naya staff automatically isi warehouse ({warehouses.find(w => w.id === profile.warehouse_id)?.name || "current"}) mai add hoga.
         </div>
       </div>
       <div style={S.cardGrid}>
@@ -6421,6 +6424,7 @@ function UsersView({ token, profile, showToast }) {
                 <option value="picker">Picker</option>
                 <option value="packer">Packer</option>
                 <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
+                <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
                 <option value="dispatcher">Dispatcher</option>
                 <option value="supervisor">Supervisor</option>
                 <option value="warehouse_lead">Warehouse Lead</option>
@@ -8655,7 +8659,8 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [rtvRows, setRtvRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [poNumber, setPoNumber] = useState(""); const [supplier, setSupplier] = useState(""); const [source, setSource] = useState("LOCAL"); const [scheduledDate, setScheduledDate] = useState("");
+  const [poNumber, setPoNumber] = useState(""); const [scheduledDate, setScheduledDate] = useState("");
+  const [importSourceChoice, setImportSourceChoice] = useState({});
   const [dcNumber, setDcNumber] = useState(""); const [dcQty, setDcQty] = useState("");
 
   const [activeDc, setActiveDc] = useState(null);
@@ -8682,12 +8687,12 @@ function StockingReceivingView({ token, profile, showToast }) {
   const poByPo = (num) => pos.find(p => p.po_number === num.trim());
 
   const addPoAndDc = async () => {
-    if (!poNumber.trim() || !supplier.trim() || !dcNumber.trim() || !dcQty) { showToast("PO#, Supplier, DC# aur DC Qty zaroori hain", "err"); return; }
+    if (!poNumber.trim() || !dcNumber.trim() || !dcQty) { showToast("PO#, DC# aur DC Qty zaroori hain", "err"); return; }
     setLoading(true);
     try {
       let po = poByPo(poNumber);
       if (!po) {
-        const created = await sb(`/rest/v1/stk_purchase_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, po_number: poNumber.trim(), supplier: supplier.trim(), source, scheduled_date: scheduledDate || null, created_by: profile.id } });
+        const created = await sb(`/rest/v1/stk_purchase_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, po_number: poNumber.trim(), supplier: null, source: null, scheduled_date: scheduledDate || null, created_by: profile.id } });
         po = created[0]; setPos(p => [po, ...p]);
       }
       const dcCreated = await sb(`/rest/v1/stk_dc_arrivals`, { method: "POST", token, prefer: "return=representation", body: { po_id: po.id, warehouse_id: whId, dc_number: dcNumber.trim(), dc_qty_total: Number(dcQty), received_by: profile.id } });
@@ -8698,15 +8703,16 @@ function StockingReceivingView({ token, profile, showToast }) {
     setLoading(false);
   };
 
-  const importOdooFile = async (file, dc) => {
+  const importOdooFile = async (file, dc, sourceChoice) => {
     setLoading(true);
     try {
       const rows = await parseSheet(file);
-      const grouped = {}; let odooRef = "";
+      const grouped = {}; let odooRef = ""; let supplierFromFile = "";
       for (const r of rows) {
         const productRaw = r["Stock move/Product"] || r["Product"] || "";
         if (!productRaw) continue;
         odooRef = odooRef || r["Reference"] || "";
+        supplierFromFile = supplierFromFile || r["Contact"] || "";
         const barcode = String(r["Stock move/Product/Internal Barcode"] ?? "").trim();
         const qty = Number(r["Stock move/Quantity"] ?? r["Quantity"] ?? 0) || 0;
         const key = barcode || String(productRaw);
@@ -8719,6 +8725,10 @@ function StockingReceivingView({ token, profile, showToast }) {
         await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, body: { dc_id: dc.id, product_barcode: l.product_barcode, product_name: l.product_name, demand_qty: l.demand_qty } });
       }
       await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "ready_for_inspection", odoo_reference: odooRef || null } });
+      if (supplierFromFile || sourceChoice) {
+        await sb(`/rest/v1/stk_purchase_orders?id=eq.${dc.po_id}`, { method: "PATCH", token, body: { ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) } });
+        setPos(ps => ps.map(p => p.id === dc.po_id ? { ...p, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) } : p));
+      }
       showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai`);
       loadAll();
     } catch (e) { showToast("Import fail: " + e.message, "err"); }
@@ -8783,6 +8793,9 @@ function StockingReceivingView({ token, profile, showToast }) {
       await sb(`/rest/v1/stk_dc_arrivals?id=eq.${grnDc.id}`, { method: "PATCH", token, body: { status: "grn_posted", grn_number: grnNumberInput.trim(), grn_posted_by: profile.id, grn_posted_at: new Date().toISOString() } });
       const supplierName = (pos.find(p => p.id === grnDc.po_id) || {}).supplier || "";
       for (const l of grnLines) {
+        if (Number(l.ok_qty || 0) > 0) {
+          await sb(`/rest/v1/stk_putaway_queue`, { method: "POST", token, body: { dc_line_id: l.id, dc_id: grnDc.id, po_id: grnDc.po_id, warehouse_id: whId, product_name: l.product_name, product_barcode: l.product_barcode, qty: l.ok_qty } });
+        }
         if (stkLineExceptionQty(l) > 0) {
           await sb(`/rest/v1/stk_rtv_queue`, { method: "POST", token, body: { dc_line_id: l.id, dc_id: grnDc.id, po_id: grnDc.po_id, warehouse_id: whId, supplier: supplierName, product_name: l.product_name, dmg_qty: l.dmg_qty, mnf_qty: l.mnf_qty, wrong_qty: l.wrong_qty, excess_qty: l.excess_qty, short_qty: l.short_qty } });
         }
@@ -8832,20 +8845,14 @@ function StockingReceivingView({ token, profile, showToast }) {
       {tab === "arrival" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Physical Arrival — PO + DC Flag</div>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="PO Number (Odoo)" value={poNumber} onChange={e => setPoNumber(e.target.value)} />
-            <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Supplier" value={supplier} onChange={e => setSupplier(e.target.value)} disabled={!!poByPo(poNumber)} />
-            <select style={{ ...S.input, flex: 1, minWidth: 120 }} value={source} onChange={e => setSource(e.target.value)} disabled={!!poByPo(poNumber)}>
-              {STK_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <input type="date" style={{ ...S.input, flex: 1, minWidth: 140 }} value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} disabled={!!poByPo(poNumber)} />
-          </div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="PO Number (Odoo)" value={poNumber} onChange={e => setPoNumber(e.target.value)} />
+            <input type="date" style={{ ...S.input, flex: 1, minWidth: 140 }} value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} disabled={!!poByPo(poNumber)} />
             <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="DC Number" value={dcNumber} onChange={e => setDcNumber(e.target.value)} />
             <input type="number" style={{ ...S.input, flex: 1, minWidth: 120 }} placeholder="DC Total Qty" value={dcQty} onChange={e => setDcQty(e.target.value)} />
             <button style={S.primaryBtnSm} onClick={addPoAndDc} disabled={loading || !whId}>+ Flag Arrival</button>
           </div>
-          {poByPo(poNumber) && <div style={{ marginTop: 8, fontSize: 12, color: "#8A8272" }}>PO {poNumber} pehle se maujood hai ({poByPo(poNumber).supplier}, {poByPo(poNumber).source}) — DC add karne se attach ho jayegi.</div>}
+          {poByPo(poNumber) && <div style={{ marginTop: 8, fontSize: 12, color: "#8A8272" }}>PO {poNumber} pehle se maujood hai — DC add karne se attach ho jayegi. Supplier/Source Odoo import se automatically aa jayega.</div>}
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>RECENT ARRIVALS</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -8853,7 +8860,7 @@ function StockingReceivingView({ token, profile, showToast }) {
               <tbody>
                 {dcs.slice(0, 10).map(d => {
                   const po = pos.find(p => p.id === d.po_id);
-                  return <tr key={d.id}><td style={S.td}>{po?.po_number}</td><td style={S.td}>{po?.supplier}</td><td style={S.td}>{d.dc_number}</td><td style={S.td}>{d.dc_qty_total}</td><td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td></tr>;
+                  return <tr key={d.id}><td style={S.td}>{po?.po_number}</td><td style={S.td}>{po?.supplier || "— pending import"}</td><td style={S.td}>{d.dc_number}</td><td style={S.td}>{d.dc_qty_total}</td><td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td></tr>;
                 })}
                 {!dcs.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi koi arrival nahi" /></td></tr>}
               </tbody>
@@ -8865,19 +8872,25 @@ function StockingReceivingView({ token, profile, showToast }) {
       {tab === "import" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Odoo Transfer Export → Import (SKU-wise lines)</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Excel k "Contact" column se Supplier automatically fill ho jayega. Source (benchmark k liye) yahan select kar dein.</div>
           {!pendingImportDcs.length && <EmptyNote text="Import k liye koi DC pending nahi" />}
           {pendingImportDcs.map(d => {
             const po = pos.find(p => p.id === d.po_id);
             return (
-              <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid #EFE8D8", flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{po?.po_number} — DC {d.dc_number}</div>
-                  <div style={{ fontSize: 12, color: "#8A8272" }}>{po?.supplier} · Total qty {d.dc_qty_total}</div>
+                  <div style={{ fontSize: 12, color: "#8A8272" }}>{po?.supplier || "Supplier: pending"} · Total qty {d.dc_qty_total}</div>
                 </div>
-                <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
-                  📤 Upload Odoo Excel
-                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) importOdooFile(f, d); e.target.value = ""; }} />
-                </label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <select style={{ ...S.input, width: 110 }} value={importSourceChoice[d.id] || po?.source || "LOCAL"} onChange={e => setImportSourceChoice(sc => ({ ...sc, [d.id]: e.target.value }))}>
+                    {STK_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+                    📤 Upload Odoo Excel
+                    <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) importOdooFile(f, d, importSourceChoice[d.id] || po?.source || "LOCAL"); e.target.value = ""; }} />
+                  </label>
+                </div>
               </div>
             );
           })}
@@ -8994,6 +9007,208 @@ function StockingReceivingView({ token, profile, showToast }) {
                 </tr>
               ))}
               {!rtvFiltered.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Yahan kuch nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — OUTBOUND ALLOCATION ================= */
+function StockingOutboundView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const canAssign = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
+  const canWork = ["admin", "warehouse_lead", "putaway_officer"].includes(profile.role);
+  const [tab, setTab] = useState(canAssign ? "assignment" : "allocation");
+  const [queue, setQueue] = useState([]);
+  const [allocations, setAllocations] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [dcs, setDcs] = useState([]);
+  const [pos, setPos] = useState([]);
+  const [officers, setOfficers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [allocForm, setAllocForm] = useState({}); // { [queueId]: { qty, destination, strRef } }
+  const [binChoice, setBinChoice] = useState({}); // { [queueId]: binId }
+  const [assignChoice, setAssignChoice] = useState({}); // { [dcId]: userId }
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [q, a, b, d, p, o] = await Promise.all([
+        sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_grn_allocations?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
+        sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token })
+      ]);
+      setQueue(q || []); setAllocations(a || []); setBins(b || []); setDcs(d || []); setPos(p || []); setOfficers(o || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const pendingQueue = queue.filter(q => q.status === "pending" && Number(q.qty) > 0);
+  const unassignedByDc = {};
+  pendingQueue.filter(q => !q.assigned_to).forEach(q => { (unassignedByDc[q.dc_id] = unassignedByDc[q.dc_id] || []).push(q); });
+  // Putaway Officer sees only their own assigned batch; Admin/Lead get oversight of everyone's.
+  const myWorkQueue = profile.role === "putaway_officer" ? pendingQueue.filter(q => q.assigned_to === profile.id) : pendingQueue.filter(q => q.assigned_to);
+
+  const officerName = (id) => officers.find(o => o.id === id)?.full_name || "—";
+  const dcLabel = (dcId) => { const dc = dcs.find(x => x.id === dcId); const po = dc ? pos.find(p => p.id === dc.po_id) : null; return dc ? `${po?.po_number || "?"} — DC ${dc.dc_number}` : dcId; };
+
+  const assignDc = async (dcId) => {
+    const userId = assignChoice[dcId];
+    if (!userId) { showToast("Putaway Officer select karein", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_putaway_queue?dc_id=eq.${dcId}&status=eq.pending&assigned_to=is.null`, { method: "PATCH", token, body: { assigned_to: userId } });
+      showToast(`${dcLabel(dcId)} — ${officerName(userId)} ko assign ho gaya`);
+      load();
+    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const allocateToStr = async (q) => {
+    const f = allocForm[q.id] || {};
+    const qty = Number(f.qty || 0);
+    if (!qty || qty <= 0 || qty > Number(q.qty)) { showToast("Valid qty enter karein (max " + q.qty + ")", "err"); return; }
+    if (!f.destination?.trim() || !f.strRef?.trim()) { showToast("Destination shop aur STR reference zaroori hain", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_grn_allocations`, { method: "POST", token, body: { dc_line_id: q.dc_line_id, dc_id: q.dc_id, po_id: q.po_id, warehouse_id: whId, product_name: q.product_name, qty, destination: f.destination.trim(), str_reference: f.strRef.trim(), created_by: profile.id } });
+      const remaining = Number(q.qty) - qty;
+      await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: remaining } });
+      showToast(`${qty} units — STR ${f.strRef} k against ${f.destination} ko RTD pe transfer ho gayi`);
+      setAllocForm(af => ({ ...af, [q.id]: {} }));
+      load();
+    } catch (e) { showToast("Allocate fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const completePutaway = async (q) => {
+    const binId = binChoice[q.id];
+    if (!binId) { showToast("Bin select karein", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: binId, completed_by: profile.id, completed_at: new Date().toISOString() } });
+      showToast(`${q.product_name} — putaway complete, bin assign ho gaya`);
+      load();
+    } catch (e) { showToast("Putaway fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const TABS = [
+    ...(canAssign ? [{ key: "assignment", label: `Assignment (${Object.keys(unassignedByDc).length})` }] : []),
+    ...(canWork ? [{ key: "allocation", label: `My Work — STR Allocation (${myWorkQueue.length})` }, { key: "putaway", label: "Putaway" }] : []),
+    { key: "rtd", label: `RTD (${allocations.filter(a => a.status === "rtd").length})` }
+  ];
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Outbound Allocation" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(t => <button key={t.key} onClick={() => setTab(t.key)} style={stkPill(tab === t.key)}>{t.label}</button>)}
+      </div>
+
+      {tab === "assignment" && canAssign && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>GRN Complete — Assign to Putaway Officer</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Inbound Officer se forward hui har GRN yahan by-DC dikhti hai. Ek Putaway Officer select kar k pura DC unhe assign karein — wahi item select kar k STR banayenge aur baki putaway karenge.</div>
+          {Object.keys(unassignedByDc).length === 0 && <EmptyNote text="Koi GRN assignment k liye pending nahi" />}
+          {Object.entries(unassignedByDc).map(([dcId, lines]) => (
+            <div key={dcId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{dcLabel(dcId)}</div>
+                <div style={{ fontSize: 12, color: "#8A8272" }}>{lines.length} product line(s) · total qty {lines.reduce((s, l) => s + Number(l.qty), 0)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <select style={{ ...S.input, width: 180 }} value={assignChoice[dcId] || ""} onChange={e => setAssignChoice(ac => ({ ...ac, [dcId]: e.target.value }))}>
+                  <option value="">Select Putaway Officer</option>
+                  {officers.map(o => <option key={o.id} value={o.id}>{o.full_name}</option>)}
+                </select>
+                <button style={S.primaryBtnSm} onClick={() => assignDc(dcId)} disabled={loading}>Assign</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "allocation" && canWork && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Assigned Items — Select & Create STR" : "All Assigned Items (oversight)"}</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Item select karein, kitni qty kis shop ko STR se bhejni hai woh daalein — baki remaining qty Putaway tab mai bin assign k liye chali jayegi.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Unallocated Qty</th><th style={S.th}>Destination Shop</th><th style={S.th}>STR Reference</th><th style={S.th}>Qty to STR</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {myWorkQueue.map(q => (
+                <tr key={q.id}>
+                  {profile.role !== "putaway_officer" && <td style={S.td}>{officerName(q.assigned_to)}</td>}
+                  <td style={S.td}>{q.product_name}</td>
+                  <td style={S.td}>{q.qty}</td>
+                  <td style={S.td}><input style={{ ...S.input, width: 130 }} placeholder="Shop / location" value={allocForm[q.id]?.destination || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], destination: e.target.value } }))} /></td>
+                  <td style={S.td}><input style={{ ...S.input, width: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="STR#" value={allocForm[q.id]?.strRef || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], strRef: e.target.value } }))} /></td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 90 }} placeholder="qty" value={allocForm[q.id]?.qty || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], qty: e.target.value } }))} /></td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => allocateToStr(q)} disabled={loading}>→ RTD</button></td>
+                </tr>
+              ))}
+              {!myWorkQueue.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 7 : 6}><EmptyNote text="Koi item assigned nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "putaway" && canWork && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Remaining Stock — Bin Assign</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {myWorkQueue.map(q => (
+                <tr key={q.id}>
+                  {profile.role !== "putaway_officer" && <td style={S.td}>{officerName(q.assigned_to)}</td>}
+                  <td style={S.td}>{q.product_name}</td>
+                  <td style={S.td}>{q.qty}</td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, width: 140 }} value={binChoice[q.id] || ""} onChange={e => setBinChoice(bc => ({ ...bc, [q.id]: e.target.value }))}>
+                      <option value="">Select bin</option>
+                      {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completePutaway(q)} disabled={loading}>✓ Putaway Complete</button></td>
+                </tr>
+              ))}
+              {!myWorkQueue.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 5 : 4}><EmptyNote text="Koi qty putaway k liye pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>PUTAWAY COMPLETE — AVAILABLE FOR PICKING</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}>Completed</th></tr></thead>
+              <tbody>
+                {queue.filter(q => q.status === "completed").slice(0, 15).map(q => (
+                  <tr key={q.id}><td style={S.td}>{q.product_name}</td><td style={S.td}>{q.qty}</td><td style={S.td}>{bins.find(b => b.id === q.bin_id)?.code || "—"}</td><td style={S.td}>{fmtTime(q.completed_at)}</td></tr>
+                ))}
+                {!queue.filter(q => q.status === "completed").length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Abhi koi putaway complete nahi hua" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "rtd" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>RTD — Awaiting Vehicle</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Vehicle alignment aur Gatepass generation agla step hai — filhal yeh sirf RTD trail dikhata hai.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>STR#</th><th style={S.th}>Since</th></tr></thead>
+            <tbody>
+              {allocations.filter(a => a.status === "rtd").map(a => (
+                <tr key={a.id}><td style={S.td}>{a.product_name}</td><td style={S.td}>{a.qty}</td><td style={S.td}>{a.destination}</td><td style={S.td}>{a.str_reference}</td><td style={S.td}>{fmtTime(a.created_at)}</td></tr>
+              ))}
+              {!allocations.filter(a => a.status === "rtd").length && <tr><td style={S.td} colSpan={5}><EmptyNote text="RTD par abhi kuch nahi" /></td></tr>}
             </tbody>
           </table>
         </div>
