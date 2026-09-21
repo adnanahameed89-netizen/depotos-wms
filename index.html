@@ -7369,6 +7369,35 @@ function BinsView({ token, profile, showToast }) {
     load();
   };
 
+  const [bulkLocking, setBulkLocking] = useState(false);
+  const [quickBinCode, setQuickBinCode] = useState("");
+  const quickBinMatch = bins.find(b => b.code.toLowerCase() === quickBinCode.trim().toLowerCase());
+
+  const bulkSetPickable = async (isPickable) => {
+    const ids = Object.keys(selectedBins).filter(id => selectedBins[id]);
+    if (ids.length === 0) return;
+    setBulkLocking(true);
+    let updated = 0;
+    for (const id of ids) {
+      try {
+        await sb(`/rest/v1/bins?id=eq.${id}`, { method: "PATCH", token, body: { pickable: isPickable } });
+        updated++;
+      } catch (e) {}
+    }
+    showToast(isPickable ? `✅ ${updated} bins unlock ho gayin (ab picking ke liye available)` : `🔒 ${updated} bins lock ho gayin (non-sellable, picking se exclude)`);
+    setSelectedBins({});
+    setBulkLocking(false);
+    load();
+  };
+
+  const togglePickable = async (bin, isPickable) => {
+    try {
+      await sb(`/rest/v1/bins?id=eq.${bin.id}`, { method: "PATCH", token, body: { pickable: isPickable } });
+      showToast(isPickable ? `✅ "${bin.code}" ab picking ke liye available hai` : `⚠ "${bin.code}" ab picking ke liye EXCLUDE ho gayi (non-sellable/quarantine)`);
+      load();
+    } catch (e) { showToast("Update failed", "err"); }
+  };
+
   const deleteBin = async (bin) => {
     if (!window.confirm(`Bin "${bin.code}" delete karein? Agar isme abhi stock hai ya yeh kisi task se linked hai, delete nahi ho payegi.`)) return;
     try {
@@ -7405,7 +7434,27 @@ function BinsView({ token, profile, showToast }) {
         </div>
       </div>
       <div style={S.panel}>
-        <div style={S.panelTitle}>Bulk Select &amp; Delete (by Aisle Range)</div>
+        <div style={S.panelTitle}>Quick Lock/Unlock — Bin Code Type Karein</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input list="quickBinDatalist" style={{ ...S.input, minWidth: 200 }} placeholder="Bin code type karein (jaise A-01-03)" value={quickBinCode} onChange={e => setQuickBinCode(e.target.value)} />
+          <datalist id="quickBinDatalist">
+            {bins.map(b => <option key={b.id} value={b.code} />)}
+          </datalist>
+          {quickBinMatch ? (
+            <>
+              <span style={{ ...S.badgeSm, color: quickBinMatch.pickable === false ? "#E5484D" : "#4CAF7D", borderColor: quickBinMatch.pickable === false ? "#E5484D" : "#4CAF7D" }}>
+                {quickBinMatch.pickable === false ? "Currently NON-SELLABLE" : "Currently Sellable"}
+              </span>
+              <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} onClick={() => togglePickable(quickBinMatch, false)}>🔒 Set Non-Sellable</button>
+              <button style={{ ...S.primaryBtnSm, background: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => togglePickable(quickBinMatch, true)}>🔓 Set Sellable</button>
+            </>
+          ) : quickBinCode.trim() && (
+            <span style={{ color: "#8A8272", fontSize: 12 }}>Yeh bin code nahi mila</span>
+          )}
+        </div>
+      </div>
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Bulk Select — Lock/Unlock &amp; Delete (by Aisle Range)</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: "#6B6355" }}>Aisle</span>
           <input style={{ ...S.input, width: 70 }} placeholder="A" value={aisleFrom} onChange={e => setAisleFrom(e.target.value.toUpperCase())} />
@@ -7415,19 +7464,34 @@ function BinsView({ token, profile, showToast }) {
           <span style={{ marginLeft: "auto", fontSize: 12, color: "#8A8272" }}>{filteredBins.length} bins matched</span>
           <button style={S.secondaryBtnSm} onClick={() => setSelectedBins(Object.fromEntries(filteredBins.map(b => [b.id, true])))}>Select All (filtered)</button>
           <button style={S.secondaryBtnSm} onClick={() => setSelectedBins({})}>Clear Selection</button>
-          <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} disabled={selectedCount === 0 || bulkDeleting} onClick={bulkDeleteBins}>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+          <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D" }} disabled={selectedCount === 0 || bulkLocking} onClick={() => bulkSetPickable(false)}>
+            {bulkLocking ? "Locking…" : `🔒 Lock — Mark Non-Sellable (${selectedCount})`}
+          </button>
+          <button style={{ ...S.primaryBtnSm, background: "#4CAF7D", borderColor: "#4CAF7D" }} disabled={selectedCount === 0 || bulkLocking} onClick={() => bulkSetPickable(true)}>
+            {bulkLocking ? "Unlocking…" : `🔓 Unlock — Mark Sellable (${selectedCount})`}
+          </button>
+          <button style={{ ...S.primaryBtnSm, background: "#E5484D", borderColor: "#E5484D", marginLeft: "auto" }} disabled={selectedCount === 0 || bulkDeleting} onClick={bulkDeleteBins}>
             {bulkDeleting ? "Deleting…" : `🗑 Delete Selected (${selectedCount})`}
           </button>
         </div>
       </div>
       <div style={S.cardGrid}>
         {filteredBins.map(b => (
-          <div key={b.id} style={{ ...S.card, cursor: "default", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={b.id} style={{ ...S.card, cursor: "default", display: "flex", justifyContent: "space-between", alignItems: "center", ...(b.pickable === false ? { borderColor: "#E5484D", background: "#FDF0EE" } : {}) }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <input type="checkbox" checked={!!selectedBins[b.id]} onChange={e => setSelectedBins({ ...selectedBins, [b.id]: e.target.checked })} />
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{b.code}</span>
+              {b.pickable === false && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", fontSize: 9 }}>NON-SELLABLE</span>}
             </div>
-            <button onClick={() => deleteBin(b)} style={{ background: "transparent", border: "none", color: "#E5484D", cursor: "pointer", fontSize: 14 }} title="Delete bin">🗑</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, color: "#8A8272", cursor: "pointer" }}>
+                <input type="checkbox" checked={b.pickable !== false} onChange={e => togglePickable(b, e.target.checked)} />
+                Pickable
+              </label>
+              <button onClick={() => deleteBin(b)} style={{ background: "transparent", border: "none", color: "#E5484D", cursor: "pointer", fontSize: 14 }} title="Delete bin">🗑</button>
+            </div>
           </div>
         ))}
         {filteredBins.length === 0 && <EmptyNote text="No bin locations match this filter." />}
@@ -8426,13 +8490,18 @@ async function adjustReserved(token, warehouseId, productId, delta) {
 }
 // Total on-hand across all bins for a product, and current reservation.
 async function getStockSummary(token, warehouseId, productId) {
-  const [rows, res] = await Promise.all([
+  const [rows, res, nonPickableBins] = await Promise.all([
     sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token }),
-    sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token })
+    sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token }),
+    sb(`/rest/v1/bins?warehouse_id=eq.${warehouseId}&pickable=eq.false&select=id`, { token })
   ]);
-  const onHand = (rows || []).reduce((s, r) => s + r.on_hand, 0);
+  const nonPickableIds = new Set((nonPickableBins || []).map(b => b.id));
+  // Damage/Quarantine bins are excluded here — their stock never counts as available
+  // for order fulfillment, and never gets chosen as a source location for picking.
+  const pickableRows = (rows || []).filter(r => !nonPickableIds.has(r.bin_id));
+  const onHand = pickableRows.reduce((s, r) => s + r.on_hand, 0);
   const reserved = (res && res[0]) ? res[0].reserved : 0;
-  return { rows: rows || [], onHand, reserved, available: onHand - reserved };
+  return { rows: pickableRows, onHand, reserved, available: onHand - reserved };
 }
 // Splits a required qty across as many bins as needed (largest bin first) instead of assuming
 // a single bin can cover the whole line — this is what lets Picking correctly send a picker to
