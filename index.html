@@ -175,6 +175,8 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [justReconnected, setJustReconnected] = useState(false);
+  const [warehouses, setWarehouses] = useState([]);
+  const [activeWarehouseId, setActiveWarehouseId] = useState(null);
 
   useEffect(() => {
     const goOnline = () => {
@@ -188,6 +190,19 @@ function App() {
     window.addEventListener("offline", goOffline);
     return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
   }, []);
+
+  // Admins (and anyone else with no fixed warehouse_id) pick which warehouse to work in;
+  // staff tied to one warehouse skip straight into it — each side only ever queries its
+  // own warehouse_id, so one warehouse's staff never sees the other's entities.
+  const needsWarehouseSelect = !!profile && !profile.warehouse_id;
+  useEffect(() => {
+    if (session && profile) {
+      sb(`/rest/v1/warehouses?select=*`, { token: session.token }).then(setWarehouses).catch(() => {});
+    }
+  }, [session, profile]);
+  const activeWarehouse = warehouses.find(w => w.id === (needsWarehouseSelect ? activeWarehouseId : profile?.warehouse_id));
+  const warehouseType = activeWarehouse ? (/stock/i.test(activeWarehouse.name) ? "stocking" : "ecommerce") : (needsWarehouseSelect ? null : "ecommerce");
+  const effectiveProfile = profile && needsWarehouseSelect ? { ...profile, warehouse_id: activeWarehouseId } : profile;
 
   const changeView = (v) => { setView(v); setSidebarOpen(false); };
 
@@ -218,6 +233,12 @@ function App() {
 
   if (!session || !profile) return <LoginScreen onLogin={handleLogin} error={loadErr} />;
 
+  if (needsWarehouseSelect && !activeWarehouseId) {
+    return <WarehouseSelectScreen warehouses={warehouses} profile={profile}
+      onSelect={(id) => { setActiveWarehouseId(id); const wh = warehouses.find(w => w.id === id); setView(wh && /stock/i.test(wh.name) ? "stkdashboard" : "dashboard"); }}
+      onLogout={() => { setSession(null); setProfile(null); }} />;
+  }
+
   return (
     <div style={S.app}>
       {!isOnline && (
@@ -231,28 +252,32 @@ function App() {
         </div>
       )}
       <div className={`depotos-overlay${sidebarOpen ? " open" : ""}`} onClick={() => setSidebarOpen(false)} />
-      <Sidebar view={view} setView={changeView} profile={profile} sidebarOpen={sidebarOpen}
-        onLogout={() => { setSession(null); setProfile(null); }} />
+      <Sidebar view={view} setView={changeView} profile={effectiveProfile} sidebarOpen={sidebarOpen} warehouseType={warehouseType}
+        activeWarehouseName={activeWarehouse?.name}
+        onSwitchWarehouse={needsWarehouseSelect ? () => setActiveWarehouseId(null) : null}
+        onLogout={() => { setSession(null); setProfile(null); setActiveWarehouseId(null); }} />
       <div style={S.main}>
-        <TopBar profile={profile} onMenuClick={() => setSidebarOpen(true)} />
+        <TopBar profile={effectiveProfile} onMenuClick={() => setSidebarOpen(true)} activeWarehouseName={activeWarehouse?.name} />
         <div style={S.content} className="depotos-content">
-          {view === "dashboard" && <DashboardView token={session.token} profile={profile} setView={setView} showToast={showToast} />}
-          {view === "dashboardv2" && <DashboardV2View token={session.token} profile={profile} showToast={showToast} />}
-          {view === "products" && <ProductsView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "receiving" && <ReceivingView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "putaway" && <PutawayView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "inventory" && <InventoryView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "orders" && <OrdersView token={session.token} profile={profile} showToast={showToast} setView={setView} />}
-          {view === "picking" && <PickingView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "packing" && <PackingView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "dispatch" && <DispatchView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "users" && ["admin", "warehouse_lead"].includes(profile.role) && <UsersView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "returns" && <ReturnsView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "reports" && <ReportsView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={profile} showToast={showToast} />}
-          {view === "kpi" && <KPIView token={session.token} profile={profile} showToast={showToast} />}
+          {view === "dashboard" && <DashboardView token={session.token} profile={effectiveProfile} setView={setView} showToast={showToast} />}
+          {view === "dashboardv2" && <DashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "products" && <ProductsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "receiving" && <ReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "putaway" && <PutawayView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "inventory" && <InventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "orders" && <OrdersView token={session.token} profile={effectiveProfile} showToast={showToast} setView={setView} />}
+          {view === "picking" && <PickingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "packing" && <PackingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "dispatch" && <DispatchView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "users" && ["admin", "warehouse_lead"].includes(profile.role) && <UsersView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "returns" && <ReturnsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "reports" && <ReportsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -375,9 +400,39 @@ function LoginScreen({ onLogin, error }) {
   );
 }
 
+/* ================= WAREHOUSE SELECT ================= */
+function WarehouseSelectScreen({ warehouses, profile, onSelect, onLogout }) {
+  const stocking = warehouses.find(w => /stock/i.test(w.name));
+  const ecommerce = warehouses.find(w => w.id !== stocking?.id) || warehouses.find(w => /e-?com/i.test(w.name));
+  const tile = (wh, icon, tagline) => (
+    <div onClick={() => wh && onSelect(wh.id)} style={{
+      flex: 1, minWidth: 220, background: "#1F2430", border: "1px solid #2C323F", borderRadius: 12, padding: "36px 24px",
+      cursor: wh ? "pointer" : "not-allowed", opacity: wh ? 1 : 0.4, textAlign: "center", transition: "border-color 0.15s"
+    }} onMouseEnter={e => wh && (e.currentTarget.style.borderColor = "#F5A623")} onMouseLeave={e => (e.currentTarget.style.borderColor = "#2C323F")}>
+      <div style={{ fontSize: 36, marginBottom: 14 }}>{icon}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16, color: "#E8E6E1" }}>{wh ? wh.name : "Not set up yet"}</div>
+      <div style={{ fontSize: 12, color: "#9098A8", marginTop: 6 }}>{tagline}</div>
+    </div>
+  );
+  return (
+    <div style={{ height: "100vh", background: "#171A21", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: "'Space Grotesk', sans-serif" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 20 }}>📦</span>
+        <span style={{ fontWeight: 700, fontSize: 15, color: "#E8E6E1" }}>MUGHAL<span style={{ color: "#F5A623" }}> FULFILLMENT WAREHOUSE</span></span>
+      </div>
+      <div style={{ color: "#6B7280", fontSize: 12, marginBottom: 32 }}>{profile.full_name} — kaun sa warehouse dekhna hai?</div>
+      <div style={{ display: "flex", gap: 20, width: "100%", maxWidth: 560, flexWrap: "wrap" }}>
+        {tile(stocking, "📥", "Receiving · Inspection · GRN · RTV")}
+        {tile(ecommerce, "🛒", "Orders · Picking · Packing · Dispatch")}
+      </div>
+      <button onClick={onLogout} style={{ marginTop: 32, background: "none", border: "1px solid #2C323F", color: "#9098A8", borderRadius: 6, padding: "8px 16px", fontSize: 12, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif" }}>⏻ Sign out</button>
+    </div>
+  );
+}
+
 /* ================= SIDEBAR / TOPBAR ================= */
-function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
-  const items = [
+function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType, activeWarehouseName, onSwitchWarehouse }) {
+  const ECOM_ITEMS = [
     { id: "dashboard", label: "Dashboard", icon: "🗂" },
     { id: "products", label: "Products", icon: "📦" },
     { id: "receiving", label: "Inbound Ops", icon: "⬇" },
@@ -389,13 +444,19 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     { id: "dispatch", label: "Dispatch", icon: "🚚" },
     { id: "kpi", label: "My KPI", icon: "📈" }
   ];
-  const baseItems = profile.role === "admin" ? [items[0], { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, ...items.slice(1), { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }, { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [items[0], { id: "dashboardv2", label: "Dashboard V2", icon: "📈" }, ...items.slice(1), { id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "users", label: "Users", icon: "👥" }]
-    : ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
-    : profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
+  const STOCKING_ITEMS = [
+    { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
+    { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" }
+  ];
+  const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
+  const ecomExtras = warehouseType !== "stocking";
+  const baseItems = profile.role === "admin" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }] : []), { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }] : []), { id: "users", label: "Users", icon: "👥" }]
+    : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
+    : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -412,6 +473,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
         <span style={{ fontSize: 16 }}>📦</span>
         <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>FULFILLMENT WAREHOUSE</span></span>
       </div>
+      {activeWarehouseName && <div style={{ margin: "0 16px 14px", fontSize: 10.5, color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 0.5 }}>{activeWarehouseName.toUpperCase()}</div>}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {visibleItems.map(it => {
           const active = view === it.id;
@@ -422,7 +484,12 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
           );
         })}
       </div>
-      <button onClick={() => setView("changepassword")} style={{ ...S.navItem, borderTop: "1px solid #2C323F" }}>
+      {onSwitchWarehouse && (
+        <button onClick={onSwitchWarehouse} style={{ ...S.navItem, borderTop: "1px solid #2C323F" }}>
+          <span>🔀</span><span style={{ color: "#9098A8" }}>Switch Warehouse</span>
+        </button>
+      )}
+      <button onClick={() => setView("changepassword")} style={{ ...S.navItem, borderTop: onSwitchWarehouse ? "none" : "1px solid #2C323F" }}>
         <span>🔑</span><span style={{ color: view === "changepassword" ? "#E8E6E1" : "#9098A8" }}>Change Password</span>
       </button>
       <button onClick={onLogout} style={{ ...S.navItem, marginBottom: 12 }}>
@@ -431,7 +498,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen }) {
     </div>
   );
 }
-function TopBar({ profile, onMenuClick }) {
+function TopBar({ profile, onMenuClick, activeWarehouseName }) {
   return (
     <div style={S.topbar} className="depotos-topbar">
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -441,6 +508,7 @@ function TopBar({ profile, onMenuClick }) {
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {activeWarehouseName && <span style={{ ...S.badge, borderColor: "#F5A623", color: "#F5A623" }}>{activeWarehouseName}</span>}
         <span style={{ color: "#2B2620", fontFamily: "'Space Grotesk', sans-serif", fontSize: 13 }}>{profile.full_name}</span>
         <span style={S.badge}>{profile.role}</span>
       </div>
@@ -8545,6 +8613,517 @@ function SectionTitle({ title, action }) {
   );
 }
 function EmptyNote({ text }) { return <div style={{ color: "#8A8272", fontSize: 13, padding: "20px 4px", fontFamily: "'IBM Plex Mono', monospace" }}>— {text}</div>; }
+
+/* ================= STOCKING WAREHOUSE — RECEIVING ================= */
+const STK_SOURCES = ["E-COM", "LOCAL", "IMPORT"];
+const STK_BENCHMARK_DAYS = { "E-COM": 1, "LOCAL": 3, "IMPORT": 15 };
+const STK_DC_STATUS_LABEL = { pending_import: "Pending Import", ready_for_inspection: "Ready for Inspection", in_progress: "Inspection In Progress", completed: "Inspection Complete", grn_posted: "GRN Posted" };
+function stkPill(active, color = "#F5A623") { return { display: "inline-flex", alignItems: "center", gap: 5, background: active ? color : "transparent", color: active ? "#1A1206" : "#2B2620", border: `1px solid ${active ? color : "#E0D8C5"}`, borderRadius: 20, padding: "7px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif", fontWeight: active ? 600 : 400 }; }
+function stkBizDaysExclSunday(startISO, endISO) {
+  if (!startISO || !endISO) return null;
+  let d = new Date(startISO); d.setHours(0, 0, 0, 0);
+  const end = new Date(endISO); end.setHours(0, 0, 0, 0);
+  let days = 0;
+  while (d < end) { d.setDate(d.getDate() + 1); if (d.getDay() !== 0) days++; }
+  return days;
+}
+function stkLineShort(l) { return Math.max(0, Number(l.demand_qty || 0) - (Number(l.ok_qty || 0) + Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0))); }
+function stkLineExceptionQty(l) { return Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.excess_qty || 0) + Number(l.short_qty || 0); }
+// Stocking-module data is scoped to the "Stocking Warehouse" record itself, not to the
+// viewer's own default warehouse — so an admin (whose profile.warehouse_id normally points
+// at the E-commerce warehouse) still sees Stocking data when opening these tabs, and staff
+// assigned directly to the Stocking warehouse see it via their own warehouse_id either way.
+function useStkWarehouseId(token, profile) {
+  const [whId, setWhId] = useState(profile.warehouse_id || null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const whs = await sb(`/rest/v1/warehouses?select=id,name`, { token });
+        const stk = (whs || []).find(w => /stock/i.test(w.name));
+        setWhId(stk ? stk.id : (profile.warehouse_id || null));
+      } catch { setWhId(profile.warehouse_id || null); }
+    })();
+  }, []);
+  return whId;
+}
+
+function StockingReceivingView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const [tab, setTab] = useState("arrival");
+  const [pos, setPos] = useState([]);
+  const [dcs, setDcs] = useState([]);
+  const [rtvRows, setRtvRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const [poNumber, setPoNumber] = useState(""); const [supplier, setSupplier] = useState(""); const [source, setSource] = useState("LOCAL"); const [scheduledDate, setScheduledDate] = useState("");
+  const [dcNumber, setDcNumber] = useState(""); const [dcQty, setDcQty] = useState("");
+
+  const [activeDc, setActiveDc] = useState(null);
+  const [activeLines, setActiveLines] = useState([]);
+  const [newItemName, setNewItemName] = useState(""); const [newItemBarcode, setNewItemBarcode] = useState(""); const [newItemExcess, setNewItemExcess] = useState("");
+
+  const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
+  const [rtvFilter, setRtvFilter] = useState("pending");
+
+  const loadAll = async () => {
+    setLoading(true);
+    try {
+      const [poRows, dcRows, rtv] = await Promise.all([
+        sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*&order=received_at.desc`, { token }),
+        sb(`/rest/v1/stk_rtv_queue?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token })
+      ]);
+      setPos(poRows || []); setDcs(dcRows || []); setRtvRows(rtv || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { if (whId) loadAll(); }, [whId]);
+
+  const poByPo = (num) => pos.find(p => p.po_number === num.trim());
+
+  const addPoAndDc = async () => {
+    if (!poNumber.trim() || !supplier.trim() || !dcNumber.trim() || !dcQty) { showToast("PO#, Supplier, DC# aur DC Qty zaroori hain", "err"); return; }
+    setLoading(true);
+    try {
+      let po = poByPo(poNumber);
+      if (!po) {
+        const created = await sb(`/rest/v1/stk_purchase_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, po_number: poNumber.trim(), supplier: supplier.trim(), source, scheduled_date: scheduledDate || null, created_by: profile.id } });
+        po = created[0]; setPos(p => [po, ...p]);
+      }
+      const dcCreated = await sb(`/rest/v1/stk_dc_arrivals`, { method: "POST", token, prefer: "return=representation", body: { po_id: po.id, warehouse_id: whId, dc_number: dcNumber.trim(), dc_qty_total: Number(dcQty), received_by: profile.id } });
+      setDcs(d => [dcCreated[0], ...d]);
+      showToast(`DC ${dcNumber} arrival flag ho gayi — PO ${po.po_number} k against`);
+      setDcNumber(""); setDcQty("");
+    } catch (e) { showToast("Save fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const importOdooFile = async (file, dc) => {
+    setLoading(true);
+    try {
+      const rows = await parseSheet(file);
+      const grouped = {}; let odooRef = "";
+      for (const r of rows) {
+        const productRaw = r["Stock move/Product"] || r["Product"] || "";
+        if (!productRaw) continue;
+        odooRef = odooRef || r["Reference"] || "";
+        const barcode = String(r["Stock move/Product/Internal Barcode"] ?? "").trim();
+        const qty = Number(r["Stock move/Quantity"] ?? r["Quantity"] ?? 0) || 0;
+        const key = barcode || String(productRaw);
+        if (!grouped[key]) grouped[key] = { product_barcode: barcode || null, product_name: String(productRaw), demand_qty: 0 };
+        grouped[key].demand_qty += qty;
+      }
+      const lines = Object.values(grouped);
+      if (!lines.length) { showToast("File mai koi valid line nahi mili", "err"); setLoading(false); return; }
+      for (const l of lines) {
+        await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, body: { dc_id: dc.id, product_barcode: l.product_barcode, product_name: l.product_name, demand_qty: l.demand_qty } });
+      }
+      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "ready_for_inspection", odoo_reference: odooRef || null } });
+      showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai`);
+      loadAll();
+    } catch (e) { showToast("Import fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const openDcForInspection = async (dc) => {
+    setLoading(true);
+    try {
+      const lines = await sb(`/rest/v1/stk_dc_lines?dc_id=eq.${dc.id}&select=*&order=product_name.asc`, { token });
+      setActiveDc(dc); setActiveLines(lines || []);
+      if (dc.status === "ready_for_inspection") {
+        await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "in_progress" } });
+        setDcs(ds => ds.map(d => d.id === dc.id ? { ...d, status: "in_progress" } : d));
+      }
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const updateLineField = (lineId, field, value) => setActiveLines(ls => ls.map(l => l.id === lineId ? { ...l, [field]: value } : l));
+
+  const saveInspectionProgress = async () => {
+    setLoading(true);
+    try {
+      for (const l of activeLines) {
+        const short = stkLineShort(l);
+        await sb(`/rest/v1/stk_dc_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { ok_qty: Number(l.ok_qty || 0), dmg_qty: Number(l.dmg_qty || 0), mnf_qty: Number(l.mnf_qty || 0), wrong_qty: Number(l.wrong_qty || 0), excess_qty: Number(l.excess_qty || 0), short_qty: short, filled_by: profile.id, updated_at: new Date().toISOString() } });
+      }
+      showToast("Inspection progress save ho gayi");
+    } catch (e) { showToast("Save fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const addNewItemLine = async () => {
+    if (!newItemName.trim()) { showToast("Item ka naam zaroori hai", "err"); return; }
+    try {
+      const created = await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, prefer: "return=representation", body: { dc_id: activeDc.id, product_barcode: newItemBarcode.trim() || null, product_name: newItemName.trim(), demand_qty: 0, excess_qty: Number(newItemExcess || 0), is_new_item: true, filled_by: profile.id } });
+      setActiveLines(a => [...a, created[0]]);
+      setNewItemName(""); setNewItemBarcode(""); setNewItemExcess("");
+    } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
+  const submitInspection = async () => {
+    await saveInspectionProgress();
+    try {
+      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${activeDc.id}`, { method: "PATCH", token, body: { status: "completed" } });
+      showToast(`DC ${activeDc.dc_number} inspection submit ho gayi — Inbound Executive ki window mai ab Completed dikhega`);
+      setActiveDc(null); setActiveLines([]);
+      loadAll();
+    } catch (e) { showToast("Submit fail: " + e.message, "err"); }
+  };
+
+  const openGrnDc = async (dc) => {
+    const lines = await sb(`/rest/v1/stk_dc_lines?dc_id=eq.${dc.id}&select=*`, { token });
+    setGrnDc(dc); setGrnLines(lines || []); setGrnNumberInput("");
+  };
+
+  const postGrn = async () => {
+    if (!grnNumberInput.trim()) { showToast("Odoo GRN# enter karein", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${grnDc.id}`, { method: "PATCH", token, body: { status: "grn_posted", grn_number: grnNumberInput.trim(), grn_posted_by: profile.id, grn_posted_at: new Date().toISOString() } });
+      const supplierName = (pos.find(p => p.id === grnDc.po_id) || {}).supplier || "";
+      for (const l of grnLines) {
+        if (stkLineExceptionQty(l) > 0) {
+          await sb(`/rest/v1/stk_rtv_queue`, { method: "POST", token, body: { dc_line_id: l.id, dc_id: grnDc.id, po_id: grnDc.po_id, warehouse_id: whId, supplier: supplierName, product_name: l.product_name, dmg_qty: l.dmg_qty, mnf_qty: l.mnf_qty, wrong_qty: l.wrong_qty, excess_qty: l.excess_qty, short_qty: l.short_qty } });
+        }
+      }
+      const allDcs = await sb(`/rest/v1/stk_dc_arrivals?po_id=eq.${grnDc.po_id}&select=*`, { token });
+      const dcIds = allDcs.map(d => d.id).join(",");
+      const allLines = dcIds ? await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${dcIds})&select=demand_qty,ok_qty`, { token }) : [];
+      const ordered = allLines.reduce((s, l) => s + Number(l.demand_qty || 0), 0);
+      const received = allLines.reduce((s, l) => s + Number(l.ok_qty || 0), 0);
+      const allPosted = allDcs.every(d => d.status === "grn_posted" || d.id === grnDc.id);
+      const poStatus = (allPosted && ordered > 0 && received >= ordered) ? "completed" : "partial";
+      await sb(`/rest/v1/stk_purchase_orders?id=eq.${grnDc.po_id}`, { method: "PATCH", token, body: { status: poStatus } });
+      showToast(`GRN ${grnNumberInput} post ho gayi — DC ${grnDc.dc_number}`);
+      setGrnDc(null); setGrnLines([]); setGrnNumberInput("");
+      loadAll();
+    } catch (e) { showToast("GRN post fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const markRtvPicked = async (row) => {
+    try {
+      await sb(`/rest/v1/stk_rtv_queue?id=eq.${row.id}`, { method: "PATCH", token, body: { status: row.status === "picked" ? "pending" : "picked", picked_by: profile.id, picked_at: row.status === "picked" ? null : new Date().toISOString() } });
+      loadAll();
+    } catch (e) { showToast("Update fail: " + e.message, "err"); }
+  };
+
+  const pendingImportDcs = dcs.filter(d => d.status === "pending_import");
+  const inspectionDcs = dcs.filter(d => d.status === "ready_for_inspection" || d.status === "in_progress");
+  const completedDcs = dcs.filter(d => d.status === "completed");
+  const rtvFiltered = rtvRows.filter(r => r.status === rtvFilter);
+
+  const TABS = [
+    { key: "arrival", label: "Arrival" },
+    { key: "import", label: `Odoo Import (${pendingImportDcs.length})` },
+    { key: "inspection", label: `Inspection (${inspectionDcs.length})` },
+    { key: "grn", label: `GRN (${completedDcs.length})` },
+    { key: "rtv", label: "RTV" }
+  ];
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Receiving" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(t => <button key={t.key} onClick={() => { setTab(t.key); setActiveDc(null); setGrnDc(null); }} style={stkPill(tab === t.key)}>{t.label}</button>)}
+      </div>
+
+      {tab === "arrival" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Physical Arrival — PO + DC Flag</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="PO Number (Odoo)" value={poNumber} onChange={e => setPoNumber(e.target.value)} />
+            <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Supplier" value={supplier} onChange={e => setSupplier(e.target.value)} disabled={!!poByPo(poNumber)} />
+            <select style={{ ...S.input, flex: 1, minWidth: 120 }} value={source} onChange={e => setSource(e.target.value)} disabled={!!poByPo(poNumber)}>
+              {STK_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <input type="date" style={{ ...S.input, flex: 1, minWidth: 140 }} value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} disabled={!!poByPo(poNumber)} />
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="DC Number" value={dcNumber} onChange={e => setDcNumber(e.target.value)} />
+            <input type="number" style={{ ...S.input, flex: 1, minWidth: 120 }} placeholder="DC Total Qty" value={dcQty} onChange={e => setDcQty(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={addPoAndDc} disabled={loading || !whId}>+ Flag Arrival</button>
+          </div>
+          {poByPo(poNumber) && <div style={{ marginTop: 8, fontSize: 12, color: "#8A8272" }}>PO {poNumber} pehle se maujood hai ({poByPo(poNumber).supplier}, {poByPo(poNumber).source}) — DC add karne se attach ho jayegi.</div>}
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>RECENT ARRIVALS</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>PO#</th><th style={S.th}>Supplier</th><th style={S.th}>DC#</th><th style={S.th}>DC Qty</th><th style={S.th}>Status</th></tr></thead>
+              <tbody>
+                {dcs.slice(0, 10).map(d => {
+                  const po = pos.find(p => p.id === d.po_id);
+                  return <tr key={d.id}><td style={S.td}>{po?.po_number}</td><td style={S.td}>{po?.supplier}</td><td style={S.td}>{d.dc_number}</td><td style={S.td}>{d.dc_qty_total}</td><td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td></tr>;
+                })}
+                {!dcs.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi koi arrival nahi" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "import" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Odoo Transfer Export → Import (SKU-wise lines)</div>
+          {!pendingImportDcs.length && <EmptyNote text="Import k liye koi DC pending nahi" />}
+          {pendingImportDcs.map(d => {
+            const po = pos.find(p => p.id === d.po_id);
+            return (
+              <div key={d.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", borderBottom: "1px solid #EFE8D8" }}>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13 }}>{po?.po_number} — DC {d.dc_number}</div>
+                  <div style={{ fontSize: 12, color: "#8A8272" }}>{po?.supplier} · Total qty {d.dc_qty_total}</div>
+                </div>
+                <label style={{ ...S.secondaryBtnSm, cursor: "pointer" }}>
+                  📤 Upload Odoo Excel
+                  <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files[0]; if (f) importOdooFile(f, d); e.target.value = ""; }} />
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {tab === "inspection" && !activeDc && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Shared Inspection Pool</div>
+          {!inspectionDcs.length && <EmptyNote text="Koi DC inspection k liye ready nahi" />}
+          <div style={S.cardGrid}>
+            {inspectionDcs.map(d => {
+              const po = pos.find(p => p.id === d.po_id);
+              return (
+                <div key={d.id} style={S.card} onClick={() => openDcForInspection(d)}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600 }}>{po?.po_number} — DC {d.dc_number}</div>
+                  <div style={{ fontSize: 12, color: "#8A8272", marginTop: 4 }}>{po?.supplier} · {STK_DC_STATUS_LABEL[d.status]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === "inspection" && activeDc && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>Inspecting DC {activeDc.dc_number} — Article-wise</div>
+            <button style={S.secondaryBtnSm} onClick={() => { setActiveDc(null); setActiveLines([]); }}>← Back to pool</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={S.th}>Product</th><th style={S.th}>Demand</th><th style={S.th}>OK</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short (auto)</th>
+            </tr></thead>
+            <tbody>
+              {activeLines.map(l => (
+                <tr key={l.id}>
+                  <td style={S.td}>{l.product_name}{l.is_new_item && <span style={{ ...S.badgeSm, borderColor: "#5B9EE8", color: "#5B9EE8", marginLeft: 6 }}>NEW</span>}</td>
+                  <td style={S.td}>{l.demand_qty}</td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 70 }} value={l.ok_qty ?? ""} onChange={e => updateLineField(l.id, "ok_qty", e.target.value)} /></td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 70 }} value={l.dmg_qty ?? ""} onChange={e => updateLineField(l.id, "dmg_qty", e.target.value)} /></td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 70 }} value={l.mnf_qty ?? ""} onChange={e => updateLineField(l.id, "mnf_qty", e.target.value)} /></td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 70 }} value={l.wrong_qty ?? ""} onChange={e => updateLineField(l.id, "wrong_qty", e.target.value)} /></td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 70 }} value={l.excess_qty ?? ""} onChange={e => updateLineField(l.id, "excess_qty", e.target.value)} /></td>
+                  <td style={S.td}>{stkLineShort(l)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16, padding: "12px 0", borderTop: "1px solid #EFE8D8" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Naya item — naam" value={newItemName} onChange={e => setNewItemName(e.target.value)} />
+            <input style={{ ...S.input, flex: 1, minWidth: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode (optional)" value={newItemBarcode} onChange={e => setNewItemBarcode(e.target.value)} />
+            <input type="number" style={{ ...S.input, width: 100 }} placeholder="Excess qty" value={newItemExcess} onChange={e => setNewItemExcess(e.target.value)} />
+            <button style={S.secondaryBtnSm} onClick={addNewItemLine}>+ Add unmapped item</button>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button style={S.secondaryBtnSm} onClick={saveInspectionProgress} disabled={loading}>💾 Save Progress</button>
+            <button style={S.primaryBtnSm} onClick={submitInspection} disabled={loading}>✓ Submit Inspection</button>
+          </div>
+        </div>
+      )}
+
+      {tab === "grn" && !grnDc && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Completed Inspections — Pending GRN Post</div>
+          {!completedDcs.length && <EmptyNote text="Koi DC GRN k liye pending nahi" />}
+          <div style={S.cardGrid}>
+            {completedDcs.map(d => {
+              const po = pos.find(p => p.id === d.po_id);
+              return (
+                <div key={d.id} style={S.card} onClick={() => openGrnDc(d)}>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600 }}>{po?.po_number} — DC {d.dc_number}</div>
+                  <div style={{ fontSize: 12, color: "#8A8272", marginTop: 4 }}>{po?.supplier} · inspection complete</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === "grn" && grnDc && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>GRN — DC {grnDc.dc_number}</div>
+            <button style={S.secondaryBtnSm} onClick={() => { setGrnDc(null); setGrnLines([]); }}>← Back</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
+            <thead><tr><th style={S.th}>Product</th><th style={S.th}>Demand</th><th style={S.th}>OK (posted)</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short</th></tr></thead>
+            <tbody>
+              {grnLines.map(l => <tr key={l.id}><td style={S.td}>{l.product_name}</td><td style={S.td}>{l.demand_qty}</td><td style={S.td}>{l.ok_qty}</td><td style={S.td}>{l.dmg_qty}</td><td style={S.td}>{l.mnf_qty}</td><td style={S.td}>{l.wrong_qty}</td><td style={S.td}>{l.excess_qty}</td><td style={S.td}>{l.short_qty}</td></tr>)}
+            </tbody>
+          </table>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, flex: 1, minWidth: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo GRN reference (posted manually)" value={grnNumberInput} onChange={e => setGrnNumberInput(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={postGrn} disabled={loading}>✓ Mark GRN Complete → Forward to Putaway</button>
+          </div>
+        </div>
+      )}
+
+      {tab === "rtv" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>RTV Queue</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <button style={stkPill(rtvFilter === "pending", "#E5484D")} onClick={() => setRtvFilter("pending")}>Pending ({rtvRows.filter(r => r.status === "pending").length})</button>
+            <button style={stkPill(rtvFilter === "picked", "#4CAF7D")} onClick={() => setRtvFilter("picked")}>Picked ({rtvRows.filter(r => r.status === "picked").length})</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Product</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {rtvFiltered.map(r => (
+                <tr key={r.id}>
+                  <td style={S.td}>{r.supplier}</td><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.dmg_qty}</td><td style={S.td}>{r.mnf_qty}</td><td style={S.td}>{r.wrong_qty}</td><td style={S.td}>{r.excess_qty}</td><td style={S.td}>{r.short_qty}</td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => markRtvPicked(r)}>{r.status === "pending" ? "Mark Picked" : "Reopen"}</button></td>
+                </tr>
+              ))}
+              {!rtvFiltered.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Yahan kuch nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — DASHBOARD ================= */
+function StockingDashboardView({ token, profile }) {
+  const whId = useStkWarehouseId(token, profile);
+  const [pos, setPos] = useState([]);
+  const [dcs, setDcs] = useState([]);
+  const [lines, setLines] = useState([]);
+  const [rtvRows, setRtvRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const whFilter = whId ? `warehouse_id=eq.${whId}&` : "";
+        const [poRows, dcRows, rtv] = await Promise.all([
+          sb(`/rest/v1/stk_purchase_orders?${whFilter}select=*`, { token }),
+          sb(`/rest/v1/stk_dc_arrivals?${whFilter}select=*`, { token }),
+          sb(`/rest/v1/stk_rtv_queue?${whFilter}select=*`, { token })
+        ]);
+        const dcIds = (dcRows || []).map(d => d.id);
+        const lineRows = dcIds.length ? await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${dcIds.join(",")})&select=*`, { token }) : [];
+        setPos(poRows || []); setDcs(dcRows || []); setLines(lineRows || []); setRtvRows(rtv || []);
+      } catch (e) { /* silent */ }
+      setLoading(false);
+    })();
+  }, [whId]);
+
+  const totalPos = pos.length;
+  const completedPos = pos.filter(p => p.status === "completed").length;
+  const partialPos = pos.filter(p => p.status === "partial" || p.status === "open").length;
+  const pendingImportDcs = dcs.filter(d => d.status === "pending_import").length;
+  const pendingInspectionDcs = dcs.filter(d => d.status === "ready_for_inspection" || d.status === "in_progress" || d.status === "completed").length;
+  const rtvPendingQty = rtvRows.filter(r => r.status === "pending").reduce((s, r) => s + Number(r.dmg_qty || 0) + Number(r.mnf_qty || 0) + Number(r.wrong_qty || 0) + Number(r.excess_qty || 0) + Number(r.short_qty || 0), 0);
+
+  const vendorStats = {};
+  for (const l of lines) {
+    const dc = dcs.find(d => d.id === l.dc_id); if (!dc) continue;
+    const po = pos.find(p => p.id === dc.po_id); if (!po) continue;
+    const v = vendorStats[po.supplier] || (vendorStats[po.supplier] = { supplier: po.supplier, received: 0, dmg: 0, mnf: 0, wrong: 0, excess: 0, short: 0 });
+    v.received += Number(l.ok_qty || 0) + Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.excess_qty || 0);
+    v.dmg += Number(l.dmg_qty || 0); v.mnf += Number(l.mnf_qty || 0); v.wrong += Number(l.wrong_qty || 0); v.excess += Number(l.excess_qty || 0); v.short += Number(l.short_qty || 0);
+  }
+  const vendorRows = Object.values(vendorStats).map(v => ({ ...v, exception: v.dmg + v.mnf + v.wrong + v.short, ratio: v.received > 0 ? ((v.dmg + v.mnf + v.wrong + v.short) / v.received) * 100 : 0 })).sort((a, b) => b.ratio - a.ratio);
+
+  const supplierBench = {};
+  for (const dc of dcs.filter(d => d.status === "grn_posted")) {
+    const po = pos.find(p => p.id === dc.po_id); if (!po) continue;
+    const days = stkBizDaysExclSunday(dc.received_at, dc.grn_posted_at);
+    const bm = STK_BENCHMARK_DAYS[po.source] ?? 3;
+    const s = supplierBench[po.supplier] || (supplierBench[po.supplier] = { supplier: po.supplier, total: 0, within: 0, delayed: 0, delayDays: 0 });
+    s.total++;
+    if (days <= bm) s.within++; else { s.delayed++; s.delayDays += (days - bm); }
+  }
+  const supplierRows = Object.values(supplierBench).sort((a, b) => b.delayed - a.delayed);
+
+  const today = new Date().toISOString();
+  const pendingAlerts = dcs.filter(d => d.status !== "grn_posted").map(d => {
+    const po = pos.find(p => p.id === d.po_id); if (!po) return null;
+    const days = stkBizDaysExclSunday(d.received_at, today);
+    const bm = STK_BENCHMARK_DAYS[po.source] ?? 3;
+    return { supplier: po.supplier, po_number: po.po_number, dc_number: d.dc_number, source: po.source, days, bm, breach: days > bm };
+  }).filter(Boolean).sort((a, b) => b.days - a.days);
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Inbound Dashboard" />
+      <div style={S.statGrid}>
+        {[["Total POs", totalPos], ["Completed POs", completedPos], ["Open/Partial POs", partialPos], ["Pending Odoo Import", pendingImportDcs], ["In Inspection Pipeline", pendingInspectionDcs], ["RTV Pending Qty", rtvPendingQty]].map(([label, val]) => (
+          <div key={label} style={S.statCard}>
+            <div style={{ fontSize: 10, color: "#8A8272", letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()}</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Vendor-wise RTV Ratio</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Received Qty</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Short</th><th style={S.th}>RTV Ratio %</th></tr></thead>
+          <tbody>
+            {vendorRows.map(v => (
+              <tr key={v.supplier}>
+                <td style={S.td}>{v.supplier}</td><td style={S.td}>{v.received}</td><td style={S.td}>{v.dmg}</td><td style={S.td}>{v.mnf}</td><td style={S.td}>{v.wrong}</td><td style={S.td}>{v.short}</td>
+                <td style={{ ...S.td, color: v.ratio > 10 ? "#E5484D" : "#2B2620", fontWeight: 600 }}>{v.ratio.toFixed(1)}%</td>
+              </tr>
+            ))}
+            {!vendorRows.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Abhi data nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Supplier Benchmark Performance (GRN-posted DCs)</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Total</th><th style={S.th}>Within Benchmark</th><th style={S.th}>Delayed</th><th style={S.th}>Total Delay Days</th></tr></thead>
+          <tbody>
+            {supplierRows.map(s => <tr key={s.supplier}><td style={S.td}>{s.supplier}</td><td style={S.td}>{s.total}</td><td style={S.td}>{s.within}</td><td style={{ ...S.td, color: s.delayed ? "#E5484D" : "#2B2620" }}>{s.delayed}</td><td style={S.td}>{s.delayDays}</td></tr>)}
+            {!supplierRows.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi GRN-posted DC nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Pending POs — Ageing &amp; SOP Breach Alert</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>PO#</th><th style={S.th}>DC#</th><th style={S.th}>Source</th><th style={S.th}>Days Pending</th><th style={S.th}>Benchmark</th><th style={S.th}>SOP</th></tr></thead>
+          <tbody>
+            {pendingAlerts.map((a, i) => (
+              <tr key={i}>
+                <td style={S.td}>{a.supplier}</td><td style={S.td}>{a.po_number}</td><td style={S.td}>{a.dc_number}</td><td style={S.td}>{a.source}</td><td style={S.td}>{a.days}</td><td style={S.td}>{a.bm}</td>
+                <td style={{ ...S.td, color: a.breach ? "#E5484D" : "#4CAF7D", fontWeight: 600 }}>{a.breach ? "⚠ SOP BREACH" : "OK"}</td>
+              </tr>
+            ))}
+            {!pendingAlerts.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Koi PO pending nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 const S = {
   scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
