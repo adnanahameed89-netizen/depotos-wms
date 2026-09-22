@@ -2790,7 +2790,7 @@ function PutawayView({ token, profile, showToast }) {
 
   const commitPutaway = async (task, binId, qty) => {
     try {
-      await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty);
+      await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty, { type: "putaway", userId: profile.id });
       const newCompleted = (task.qty_completed || 0) + qty;
       const done = newCompleted >= task.qty;
       const isFirstCommit = !(task.qty_completed > 0) && !task.started_at;
@@ -3250,21 +3250,25 @@ function InventoryView({ token, profile, showToast }) {
           const pnaQty = pnaInvRows?.[0]?.on_hand || 0;
           if (pnaQty > 0) {
             const reconcileQty = Math.min(pnaQty, delta);
-            await addOnHand(token, profile.warehouse_id, l.product_id, pnaBinId, -reconcileQty);
-            await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, reconcileQty);
+            await addOnHand(token, profile.warehouse_id, l.product_id, pnaBinId, -reconcileQty, { type: "pna_reconcile", userId: profile.id });
+
+            await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, reconcileQty, { type: "pna_reconcile", userId: profile.id });
+
             await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count — Reconciled from PNA-HOLD (${p?.barcode || l.product_id})`, old_value: `PNA-HOLD: ${pnaQty}`, new_value: `${bins[l.bin_id]?.code || "—"}: +${reconcileQty}`, changed_by: profile.id } });
             reconciledFromPna += reconcileQty;
             handledViaReconcile = true;
             const remainder = delta - reconcileQty;
             if (remainder > 0) {
-              await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, remainder);
+              await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, remainder, { type: "pna_reconcile", userId: profile.id });
+
               await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty + reconcileQty), new_value: String(l.counted_qty), changed_by: profile.id } });
             }
           }
         }
 
         if (!handledViaReconcile) {
-          await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, delta);
+          await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, delta, { type: "pna_reconcile", userId: profile.id });
+
           await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: l.product_id, field_changed: `Cycle Count Qty — ${p?.barcode || l.product_id} @ ${bins[l.bin_id]?.code || "—"}`, old_value: String(l.system_qty), new_value: String(l.counted_qty), changed_by: profile.id } });
         }
         await sb(`/rest/v1/cycle_count_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { adjusted: true } });
@@ -3372,7 +3376,8 @@ function InventoryView({ token, profile, showToast }) {
               }
               binId = binCache[r.binCode].id;
             }
-            await addOnHand(token, profile.warehouse_id, r.product.id, binId, r.qty);
+            await addOnHand(token, profile.warehouse_id, r.product.id, binId, r.qty, { type: "return", userId: profile.id });
+
             count++;
           } catch (e) {
             failedRows.push({ barcode: r.product?.barcode || r.barcode, reason: (e.message || "").slice(0, 80) });
@@ -3432,8 +3437,10 @@ function InventoryView({ token, profile, showToast }) {
     if (!qty || qty <= 0 || qty > transferRow.maxQty) { showToast(`Qty 1 se ${transferRow.maxQty} ke beech honi chahiye`, "err"); return; }
     setTransferring(true);
     try {
-      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferRow.pnaBinId, -qty);
-      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferDestBin, qty);
+      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferRow.pnaBinId, -qty, { type: "pna_transfer", userId: profile.id });
+
+      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferDestBin, qty, { type: "pna_transfer", userId: profile.id });
+
       const p = products[transferRow.product_id];
       await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: transferRow.product_id, field_changed: `PNA-HOLD se mila (${p?.barcode || transferRow.product_id})`, old_value: `PNA-HOLD: ${qty}`, new_value: `${bins[transferDestBin]?.code || "—"}: +${qty}`, changed_by: profile.id } });
       showToast(`✅ ${qty} pcs PNA-HOLD se ${bins[transferDestBin]?.code || "bin"} mein transfer ho gayi`);
@@ -3541,7 +3548,7 @@ function InventoryView({ token, profile, showToast }) {
             </div>
           )}
           <table>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Reserved against order?</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Last Activity</th><th style={S.th}>Reserved against order?</th><th style={S.th}></th></tr></thead>
             <tbody>
               {binRows.map((r, i) => {
                 const p = products[r.product_id];
@@ -3551,6 +3558,7 @@ function InventoryView({ token, profile, showToast }) {
                 const days = aging?.days;
                 const agingColor = days == null ? "#8A8272" : days > 60 ? "#E5484D" : days > 30 ? "#F5A623" : "#4CAF7D";
                 const isPnaBin = bin?.code === "PNA-HOLD";
+                const activityLabel = { putaway: "📥 Putaway", dispatch: "🚚 Dispatch", damage: "💔 Damage", return: "↩ Return", pna_reconcile: "🔍 PNA Reconcile", pna_transfer: "🔍 PNA Transfer", pna_resolve: "🔍 PNA Resolve", not_found_pna: "⚠ Not Found → PNA", restore: "↺ Restored" }[r.last_activity_type] || null;
                 return (
                   <tr key={i}>
                     <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
@@ -3559,6 +3567,14 @@ function InventoryView({ token, profile, showToast }) {
                     <td style={S.td}>{r.on_hand}</td>
                     <td style={{ ...S.td, color: agingColor, fontWeight: 600 }}>{days != null ? `${days}d` : "—"}</td>
                     <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{aging?.grnNumber || "—"}</td>
+                    <td style={S.td}>
+                      {activityLabel ? (
+                        <div>
+                          <div style={{ fontSize: 12 }}>{activityLabel}</div>
+                          <div style={{ fontSize: 10.5, color: "#8A8272", marginTop: 2 }}>{staffList.find(s => s.id === r.last_activity_by)?.full_name || "—"} · {fmtTime(r.last_activity_at)}</div>
+                        </div>
+                      ) : <span style={{ color: "#8A8272", fontSize: 12 }}>—</span>}
+                    </td>
                     <td style={S.td}>
                       {productReserved > 0
                         ? <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D" }}>Yes · {productReserved} reserved (product-wide)</span>
@@ -3572,7 +3588,7 @@ function InventoryView({ token, profile, showToast }) {
                   </tr>
                 );
               })}
-              {binRows.length === 0 && <tr><td colSpan={8}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+              {binRows.length === 0 && <tr><td colSpan={9}><EmptyNote text="No inventory recorded yet." /></td></tr>}
             </tbody>
           </table>
           <div style={{ marginTop: 10, fontSize: 11, color: "#8A8272" }}>
@@ -5012,7 +5028,7 @@ function PickingView({ token, profile, showToast }) {
       const invRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${group.product_id}&bin_id=eq.${group.bin_id}&select=*`, { token });
       const invRow = invRows && invRows[0];
       if (invRow) {
-        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty) } });
+        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty), last_activity_type: "damage", last_activity_by: profile.id, last_activity_at: new Date().toISOString() } });
       }
       const firstOrderId = group.refs[0]?.order_id || null;
       await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: group.product_id, bin_id: group.bin_id, qty, found_at_stage: "picking", reported_by: profile.id, order_id: firstOrderId } });
@@ -5036,8 +5052,10 @@ function PickingView({ token, profile, showToast }) {
       const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
       const pnaBin = pnaBinRows && pnaBinRows[0];
       if (pnaBin) {
-        await addOnHand(token, profile.warehouse_id, group.product_id, group.bin_id, -remaining);
-        await addOnHand(token, profile.warehouse_id, group.product_id, pnaBin.id, remaining);
+        await addOnHand(token, profile.warehouse_id, group.product_id, group.bin_id, -remaining, { type: "not_found_pna", userId: profile.id });
+
+        await addOnHand(token, profile.warehouse_id, group.product_id, pnaBin.id, remaining, { type: "not_found_pna", userId: profile.id });
+
         await sb(`/rest/v1/pna_records`, { method: "POST", token, body: { product_id: group.product_id, original_bin_id: group.bin_id, qty: remaining, order_id: openRefs[0]?.order_id || null, reported_by: profile.id, status: "pending" } });
         pnaParked = true;
       }
@@ -5668,7 +5686,7 @@ function PackingView({ token, profile, showToast }) {
       const invRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${lastScannedProduct.id}&select=*&order=on_hand.desc&limit=1`, { token });
       const invRow = invRows && invRows[0];
       if (invRow) {
-        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty) } });
+        await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty), last_activity_type: "damage", last_activity_by: profile.id, last_activity_at: new Date().toISOString() } });
       }
       await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: lastScannedProduct.id, bin_id: damageBinId, qty, found_at_stage: "packing", reported_by: profile.id, order_id: openTask.order_id } });
       await adjustReserved(token, profile.warehouse_id, lastScannedProduct.id, -qty);
@@ -5963,7 +5981,7 @@ function DispatchView({ token, profile, showToast }) {
       for (const orderId of ids) {
         const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
         for (const l of lines || []) {
-          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty); // restore deducted stock
+          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty, { type: "restore", userId: profile.id }); // restore deducted stock
           await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty); // re-reserve for this order
         }
         await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "rtd", dispatched_at: null } });
@@ -6060,7 +6078,7 @@ function DispatchView({ token, profile, showToast }) {
         for (const orderId of orderIds) {
           const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
           for (const l of lines) {
-            await deductStock(token, profile.warehouse_id, l.product_id, l.qty);
+            await deductStock(token, profile.warehouse_id, l.product_id, l.qty, { type: "dispatch", userId: profile.id });
             await adjustReserved(token, profile.warehouse_id, l.product_id, -l.qty);
           }
           await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
@@ -7809,8 +7827,10 @@ function PnaView({ token, profile, showToast }) {
     try {
       const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
       const pnaBin = pnaBinRows && pnaBinRows[0];
-      if (pnaBin) await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, pnaBin.id, -resolveTarget.qty);
-      await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, bin.id, resolveTarget.qty);
+      if (pnaBin) await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, pnaBin.id, -resolveTarget.qty, { type: "pna_resolve", userId: profile.id });
+
+      await addOnHand(token, profile.warehouse_id, resolveTarget.product_id, bin.id, resolveTarget.qty, { type: "pna_resolve", userId: profile.id });
+
       await sb(`/rest/v1/pna_records?id=eq.${resolveTarget.id}`, { method: "PATCH", token, body: { status: "transferred", resolved_bin_id: bin.id, resolved_by: profile.id, resolved_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pna_record", entity_id: resolveTarget.id, user_id: profile.id, action: "transferred_to_saleable", metadata: { bin: bin.code, qty: resolveTarget.qty } } });
       showToast(`✓ ${resolveTarget.qty} pcs saleable stock mein transfer ho gaye — Bin ${bin.code}`);
@@ -7824,7 +7844,8 @@ function PnaView({ token, profile, showToast }) {
     try {
       const pnaBinRows = await sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&code=eq.PNA-HOLD&select=*`, { token });
       const pnaBin = pnaBinRows && pnaBinRows[0];
-      if (pnaBin) await addOnHand(token, profile.warehouse_id, r.product_id, pnaBin.id, -r.qty);
+      if (pnaBin) await addOnHand(token, profile.warehouse_id, r.product_id, pnaBin.id, -r.qty, { type: "pna_resolve", userId: profile.id });
+
       const strNumber = `STR-PNA-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
       await sb(`/rest/v1/pna_records?id=eq.${r.id}`, { method: "PATCH", token, body: { status: "written_off", str_number: strNumber, resolved_by: profile.id, resolved_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pna_record", entity_id: r.id, user_id: profile.id, action: "written_off", metadata: { str_number: strNumber, qty: r.qty } } });
@@ -8533,21 +8554,24 @@ function exportCSV(filename, headers, rows) {
 
 /* ================= helpers ================= */
 // Add/subtract on-hand qty at a SPECIFIC bin (or the "unassigned" row when binId is null).
-async function addOnHand(token, warehouseId, productId, binId, qtyDelta) {
+// activity is optional { type, userId } — when passed, stamps last_activity_type/by/at on the
+// row so the Inventory Ledger can show who last touched a bin and with what kind of movement.
+async function addOnHand(token, warehouseId, productId, binId, qtyDelta, activity) {
   const filter = binId
     ? `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=eq.${binId}`
     : `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=is.null`;
   const existing = await sb(`/rest/v1/inventory?${filter}&select=*`, { token });
+  const stamp = activity ? { last_activity_type: activity.type, last_activity_by: activity.userId || null, last_activity_at: new Date().toISOString() } : {};
   if (existing && existing.length > 0) {
     const row = existing[0];
     const newQty = row.on_hand + qtyDelta;
     if (newQty <= 0) {
-      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: 0 } });
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: 0, ...stamp } });
     } else {
-      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: newQty } });
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: newQty, ...stamp } });
     }
   } else if (qtyDelta > 0) {
-    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, bin_id: binId, on_hand: qtyDelta } });
+    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, bin_id: binId, on_hand: qtyDelta, ...stamp } });
   }
 }
 // Adjust the reservation counter for a product (independent of any specific bin).
@@ -8591,14 +8615,15 @@ function allocateAcrossBins(summaryRows, qtyNeeded) {
   return allocations;
 }
 // Deducts qty from bins (largest bin first) when goods actually leave the warehouse (dispatch).
-async function deductStock(token, warehouseId, productId, qty) {
+async function deductStock(token, warehouseId, productId, qty, activity) {
   const rows = (await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*&order=on_hand.desc`, { token })) || [];
+  const stamp = activity ? { last_activity_type: activity.type, last_activity_by: activity.userId || null, last_activity_at: new Date().toISOString() } : {};
   let remaining = qty;
   for (const row of rows) {
     if (remaining <= 0) break;
     const take = Math.min(row.on_hand, remaining);
     if (take > 0) {
-      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: row.on_hand - take } });
+      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: row.on_hand - take, ...stamp } });
       remaining -= take;
     }
   }
@@ -9186,12 +9211,12 @@ function StockingOutboundView({ token, profile, showToast }) {
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>PUTAWAY COMPLETE — AVAILABLE FOR PICKING</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}>Completed</th></tr></thead>
+              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}>Put Away By</th><th style={S.th}>Completed</th></tr></thead>
               <tbody>
                 {queue.filter(q => q.status === "completed").slice(0, 15).map(q => (
-                  <tr key={q.id}><td style={S.td}>{q.product_name}</td><td style={S.td}>{q.qty}</td><td style={S.td}>{bins.find(b => b.id === q.bin_id)?.code || "—"}</td><td style={S.td}>{fmtTime(q.completed_at)}</td></tr>
+                  <tr key={q.id}><td style={S.td}>{q.product_name}</td><td style={S.td}>{q.qty}</td><td style={S.td}>{bins.find(b => b.id === q.bin_id)?.code || "—"}</td><td style={S.td}>{officerName(q.completed_by)}</td><td style={S.td}>{fmtTime(q.completed_at)}</td></tr>
                 ))}
-                {!queue.filter(q => q.status === "completed").length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Abhi koi putaway complete nahi hua" /></td></tr>}
+                {!queue.filter(q => q.status === "completed").length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi koi putaway complete nahi hua" /></td></tr>}
               </tbody>
             </table>
           </div>
