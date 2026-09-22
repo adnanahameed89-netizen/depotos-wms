@@ -354,6 +354,7 @@ function App() {
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkoutbound" && <StockingOutboundView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
@@ -524,7 +525,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
   const STOCKING_ITEMS = [
     { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
     { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" },
-    { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" }
+    { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" },
+    { id: "stkinventory", label: "Stocking Inventory", icon: "🧰" }
   ];
   const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
   const ecomExtras = warehouseType !== "stocking";
@@ -533,8 +535,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkinventory", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -8854,6 +8856,38 @@ function StockingReceivingView({ token, profile, showToast }) {
 
   const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
   const [rtvFilter, setRtvFilter] = useState("pending");
+  const [catalogueCount, setCatalogueCount] = useState(null);
+  const [catalogueUploading, setCatalogueUploading] = useState(false);
+
+  const uploadCatalogueFile = async (file) => {
+    setCatalogueUploading(true);
+    try {
+      const rows = await parseSheet(file);
+      const cleanNum = (v) => { const n = Number(String(v ?? "").replace(/,/g, "").trim()); return isNaN(n) ? null : n; };
+      const mapped = rows
+        .map(r => ({
+          department: String(r["Department"] ?? "").trim() || null,
+          division: String(r["Division"] ?? "").trim() || null,
+          group_name: String(r["Group"] ?? "").trim() || null,
+          category: String(r["Product Category"] ?? "").trim() || null,
+          sale_barcode: String(r["Product/Sale Barcode"] ?? "").trim() || null,
+          internal_barcode: String(r["Internal Barcode"] ?? "").trim(),
+          internal_reference: String(r["Internal Reference"] ?? "").trim() || null,
+          display_name: String(r["Display Name"] ?? "").trim() || null,
+          sales_price: cleanNum(r["Sales Price"]),
+          odoo_qty_on_hand: cleanNum(r["Quantity On Hand"]),
+          odoo_free_to_use_qty: cleanNum(r["Free To Use Quantity"])
+        }))
+        .filter(r => r.internal_barcode);
+      if (!mapped.length) { showToast("File mai koi valid row nahi mili — 'Internal Barcode' column check karein", "err"); setCatalogueUploading(false); return; }
+      for (let i = 0; i < mapped.length; i += 500) {
+        await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: mapped.slice(i, i + 500) });
+      }
+      setCatalogueCount(c => (c || 0) + mapped.length);
+      showToast(`✓ Catalogue update ho gaya — ${mapped.length} products upsert hue`);
+    } catch (e) { showToast("Catalogue upload fail: " + e.message, "err"); }
+    setCatalogueUploading(false);
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -8868,6 +8902,15 @@ function StockingReceivingView({ token, profile, showToast }) {
     setLoading(false);
   };
   useEffect(() => { if (whId) loadAll(); }, [whId]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/stk_products?select=id`, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact", Range: "0-0" } });
+        const range = res.headers.get("content-range");
+        setCatalogueCount(range ? parseInt(range.split("/")[1], 10) || 0 : 0);
+      } catch (e) { /* non-critical */ }
+    })();
+  }, []);
 
   const poByPo = (num) => pos.find(p => p.po_number === num.trim());
 
@@ -8908,6 +8951,13 @@ function StockingReceivingView({ token, profile, showToast }) {
       if (!lines.length) { showToast("File mai koi valid line nahi mili", "err"); setLoading(false); return; }
       for (const l of lines) {
         await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, body: { dc_id: dc.id, product_barcode: l.product_barcode, product_name: l.product_name, demand_qty: l.demand_qty } });
+      }
+      // Auto-seed the catalogue from whatever this transfer already tells us (barcode + name).
+      // ignore-duplicates so this NEVER overwrites a richer row that came from a full Catalogue
+      // upload — it only fills in products the catalogue doesn't know about yet.
+      const catalogueSeed = lines.filter(l => l.product_barcode).map(l => ({ internal_barcode: l.product_barcode, display_name: l.product_name }));
+      if (catalogueSeed.length) {
+        try { await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=ignore-duplicates,return=minimal", body: catalogueSeed }); } catch (e) { /* catalogue seed is best-effort */ }
       }
       await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "ready_for_inspection", odoo_reference: odooRef || null } });
       if (supplierFromFile || sourceChoice) {
@@ -9017,7 +9067,8 @@ function StockingReceivingView({ token, profile, showToast }) {
     { key: "import", label: `Odoo Import (${pendingImportDcs.length})` },
     { key: "inspection", label: `Inspection (${inspectionDcs.length})` },
     { key: "grn", label: `GRN (${completedDcs.length})` },
-    { key: "rtv", label: "RTV" }
+    { key: "rtv", label: "RTV" },
+    { key: "catalogue", label: "Catalogue" }
   ];
 
   return (
@@ -9194,6 +9245,25 @@ function StockingReceivingView({ token, profile, showToast }) {
               {!rtvFiltered.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Yahan kuch nahi" /></td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab === "catalogue" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Product Catalogue — Bulk Upload</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>
+            Odoo se product master export upload karein (columns: Department, Division, Group, Product Category, Product/Sale Barcode, Internal Barcode, Internal Reference, Display Name, Sales Price, Quantity On Hand, Free To Use Quantity). Match "Internal Barcode" pe hota hai — dobara upload karne se existing entries update ho jati hain, duplicate nahi banti.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+            <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+              {catalogueUploading ? "Uploading…" : "📤 Upload Catalogue Excel"}
+              <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={catalogueUploading} onChange={e => { const f = e.target.files[0]; if (f) uploadCatalogueFile(f); e.target.value = ""; }} />
+            </label>
+            <div style={{ color: "#6B6355", fontSize: 12 }}>Abhi catalogue mein <strong>{catalogueCount ?? "…"}</strong> products hain.</div>
+          </div>
+          <div style={{ fontSize: 11, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
+            NOTE: DC ki Odoo Import se bhi naye barcode/naam khud-ba-khud catalogue mein seed ho jate hain (agar wahan pehle se nahi hain) — lekin woh kabhi is bulk-upload ki rich detail (category, price waghera) ko overwrite nahi karte.
+          </div>
         </div>
       )}
     </div>
@@ -9396,6 +9466,609 @@ function StockingOutboundView({ token, profile, showToast }) {
               {!allocations.filter(a => a.status === "rtd").length && <tr><td style={S.td} colSpan={5}><EmptyNote text="RTD par abhi kuch nahi" /></td></tr>}
             </tbody>
           </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — INVENTORY ================= */
+// Mirrors the E-commerce Inventory tab (Ledger / Bin-wise / Cycle Count) but stays on
+// Stocking's own text-based product identity (barcode/name from the Odoo import + the
+// stk_products catalogue for department/name lookups) rather than the shared master
+// `products` table — consistent with the earlier decision to keep Stocking self-contained.
+// "System qty" for a count is a snapshot of stk_putaway_queue+adjustments at assignment time;
+// approved variances post as rows to stk_inventory_adjustments (never edited/deleted, so the
+// ledger is always a full replayable history).
+function StockingInventoryView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const isAdmin = profile.role === "admin";
+  const isWarehouseLead = profile.role === "warehouse_lead";
+  const canAssignCounts = isAdmin || isWarehouseLead;
+
+  const [tab, setTab] = useState("ledger");
+  const [queue, setQueue] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [catalogue, setCatalogue] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [binFilter, setBinFilter] = useState("");
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [q, adj, b, s, cat] = await Promise.all([
+        sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
+        sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&select=id,full_name,role`, { token }),
+        sb(`/rest/v1/stk_products?select=internal_barcode,display_name,department`, { token })
+      ]);
+      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setStaff(s || []); setCatalogue(cat || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const staffName = (id) => staff.find(s => s.id === id)?.full_name || "—";
+  const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
+  const catalogueFor = (barcode) => catalogue.find(c => c.internal_barcode === barcode);
+  const deptFor = (barcode) => catalogueFor(barcode)?.department || "—";
+  const nameFor = (barcode, fallbackName) => catalogueFor(barcode)?.display_name || fallbackName;
+
+  // Per product+bin on-hand = every completed putaway + every approved adjustment at that spot.
+  const binRows = useMemo(() => {
+    const grouped = {};
+    for (const q of queue) {
+      const key = `${q.product_barcode || q.product_name}|${q.bin_id}`;
+      if (!grouped[key]) grouped[key] = { product_barcode: q.product_barcode, product_name: q.product_name, bin_id: q.bin_id, on_hand: 0, last_by: null, last_at: null };
+      grouped[key].on_hand += Number(q.qty || 0);
+      if (!grouped[key].last_at || new Date(q.completed_at) > new Date(grouped[key].last_at)) { grouped[key].last_at = q.completed_at; grouped[key].last_by = q.completed_by; }
+    }
+    for (const a of adjustments) {
+      const key = `${a.product_barcode || a.product_name}|${a.bin_id}`;
+      if (!grouped[key]) grouped[key] = { product_barcode: a.product_barcode, product_name: a.product_name, bin_id: a.bin_id, on_hand: 0, last_by: null, last_at: null };
+      grouped[key].on_hand += Number(a.qty_delta || 0);
+      if (!grouped[key].last_at || new Date(a.created_at) > new Date(grouped[key].last_at)) { grouped[key].last_at = a.created_at; grouped[key].last_by = a.created_by; }
+    }
+    return Object.values(grouped).filter(r => r.on_hand > 0);
+  }, [queue, adjustments]);
+
+  // Product-level rollup across all bins, for the Ledger tab.
+  const ledgerRows = useMemo(() => {
+    const grouped = {};
+    for (const r of binRows) {
+      const key = r.product_barcode || r.product_name;
+      if (!grouped[key]) grouped[key] = { product_barcode: r.product_barcode, product_name: r.product_name, on_hand: 0, bin_count: 0, last_at: null };
+      grouped[key].on_hand += r.on_hand;
+      grouped[key].bin_count += 1;
+      if (!grouped[key].last_at || new Date(r.last_at) > new Date(grouped[key].last_at)) grouped[key].last_at = r.last_at;
+    }
+    return Object.values(grouped);
+  }, [binRows]);
+
+  const matchesSearch = (barcode, name, dept) => !search.trim() ||
+    (barcode || "").toLowerCase().includes(search.toLowerCase()) ||
+    (name || "").toLowerCase().includes(search.toLowerCase()) ||
+    (dept || "").toLowerCase().includes(search.toLowerCase());
+
+  const filteredLedger = ledgerRows.filter(r => matchesSearch(r.product_barcode, nameFor(r.product_barcode, r.product_name), deptFor(r.product_barcode)));
+  const filteredBinRows = binRows
+    .filter(r => matchesSearch(r.product_barcode, nameFor(r.product_barcode, r.product_name), deptFor(r.product_barcode)))
+    .filter(r => !binFilter || r.bin_id === binFilter)
+    .sort((a, b) => binCode(a.bin_id).localeCompare(binCode(b.bin_id)));
+
+  const distinctSkus = new Set(binRows.map(r => r.product_barcode || r.product_name)).size;
+  const distinctBins = new Set(binRows.map(r => r.bin_id)).size;
+  const totalQty = binRows.reduce((s, r) => s + r.on_hand, 0);
+
+  /* ---------- Cycle Count (mirrors the E-commerce workflow, bin-scoped only) ---------- */
+  const [cycleCounts, setCycleCounts] = useState([]);
+  const [activeCount, setActiveCount] = useState(null);
+  const [countLines, setCountLines] = useState([]);
+  const [childCounts, setChildCounts] = useState([]); // for a "complete warehouse" parent audit
+  const [newScopeType, setNewScopeType] = useState("bin");
+  const [newBinCode, setNewBinCode] = useState("");
+  const [newAssignee, setNewAssignee] = useState("");
+  const [binAssignments, setBinAssignments] = useState({}); // bin_id -> staff id, for complete-warehouse
+  const [startingCount, setStartingCount] = useState(false);
+  const [verifyingCount, setVerifyingCount] = useState(false);
+  const [approvingCount, setApprovingCount] = useState(false);
+  const [rejectingCount, setRejectingCount] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+
+  const binsWithStock = useMemo(() => [...new Set(binRows.map(r => r.bin_id))].sort((a, b) => binCode(a).localeCompare(binCode(b))), [binRows]);
+
+  const loadCycleCounts = async () => {
+    if (!whId) return;
+    const cc = await sb(`/rest/v1/stk_cycle_counts?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token });
+    setCycleCounts(cc || []);
+  };
+  useEffect(() => { if (tab === "cyclecount") loadCycleCounts(); }, [tab, whId]);
+
+  const openCycleCount = async (cc) => {
+    setActiveCount(cc);
+    if (cc.scope_type === "all" && !cc.parent_audit_id) {
+      const kids = await sb(`/rest/v1/stk_cycle_counts?parent_audit_id=eq.${cc.id}&select=*`, { token });
+      setChildCounts(kids || []); setCountLines([]);
+    } else {
+      const lines = await sb(`/rest/v1/stk_cycle_count_lines?cycle_count_id=eq.${cc.id}&select=*`, { token });
+      setCountLines(lines || []); setChildCounts([]);
+    }
+  };
+
+  const createBinCountWithLines = async (binId, assignedTo, parentId) => {
+    const scoped = binRows.filter(r => r.bin_id === binId);
+    if (!scoped.length) return null;
+    const cc = await sb(`/rest/v1/stk_cycle_counts`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, scope_type: "bin", bin_id: binId, status: "counting", created_by: profile.id, assigned_to: assignedTo || null, parent_audit_id: parentId || null } });
+    const lineBodies = scoped.map(r => ({ cycle_count_id: cc[0].id, product_barcode: r.product_barcode, product_name: r.product_name, system_qty: r.on_hand }));
+    for (let i = 0; i < lineBodies.length; i += 100) {
+      await sb(`/rest/v1/stk_cycle_count_lines`, { method: "POST", token, body: lineBodies.slice(i, i + 100) });
+    }
+    return cc[0];
+  };
+
+  const startCycleCount = async () => {
+    setStartingCount(true);
+    try {
+      if (newScopeType === "all") {
+        const assignedBins = binsWithStock.filter(id => binAssignments[id]);
+        if (!assignedBins.length) { showToast("Kam se kam ek bin k liye staff assign karein", "err"); setStartingCount(false); return; }
+        if (!window.confirm(`Poori warehouse audit shuru karein? ${assignedBins.length} bin(s) assign ho rahe hain.`)) { setStartingCount(false); return; }
+        const parent = await sb(`/rest/v1/stk_cycle_counts`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, scope_type: "all", bin_id: null, status: "counting", created_by: profile.id } });
+        let created = 0;
+        for (const binId of assignedBins) {
+          const kid = await createBinCountWithLines(binId, binAssignments[binId], parent[0].id);
+          if (kid) created++;
+        }
+        showToast(`✅ Complete Warehouse Audit shuru — ${created} bin(s) assign ho gaye`);
+        setBinAssignments({});
+        await loadCycleCounts();
+        openCycleCount(parent[0]);
+      } else {
+        if (!newBinCode.trim() || !newAssignee) { showToast("Bin code aur staff select karein", "err"); setStartingCount(false); return; }
+        const bin = bins.find(b => (b.code || "").toLowerCase() === newBinCode.trim().toLowerCase());
+        if (!bin) { showToast(`Bin "${newBinCode}" nahi mila — list se select karein`, "err"); setStartingCount(false); return; }
+        const cc = await createBinCountWithLines(bin.id, newAssignee, null);
+        if (!cc) { showToast("Is bin mein koi stock nahi hai", "err"); setStartingCount(false); return; }
+        showToast(`✅ Cycle count assign ho gayi ${staff.find(s => s.id === newAssignee)?.full_name || ""} ko`);
+        setNewBinCode(""); setNewAssignee("");
+        await loadCycleCounts();
+        openCycleCount(cc);
+      }
+    } catch (e) { showToast("Start failed — dobara try karein", "err"); }
+    setStartingCount(false);
+  };
+
+  const saveCountedQty = async (lineId, qty) => {
+    const q = qty === "" ? null : Number(qty);
+    setCountLines(prev => prev.map(l => l.id === lineId ? { ...l, counted_qty: q } : l));
+    await sb(`/rest/v1/stk_cycle_count_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { counted_qty: q, counted_by: profile.id, counted_at: new Date().toISOString() } });
+  };
+  const saveVarianceNote = async (lineId, note) => {
+    setCountLines(prev => prev.map(l => l.id === lineId ? { ...l, variance_note: note } : l));
+    await sb(`/rest/v1/stk_cycle_count_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { variance_note: note || null } });
+  };
+
+  const myCountMode = (profile.putaway_mode || "bulk") === "piece" ? "piece" : "bulk";
+  const isMyBlindCount = !!(activeCount && activeCount.status === "counting" && profile.id === activeCount.assigned_to && !canAssignCounts);
+  const [ccScanInput, setCcScanInput] = useState("");
+  const [ccMatchedLine, setCcMatchedLine] = useState(null);
+  const [ccBulkQty, setCcBulkQty] = useState("");
+  const [ccUnknownBarcode, setCcUnknownBarcode] = useState(null); // { barcode, name }
+
+  const ccScanProduct = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : ccScanInput).trim();
+    setCcScanInput("");
+    if (!code) return;
+    const c = cleanCode(code);
+    const line = countLines.find(l => cleanCode(l.product_barcode || "") === c);
+    if (!line) {
+      const cat = catalogue.find(x => cleanCode(x.internal_barcode || "") === c);
+      setCcUnknownBarcode({ barcode: code, name: cat?.display_name || code });
+      showToast(`⚠ ${code} is bin ki expected list mein nahi — Excess Item add karein`, "err");
+      return;
+    }
+    if (myCountMode === "piece") {
+      const newQty = (line.counted_qty || 0) + 1;
+      saveCountedQty(line.id, newQty);
+      showToast(`✓ 1 pc counted — ${line.product_barcode} (total ${newQty})`);
+    } else {
+      setCcMatchedLine(line);
+      setCcBulkQty(String(line.counted_qty ?? ""));
+      showToast(`✓ Matched: ${line.product_barcode} — qty likh kar confirm karein`);
+    }
+  };
+
+  const ccConfirmBulk = () => {
+    if (!ccMatchedLine) return;
+    const q = ccBulkQty === "" ? NaN : Number(ccBulkQty);
+    if (isNaN(q) || q < 0) { showToast("Valid qty enter karein", "err"); return; }
+    saveCountedQty(ccMatchedLine.id, q);
+    setCcMatchedLine(null); setCcBulkQty("");
+  };
+
+  const ccAddExcessItem = async () => {
+    if (!ccUnknownBarcode) return;
+    try {
+      const isPiece = myCountMode === "piece";
+      const created = await sb(`/rest/v1/stk_cycle_count_lines`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { cycle_count_id: activeCount.id, product_barcode: ccUnknownBarcode.barcode, product_name: ccUnknownBarcode.name, system_qty: 0, is_excess: true, counted_qty: isPiece ? 1 : null, counted_by: profile.id, counted_at: new Date().toISOString() }
+      });
+      setCountLines(cl => [...cl, created[0]]);
+      setCcUnknownBarcode(null);
+      if (isPiece) { showToast(`✓ Excess item add ho gaya — ${ccUnknownBarcode.barcode} (1 pc counted)`); }
+      else { setCcMatchedLine(created[0]); setCcBulkQty(""); showToast(`✓ Excess item add ho gaya — ab total qty likhein`); }
+    } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
+  const submitForReview = async () => {
+    const uncounted = countLines.filter(l => l.counted_qty === null || l.counted_qty === undefined);
+    if (uncounted.length > 0 && !window.confirm(`${uncounted.length} line(s) abhi count nahi hui — sirf jo count ho chuki hain unhi ka review submit karein?`)) return;
+    await sb(`/rest/v1/stk_cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "pending_verification" } });
+    showToast("✅ Warehouse Lead ki verification ke liye submit ho gaya");
+    await loadCycleCounts();
+    openCycleCount({ ...activeCount, status: "pending_verification" });
+  };
+
+  const verifyAndForward = async () => {
+    setVerifyingCount(true);
+    try {
+      await sb(`/rest/v1/stk_cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "pending_admin_approval", verified_by: profile.id, verified_at: new Date().toISOString() } });
+      showToast("✅ Verify ho gaya — Admin ko forward kar diya");
+      await loadCycleCounts();
+      openCycleCount({ ...activeCount, status: "pending_admin_approval" });
+    } catch (e) { showToast("Verify failed", "err"); }
+    setVerifyingCount(false);
+  };
+
+  const rejectToLead = async () => {
+    if (!isAdmin) return;
+    setRejectingCount(true);
+    try {
+      await sb(`/rest/v1/stk_cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "pending_verification", admin_reject_reason: rejectReason.trim() || null, rejected_by: profile.id, rejected_at: new Date().toISOString(), verified_by: null, verified_at: null } });
+      showToast("↩ Warehouse Lead ko wapas bhej diya");
+      setRejectReason("");
+      await loadCycleCounts();
+      openCycleCount({ ...activeCount, status: "pending_verification" });
+    } catch (e) { showToast("Reject failed", "err"); }
+    setRejectingCount(false);
+  };
+
+  const approveAndAdjust = async () => {
+    if (!isAdmin) { showToast("Sirf Admin hi final adjustment approve kar sakta hai", "err"); return; }
+    setApprovingCount(true);
+    try {
+      const toAdjust = countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty);
+      for (const l of toAdjust) {
+        const delta = l.counted_qty - l.system_qty;
+        await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: l.product_barcode, product_name: l.product_name, bin_id: activeCount.bin_id, qty_delta: delta, reason: l.variance_note || null, source: "cycle_count", created_by: profile.id } });
+        await sb(`/rest/v1/stk_cycle_count_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { adjusted: true } });
+      }
+      await sb(`/rest/v1/stk_cycle_counts?id=eq.${activeCount.id}`, { method: "PATCH", token, body: { status: "approved", approved_by: profile.id, approved_at: new Date().toISOString() } });
+      showToast(`✅ ${toAdjust.length} adjustment(s) apply ho gayi`);
+      setActiveCount(null); setCountLines([]);
+      await loadCycleCounts(); await load();
+    } catch (e) { showToast("Approve failed — dobara try karein", "err"); }
+    setApprovingCount(false);
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Inventory" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={() => { setTab("ledger"); setActiveCount(null); }} style={stkPill(tab === "ledger")}>📒 Inventory Ledger</button>
+        <button onClick={() => { setTab("bins"); setActiveCount(null); }} style={stkPill(tab === "bins")}>🗺 Bin-wise Inventory</button>
+        <button onClick={() => setTab("cyclecount")} style={stkPill(tab === "cyclecount")}>🔢 Cycle Count</button>
+      </div>
+
+      {(tab === "ledger" || tab === "bins") && (
+        <>
+          <div style={S.statGrid}>
+            {[["Distinct SKUs", distinctSkus], ["Bins in Use", distinctBins], ["Total On-Hand Qty", totalQty]].map(([label, val]) => (
+              <div key={label} style={S.statCard}>
+                <div style={{ fontSize: 10, color: "#8A8272", letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{val}</div>
+              </div>
+            ))}
+          </div>
+          <input style={{ ...S.input, maxWidth: 340, marginBottom: 14 }} placeholder="🔍 Search barcode, product name, or department…" value={search} onChange={e => setSearch(e.target.value)} />
+        </>
+      )}
+
+      {tab === "ledger" && (
+        <div style={S.panel}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Department</th><th style={S.th}>Total On Hand</th><th style={S.th}>Bins</th><th style={S.th}>Last Activity</th></tr></thead>
+            <tbody>
+              {filteredLedger.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.product_barcode || "—"}</td>
+                  <td style={S.td}>{nameFor(r.product_barcode, r.product_name)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{deptFor(r.product_barcode)}</td>
+                  <td style={{ ...S.td, fontWeight: 600 }}>{r.on_hand}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.bin_count}</td>
+                  <td style={S.td}>{fmtTime(r.last_at)}</td>
+                </tr>
+              ))}
+              {!filteredLedger.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="No inventory recorded yet." /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "bins" && (
+        <div style={S.panel}>
+          <div style={{ marginBottom: 14 }}>
+            <select style={{ ...S.input, minWidth: 140 }} value={binFilter} onChange={e => setBinFilter(e.target.value)}>
+              <option value="">All bins</option>
+              {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+            </select>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Department</th><th style={S.th}>Bin</th><th style={S.th}>On Hand</th><th style={S.th}>Last Activity By</th><th style={S.th}>Last Activity At</th></tr></thead>
+            <tbody>
+              {filteredBinRows.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.product_barcode || "—"}</td>
+                  <td style={S.td}>{nameFor(r.product_barcode, r.product_name)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{deptFor(r.product_barcode)}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{binCode(r.bin_id)}</td>
+                  <td style={{ ...S.td, fontWeight: 600 }}>{r.on_hand}</td>
+                  <td style={S.td}>{staffName(r.last_by)}</td>
+                  <td style={S.td}>{fmtTime(r.last_at)}</td>
+                </tr>
+              ))}
+              {!filteredBinRows.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Koi stock nahi mila" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "cyclecount" && !activeCount && (
+        <>
+          {canAssignCounts && (
+            <div style={S.panel}>
+              <div style={S.panelTitle}>Naya Cycle Count Assign Karein</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                <select style={{ ...S.input, minWidth: 200 }} value={newScopeType} onChange={e => { setNewScopeType(e.target.value); setNewBinCode(""); setNewAssignee(""); setBinAssignments({}); }}>
+                  <option value="bin">Ek Bin</option>
+                  <option value="all">Poori Warehouse (Complete Audit)</option>
+                </select>
+                {newScopeType === "bin" && (
+                  <>
+                    <input list="stkBinCodesDatalist" style={{ ...S.input, minWidth: 180 }} placeholder="Bin code type karein (jaise A-01-03)" value={newBinCode} onChange={e => setNewBinCode(e.target.value)} />
+                    <datalist id="stkBinCodesDatalist">
+                      {binsWithStock.map(id => <option key={id} value={binCode(id)} />)}
+                    </datalist>
+                    <select style={{ ...S.input, minWidth: 180 }} value={newAssignee} onChange={e => setNewAssignee(e.target.value)}>
+                      <option value="">Assign to staff…</option>
+                      {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+                    </select>
+                    <button style={S.primaryBtnSm} onClick={startCycleCount} disabled={startingCount}>{startingCount ? "Assign ho raha…" : "▶ Assign & Shuru Karein"}</button>
+                  </>
+                )}
+              </div>
+              {newScopeType === "all" && (
+                <>
+                  <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>Har bin (jismein stock hai) k liye staff assign karein — jitne bins assign karenge utni hi child counts ban jayengi.</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 12 }}>
+                    <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Assign to</th></tr></thead>
+                    <tbody>
+                      {binsWithStock.map(id => (
+                        <tr key={id}>
+                          <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{binCode(id)}</td>
+                          <td style={S.td}>
+                            <select style={{ ...S.input, minWidth: 180 }} value={binAssignments[id] || ""} onChange={e => setBinAssignments(a => ({ ...a, [id]: e.target.value }))}>
+                              <option value="">— skip —</option>
+                              {staff.map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                      {!binsWithStock.length && <tr><td colSpan={2}><EmptyNote text="Kisi bhi bin mein stock nahi hai" /></td></tr>}
+                    </tbody>
+                  </table>
+                  <button style={S.primaryBtnSm} onClick={startCycleCount} disabled={startingCount}>{startingCount ? "Shuru ho raha…" : "▶ Complete Warehouse Audit Shuru Karein"}</button>
+                </>
+              )}
+            </div>
+          )}
+          <div style={S.panel}>
+            <div style={S.panelTitle}>Cycle Counts</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Scope</th><th style={S.th}>Assigned To</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
+              <tbody>
+                {cycleCounts.filter(cc => !cc.parent_audit_id).map(cc => (
+                  <tr key={cc.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{cc.scope_type === "all" ? "🏭 Complete Warehouse" : binCode(cc.bin_id)}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{cc.scope_type === "all" ? "—" : staffName(cc.assigned_to)}</td>
+                    <td style={S.td}>
+                      <span style={{ ...S.badgeSm, color: cc.status === "approved" ? "#4CAF7D" : cc.status === "pending_admin_approval" ? "#F5A623" : cc.status === "pending_verification" ? "#5B9EE8" : "#B084F5", borderColor: cc.status === "approved" ? "#4CAF7D" : cc.status === "pending_admin_approval" ? "#F5A623" : cc.status === "pending_verification" ? "#5B9EE8" : "#B084F5" }}>
+                        {cc.status === "counting" ? "Counting" : cc.status === "pending_verification" ? "Pending Lead Verification" : cc.status === "pending_admin_approval" ? "Pending Admin Approval" : "Approved"}
+                      </span>
+                    </td>
+                    <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => openCycleCount(cc)}>Open</button></td>
+                  </tr>
+                ))}
+                {!cycleCounts.filter(cc => !cc.parent_audit_id).length && <tr><td colSpan={4}><EmptyNote text="Abhi tak koi cycle count nahi hui." /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {tab === "cyclecount" && activeCount && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>
+              {activeCount.scope_type === "all" ? "🏭 Complete Warehouse Audit" : `Bin — ${binCode(activeCount.bin_id)}`}
+              {activeCount.assigned_to && <span style={{ color: "#6B6355", fontWeight: 400, fontSize: 13 }}> — Assigned to {staffName(activeCount.assigned_to)}</span>}
+            </div>
+            <button style={S.secondaryBtnSm} onClick={() => { setActiveCount(null); setCountLines([]); setChildCounts([]); }}>← Back to list</button>
+          </div>
+
+          {childCounts.length > 0 ? (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Assigned To</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
+              <tbody>
+                {childCounts.map(kid => (
+                  <tr key={kid.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{binCode(kid.bin_id)}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{staffName(kid.assigned_to)}</td>
+                    <td style={S.td}>
+                      <span style={{ ...S.badgeSm, color: kid.status === "approved" ? "#4CAF7D" : kid.status === "pending_admin_approval" ? "#F5A623" : kid.status === "pending_verification" ? "#5B9EE8" : "#B084F5", borderColor: kid.status === "approved" ? "#4CAF7D" : kid.status === "pending_admin_approval" ? "#F5A623" : kid.status === "pending_verification" ? "#5B9EE8" : "#B084F5" }}>
+                        {kid.status === "counting" ? "Counting" : kid.status === "pending_verification" ? "Pending Verification" : kid.status === "pending_admin_approval" ? "Pending Admin" : "Approved"}
+                      </span>
+                    </td>
+                    <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => openCycleCount(kid)}>Open</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+          <>
+          {isMyBlindCount ? (
+            <>
+              <div style={{ ...S.panel, marginTop: 0 }}>
+                <div style={S.panelTitle}>Scan Product — {myCountMode === "piece" ? "Piece-to-Piece (har physical unit scan karein)" : "Bulk (scan kar ke qty likhein)"}</div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode, then Enter"
+                    value={ccScanInput} onChange={e => setCcScanInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && ccScanProduct()} />
+                  <CameraScanButton onScan={(text) => ccScanProduct(text)} />
+                  <button style={S.primaryBtnSm} onClick={() => ccScanProduct()}>Scan</button>
+                </div>
+                {myCountMode === "bulk" && ccMatchedLine && (
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #EFE8D8" }}>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{ccMatchedLine.product_barcode}</div>
+                    <div style={{ color: "#2B2620", fontSize: 14, marginBottom: 8 }}>{nameFor(ccMatchedLine.product_barcode, ccMatchedLine.product_name)}</div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input type="number" min={0} autoFocus style={{ ...S.input, maxWidth: 140 }} value={ccBulkQty} onChange={e => setCcBulkQty(e.target.value)} onKeyDown={e => e.key === "Enter" && ccConfirmBulk()} placeholder="Counted qty" />
+                      <button style={S.primaryBtnSm} onClick={ccConfirmBulk}>✓ Confirm</button>
+                      <button style={S.secondaryBtnSm} onClick={() => { setCcMatchedLine(null); setCcBulkQty(""); }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+                {ccUnknownBarcode && (
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #F5A623", background: "#FFF9EE" }}>
+                    <div style={{ color: "#E5484D", fontWeight: 600, fontSize: 12, marginBottom: 6 }}>⚠ EXCESS — is bin ki expected list mein nahi thi</div>
+                    <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{ccUnknownBarcode.barcode}</div>
+                    <div style={{ color: "#2B2620", fontSize: 14, marginBottom: 8 }}>{ccUnknownBarcode.name}</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={S.primaryBtnSm} onClick={ccAddExcessItem}>+ Excess Item Add Karein</button>
+                      <button style={S.secondaryBtnSm} onClick={() => setCcUnknownBarcode(null)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={S.panel}>
+                <div style={S.panelTitle}>Progress — {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined).length} / {countLines.length} counted</div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th></tr></thead>
+                  <tbody>
+                    {countLines.map(l => {
+                      const done = l.counted_qty !== null && l.counted_qty !== undefined;
+                      return (
+                        <tr key={l.id}>
+                          <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{l.product_barcode || "—"}</td>
+                          <td style={S.td}>{nameFor(l.product_barcode, l.product_name)}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
+                          <td style={{ ...S.td, color: done ? "#4CAF7D" : "#8A8272" }}>{done ? `✓ Counted — ${l.counted_qty}` : "Pending"}</td>
+                        </tr>
+                      );
+                    })}
+                    {!countLines.length && <tr><td colSpan={3}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
+                  </tbody>
+                </table>
+                {countLines.length > 0 && countLines.every(l => l.counted_qty !== null && l.counted_qty !== undefined) ? (
+                  <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitForReview}>✓ Submit for Warehouse Lead Verification</button>
+                ) : (
+                  <div style={{ color: "#8A8272", fontSize: 12, marginTop: 14 }}>Sab lines count hone k baad hi submit hoga.</div>
+                )}
+              </div>
+            </>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>System Qty</th><th style={S.th}>Counted Qty</th><th style={S.th}>Variance</th><th style={S.th}>Comment</th></tr></thead>
+              <tbody>
+                {countLines.map(l => {
+                  const variance = l.counted_qty !== null && l.counted_qty !== undefined ? l.counted_qty - l.system_qty : null;
+                  const canEdit = (activeCount.status === "counting" && profile.id === activeCount.assigned_to) || (canAssignCounts && ["counting", "pending_verification"].includes(activeCount.status));
+                  const canComment = canAssignCounts && ["pending_verification", "pending_admin_approval"].includes(activeCount.status);
+                  return (
+                    <tr key={l.id}>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{l.product_barcode || "—"}</td>
+                      <td style={S.td}>{nameFor(l.product_barcode, l.product_name)}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
+                      <td style={S.td}>{l.system_qty}</td>
+                      <td style={S.td}>
+                        {canEdit ? (
+                          <input type="number" min={0} style={{ ...S.input, width: 90, padding: "4px 8px" }} defaultValue={l.counted_qty ?? ""} onBlur={e => saveCountedQty(l.id, e.target.value)} />
+                        ) : (l.counted_qty ?? "—")}
+                      </td>
+                      <td style={{ ...S.td, color: variance === null ? "#8A8272" : variance === 0 ? "#4CAF7D" : "#E5484D", fontWeight: 600 }}>
+                        {variance === null ? "—" : variance > 0 ? `+${variance}` : variance}
+                      </td>
+                      <td style={S.td}>
+                        {variance !== null && variance !== 0 ? (
+                          canComment ? (
+                            <input style={{ ...S.input, width: 180, padding: "4px 8px", fontSize: 12 }} placeholder="Wajah likhein…" defaultValue={l.variance_note || ""} onBlur={e => saveVarianceNote(l.id, e.target.value)} />
+                          ) : (<span style={{ color: "#6B6355", fontSize: 12 }}>{l.variance_note || "—"}</span>)
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+
+          {!isMyBlindCount && activeCount.status === "counting" && (profile.id === activeCount.assigned_to || canAssignCounts) && (
+            <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitForReview}>✓ Submit for Warehouse Lead Verification</button>
+          )}
+
+          {activeCount.status === "pending_verification" && isWarehouseLead && (
+            <div style={{ marginTop: 14 }}>
+              {activeCount.admin_reject_reason && (
+                <div style={{ background: "#FFF3F3", border: "1px solid #E5484D", borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12, color: "#B0362E" }}>
+                  ↩ Admin ne wapas bheja hai — <strong>{activeCount.admin_reject_reason}</strong>. Qty/comments check kar ke dobara forward karein.
+                </div>
+              )}
+              <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>
+                {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty).length} line(s) mein variance hai. Verify kar ke Admin ko forward karein.
+              </div>
+              <button style={S.primaryBtnSm} disabled={verifyingCount} onClick={verifyAndForward}>{verifyingCount ? "Forward ho raha…" : "✓ Verify & Forward to Admin"}</button>
+            </div>
+          )}
+          {activeCount.status === "pending_verification" && !isWarehouseLead && (
+            <div style={{ color: "#8A8272", fontSize: 12, marginTop: 14 }}>⏳ Warehouse Lead ki verification ka intezar hai.</div>
+          )}
+
+          {activeCount.status === "pending_admin_approval" && isAdmin && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>Warehouse Lead ne verify kar diya hai ({fmtTime(activeCount.verified_at)}).</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <button style={S.primaryBtnSm} disabled={approvingCount} onClick={approveAndAdjust}>{approvingCount ? "Adjust ho raha…" : "✅ Approve & Adjust Inventory (Final)"}</button>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input style={{ ...S.input, flex: 1, minWidth: 200 }} placeholder="Reject reason (Lead ko wapas bhejne ki wajah)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+                <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} disabled={rejectingCount} onClick={rejectToLead}>{rejectingCount ? "Bhej raha…" : "↩ Reject to Lead"}</button>
+              </div>
+            </div>
+          )}
+          {activeCount.status === "pending_admin_approval" && !isAdmin && (
+            <div style={{ color: "#8A8272", fontSize: 12, marginTop: 14 }}>⏳ Lead ne verify kar diya hai — ab Admin ki final approval ka intezar hai.</div>
+          )}
+          {activeCount.status === "approved" && (
+            <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 14 }}>✅ Approved aur inventory adjust ho chuki hai — {fmtTime(activeCount.approved_at)}</div>
+          )}
+          </>
+          )}
         </div>
       )}
     </div>
