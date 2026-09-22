@@ -146,32 +146,38 @@ async function mergePdfsToUrl(base64Array) {
 }
 
 // M&P's label API returns ONE full-size page per tracking number (unlike PostEx, whose bulk
-// endpoint already bundles several CNs onto one page). Printed as-is at A4 that wastes a whole
-// sheet per parcel, so this stacks up to 3 labels per A4 page — same layout M&P's own portal
-// prints — scaling each label down to fit its slot while keeping its aspect ratio.
-async function composeMnpGridPdf(base64Array, perPage = 3) {
+// endpoint already bundles several CNs onto one page, tightly packed). Printed as-is at A4 that
+// wastes a whole sheet per parcel. Fixed-size 1/3-page slots left huge gaps around each label
+// because M&P's label isn't shaped to match an equal-thirds slot — so instead this scales each
+// label to the FULL page width (keeping its real aspect ratio, same as PostEx's own layout does)
+// and stacks them back-to-back with just a small gap, starting a new page only when the next
+// label would no longer fit. However many actually fit per page falls out naturally from the
+// label's real proportions — no wasted whitespace, no guessed page-count.
+async function composeMnpGridPdf(base64Array) {
   const { PDFDocument } = PDFLib;
   const out = await PDFDocument.create();
   const PAGE_W = 595.28, PAGE_H = 841.89; // A4 portrait, points
   const MARGIN = 12, GAP = 8;
-  const slotW = PAGE_W - 2 * MARGIN;
-  const slotH = (PAGE_H - 2 * MARGIN - (perPage - 1) * GAP) / perPage;
+  const contentW = PAGE_W - 2 * MARGIN;
+  let page = null;
+  let cursorY = 0; // distance already used from the top of the current page
 
-  for (let i = 0; i < base64Array.length; i += perPage) {
-    const chunk = base64Array.slice(i, i + perPage);
-    const page = out.addPage([PAGE_W, PAGE_H]);
-    for (let row = 0; row < chunk.length; row++) {
-      try {
-        const bytes = Uint8Array.from(atob(chunk[row]), c => c.charCodeAt(0));
-        const [embedded] = await out.embedPdf(bytes, [0]);
-        const scale = Math.min(slotW / embedded.width, slotH / embedded.height);
-        const drawW = embedded.width * scale, drawH = embedded.height * scale;
-        const slotTopY = PAGE_H - MARGIN - row * (slotH + GAP);
-        const x = MARGIN + (slotW - drawW) / 2;
-        const y = (slotTopY - slotH) + (slotH - drawH) / 2;
-        page.drawPage(embedded, { x, y, width: drawW, height: drawH });
-      } catch (e) { /* skip a single corrupt/unreadable label rather than failing the whole page */ }
-    }
+  for (const b64 of base64Array) {
+    try {
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const [embedded] = await out.embedPdf(bytes, [0]);
+      const scale = contentW / embedded.width;
+      const drawW = contentW, drawH = embedded.height * scale;
+      if (!page || cursorY + drawH > PAGE_H - MARGIN) {
+        page = out.addPage([PAGE_W, PAGE_H]);
+        cursorY = MARGIN;
+      } else {
+        cursorY += GAP;
+      }
+      const y = PAGE_H - cursorY - drawH;
+      page.drawPage(embedded, { x: MARGIN, y, width: drawW, height: drawH });
+      cursorY += drawH;
+    } catch (e) { /* skip a single corrupt/unreadable label rather than failing the whole batch */ }
   }
   const bytes = await out.save();
   const blob = new Blob([bytes], { type: "application/pdf" });
