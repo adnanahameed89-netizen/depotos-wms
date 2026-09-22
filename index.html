@@ -3934,8 +3934,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await composeLabelsNPerPage(batches, 3);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3 per page)`, url: mergedUrl }]);
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -3978,8 +3978,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await composeLabelsNPerPage(batches, 3);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3 per page)`, url: mergedUrl }]);
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
