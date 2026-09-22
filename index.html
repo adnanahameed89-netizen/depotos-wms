@@ -3378,6 +3378,30 @@ function InventoryView({ token, profile, showToast }) {
     setVerifyingCount(false);
   };
 
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectingCount, setRejectingCount] = useState(false);
+  const rejectToLead = async () => {
+    if (!isAdmin) return;
+    setRejectingCount(true);
+    try {
+      await sb(`/rest/v1/cycle_counts?id=eq.${activeCount.id}`, {
+        method: "PATCH", token,
+        body: { status: "pending_verification", admin_reject_reason: rejectReason.trim() || null, rejected_by: profile.id, rejected_at: new Date().toISOString(), verified_by: null, verified_at: null }
+      });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "cycle_count", entity_id: activeCount.id, user_id: profile.id, action: "rejected_to_lead", metadata: { reason: rejectReason.trim() || null } } });
+      showToast("↩ Warehouse Lead ko wapas bhej diya — reason record ho gayi");
+      setRejectReason("");
+      await loadCycleCounts();
+      openCycleCount({ ...activeCount, status: "pending_verification" });
+    } catch (e) { showToast("Reject failed", "err"); }
+    setRejectingCount(false);
+  };
+
+  const saveVarianceNote = async (lineId, note) => {
+    setCountLines(prev => prev.map(l => l.id === lineId ? { ...l, variance_note: note } : l));
+    await sb(`/rest/v1/cycle_count_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { variance_note: note || null } });
+  };
+
   const approveAndAdjust = async () => {
     if (!isAdmin) { showToast("Sirf Admin hi final adjustment approve kar sakta hai", "err"); return; }
     setApprovingCount(true);
@@ -3941,16 +3965,17 @@ function InventoryView({ token, profile, showToast }) {
                     </>
                   ) : (
                   <table>
-                    <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>System Qty</th><th style={S.th}>Counted Qty</th><th style={S.th}>Variance</th></tr></thead>
+                    <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>System Qty</th><th style={S.th}>Counted Qty</th><th style={S.th}>Variance</th><th style={S.th}>Comment</th></tr></thead>
                     <tbody>
                       {countLines.map(l => {
                         const p = products[l.product_id];
                         const variance = l.counted_qty !== null && l.counted_qty !== undefined ? l.counted_qty - l.system_qty : null;
-                        const canEdit = activeCount.status === "counting" && (profile.id === activeCount.assigned_to || canAssignCounts);
+                        const canEdit = (activeCount.status === "counting" && profile.id === activeCount.assigned_to) || (canAssignCounts && ["counting", "pending_verification"].includes(activeCount.status));
+                        const canComment = canAssignCounts && ["pending_verification", "pending_admin_approval"].includes(activeCount.status);
                         return (
                           <tr key={l.id}>
                             <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
-                            <td style={S.td}>{p?.name || "—"}</td>
+                            <td style={S.td}>{p?.name || "—"}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
                             <td style={{ ...S.td, color: "#6B6355" }}>{bins[l.bin_id]?.code || "—"}</td>
                             <td style={S.td}>{l.system_qty}</td>
                             <td style={S.td}>
@@ -3960,6 +3985,15 @@ function InventoryView({ token, profile, showToast }) {
                             </td>
                             <td style={{ ...S.td, color: variance === null ? "#8A8272" : variance === 0 ? "#4CAF7D" : "#E5484D", fontWeight: 600 }}>
                               {variance === null ? "—" : variance > 0 ? `+${variance}` : variance}
+                            </td>
+                            <td style={S.td}>
+                              {variance !== null && variance !== 0 ? (
+                                canComment ? (
+                                  <input style={{ ...S.input, width: 180, padding: "4px 8px", fontSize: 12 }} placeholder="Wajah likhein…" defaultValue={l.variance_note || ""} onBlur={e => saveVarianceNote(l.id, e.target.value)} />
+                                ) : (
+                                  <span style={{ color: "#6B6355", fontSize: 12 }}>{l.variance_note || "—"}</span>
+                                )
+                              ) : "—"}
                             </td>
                           </tr>
                         );
@@ -3974,6 +4008,11 @@ function InventoryView({ token, profile, showToast }) {
 
                   {activeCount.status === "pending_verification" && isWarehouseLead && (
                     <div style={{ marginTop: 14 }}>
+                      {activeCount.admin_reject_reason && (
+                        <div style={{ background: "#FFF3F3", border: "1px solid #E5484D", borderRadius: 8, padding: 10, marginBottom: 10, fontSize: 12, color: "#B0362E" }}>
+                          ↩ Admin ne wapas bheja hai — <strong>{activeCount.admin_reject_reason}</strong>. Qty/comments check kar ke dobara forward karein.
+                        </div>
+                      )}
                       <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>
                         {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined && l.counted_qty !== l.system_qty).length} line(s) mein variance hai. Verify kar ke Admin ko adjustment approval ke liye forward karein.
                       </div>
@@ -3989,7 +4028,13 @@ function InventoryView({ token, profile, showToast }) {
                       <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>
                         Warehouse Lead ne verify kar diya hai ({fmtTime(activeCount.verified_at)}). Approve karte hi inventory turant naye counted number se match ho jayegi.
                       </div>
-                      <button style={S.primaryBtnSm} disabled={approvingCount} onClick={approveAndAdjust}>{approvingCount ? "Adjust ho raha…" : "✅ Approve & Adjust Inventory (Final)"}</button>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+                        <button style={S.primaryBtnSm} disabled={approvingCount} onClick={approveAndAdjust}>{approvingCount ? "Adjust ho raha…" : "✅ Approve & Adjust Inventory (Final)"}</button>
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input style={{ ...S.input, flex: 1, minWidth: 200 }} placeholder="Reject reason (Lead ko wapas bhejne ki wajah)" value={rejectReason} onChange={e => setRejectReason(e.target.value)} />
+                        <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} disabled={rejectingCount} onClick={rejectToLead}>{rejectingCount ? "Bhej raha…" : "↩ Reject to Lead"}</button>
+                      </div>
                     </div>
                   )}
                   {activeCount.status === "pending_admin_approval" && !isAdmin && (
