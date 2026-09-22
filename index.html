@@ -126,6 +126,58 @@ async function fetchMnpLabelsChunked(trackingNumbers, token) {
   return allBatches;
 }
 
+// M&P's label API returns ONE tracking number per PDF (1 label per page) — unlike
+// PostEx, which already combines multiple labels per page on its own server. This
+// composes M&P's individual single-label PDFs onto shared pages, N labels per page,
+// stacked vertically on a standard page size — matching PostEx's combined look.
+async function composeLabelsNPerPage(base64Array, perPage = 3) {
+  const { PDFDocument } = PDFLib;
+  const outDoc = await PDFDocument.create();
+  const pageWidth = 595.28;  // A4 width in points
+  const pageHeight = 841.89; // A4 height in points
+  const slotHeight = pageHeight / perPage;
+
+  let currentPage = null;
+  let slotIndex = perPage; // forces a new page on the first label
+
+  for (const b64 of base64Array) {
+    try {
+      const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const srcDoc = await PDFDocument.load(bytes);
+      const [srcPage] = srcDoc.getPages();
+      if (!srcPage) continue;
+      const embedded = await outDoc.embedPage(srcPage);
+      const { width: srcW, height: srcH } = embedded;
+
+      if (slotIndex >= perPage) {
+        currentPage = outDoc.addPage([pageWidth, pageHeight]);
+        slotIndex = 0;
+      }
+
+      const scale = Math.min((pageWidth * 0.95) / srcW, (slotHeight * 0.92) / srcH);
+      const drawW = srcW * scale;
+      const drawH = srcH * scale;
+      const x = (pageWidth - drawW) / 2;
+      const y = pageHeight - (slotIndex + 1) * slotHeight + (slotHeight - drawH) / 2;
+
+      currentPage.drawPage(embedded, { x, y, width: drawW, height: drawH });
+      // Thin separator line between labels (except after the last slot on a page)
+      if (slotIndex < perPage - 1) {
+        currentPage.drawLine({
+          start: { x: 20, y: pageHeight - (slotIndex + 1) * slotHeight },
+          end: { x: pageWidth - 20, y: pageHeight - (slotIndex + 1) * slotHeight },
+          thickness: 0.5, color: PDFLib.rgb(0.7, 0.7, 0.7), dashArray: [3, 3]
+        });
+      }
+      slotIndex++;
+    } catch (e) { /* skip a single corrupt/unreadable PDF rather than failing the whole compose */ }
+  }
+
+  const outBytes = await outDoc.save();
+  const blob = new Blob([outBytes], { type: "application/pdf" });
+  return URL.createObjectURL(blob);
+}
+
 // Merges multiple base64-encoded PDFs (fetched in small resilient batches to avoid server
 // resource limits) into ONE combined PDF, so the Lead can open/print a single document
 // instead of clicking through many small ones.
@@ -3859,8 +3911,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+        const mergedUrl = await composeLabelsNPerPage(batches, 3);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3 per page)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -3903,8 +3955,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+        const mergedUrl = await composeLabelsNPerPage(batches, 3);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3 per page)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
