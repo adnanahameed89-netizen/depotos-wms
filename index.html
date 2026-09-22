@@ -3285,6 +3285,79 @@ function InventoryView({ token, profile, showToast }) {
     await sb(`/rest/v1/cycle_count_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { counted_qty: q, counted_by: profile.id, counted_at: new Date().toISOString() } });
   };
 
+  // Blind counting: the assigned counter uses the SAME scan mode already set for them under
+  // Putaway (Bulk = scan once + type qty, Piece-to-Piece = scan every physical unit), and never
+  // sees the system's expected qty while counting — only their own running tally, so the count
+  // stays an honest independent check rather than a copy of what the system already says.
+  const myCountMode = (profile.putaway_mode || "bulk") === "piece" ? "piece" : "bulk";
+  const isMyBlindCount = !!(activeCount && activeCount.status === "counting" && profile.id === activeCount.assigned_to && !canAssignCounts);
+  const [ccScanInput, setCcScanInput] = useState("");
+  const [ccMatchedLine, setCcMatchedLine] = useState(null);
+  const [ccBulkQty, setCcBulkQty] = useState("");
+  const [ccUnknownProduct, setCcUnknownProduct] = useState(null);
+  const [ccUnknownBinCode, setCcUnknownBinCode] = useState("");
+
+  const ccScanProduct = (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : ccScanInput).trim();
+    setCcScanInput("");
+    if (!code) return;
+    const c = cleanCode(code);
+    const product = Object.values(products).find(p => cleanCode(p.barcode) === c || cleanCode(p.sku) === c);
+    if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+    const line = countLines.find(l => l.product_id === product.id);
+    if (!line) {
+      // Genuinely unexpected item — system has no record of this product in this bin at all.
+      // Offer to add it as an excess line (system_qty 0) rather than just rejecting the scan,
+      // so real excess still gets captured and shows up for the Lead to review.
+      setCcUnknownProduct(product);
+      setCcUnknownBinCode(activeCount.scope_type === "bin" ? (bins[activeCount.scope_value]?.code || "") : "");
+      showToast(`⚠ ${product.barcode} is bin ki expected list mein nahi — Excess Item add karein`, "err");
+      return;
+    }
+    if (myCountMode === "piece") {
+      const newQty = (line.counted_qty || 0) + 1;
+      saveCountedQty(line.id, newQty);
+      showToast(`✓ 1 pc counted — ${product.barcode} (total ${newQty})`);
+    } else {
+      setCcMatchedLine(line);
+      setCcBulkQty(String(line.counted_qty ?? ""));
+      showToast(`✓ Matched: ${product.barcode} — qty likh kar confirm karein`);
+    }
+  };
+
+  const ccConfirmBulk = () => {
+    if (!ccMatchedLine) return;
+    const q = ccBulkQty === "" ? NaN : Number(ccBulkQty);
+    if (isNaN(q) || q < 0) { showToast("Valid qty enter karein", "err"); return; }
+    saveCountedQty(ccMatchedLine.id, q);
+    setCcMatchedLine(null); setCcBulkQty("");
+  };
+
+  const ccAddExcessItem = async () => {
+    if (!ccUnknownProduct) return;
+    let binId = activeCount.scope_type === "bin" ? activeCount.scope_value : null;
+    if (!binId) {
+      const match = Object.values(bins).find(b => (b.code || "").toLowerCase() === ccUnknownBinCode.trim().toLowerCase());
+      if (!match) { showToast("Sahi bin code likhein jahan yeh item mili", "err"); return; }
+      binId = match.id;
+    }
+    try {
+      const isPiece = myCountMode === "piece";
+      const created = await sb(`/rest/v1/cycle_count_lines`, {
+        method: "POST", token, prefer: "return=representation",
+        body: { cycle_count_id: activeCount.id, product_id: ccUnknownProduct.id, bin_id: binId, system_qty: 0, is_excess: true, counted_qty: isPiece ? 1 : null, counted_by: profile.id, counted_at: new Date().toISOString() }
+      });
+      setCountLines(cl => [...cl, created[0]]);
+      setCcUnknownProduct(null); setCcUnknownBinCode("");
+      if (isPiece) {
+        showToast(`✓ Excess item add ho gaya — ${ccUnknownProduct.barcode} (1 pc counted)`);
+      } else {
+        setCcMatchedLine(created[0]); setCcBulkQty("");
+        showToast(`✓ Excess item add ho gaya — ab total qty likhein`);
+      }
+    } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
   const submitForReview = async () => {
     const uncounted = countLines.filter(l => l.counted_qty === null || l.counted_qty === undefined);
     if (uncounted.length > 0 && !window.confirm(`${uncounted.length} line(s) abhi count nahi hui — sirf jo count ho chuki hain unhi ka review submit karein?`)) return;
@@ -3802,6 +3875,71 @@ function InventoryView({ token, profile, showToast }) {
                 </table>
               ) : (
                 <>
+                  {isMyBlindCount ? (
+                    <>
+                      <div style={S.panel}>
+                        <div style={S.panelTitle}>Scan Product — {myCountMode === "piece" ? "Piece-to-Piece (har physical unit scan karein)" : "Bulk (scan kar ke qty likhein)"}</div>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
+                            value={ccScanInput} onChange={e => setCcScanInput(e.target.value)}
+                            onKeyDown={e => e.key === "Enter" && ccScanProduct()} />
+                          <CameraScanButton onScan={(text) => ccScanProduct(text)} />
+                          <button style={S.primaryBtnSm} onClick={() => ccScanProduct()}>Scan</button>
+                        </div>
+                        {myCountMode === "bulk" && ccMatchedLine && (
+                          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #EFE8D8" }}>
+                            <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{products[ccMatchedLine.product_id]?.barcode}</div>
+                            <div style={{ color: "#2B2620", fontSize: 14, marginBottom: 8 }}>{products[ccMatchedLine.product_id]?.name}</div>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <input type="number" min={0} autoFocus style={{ ...S.input, maxWidth: 140 }} value={ccBulkQty} onChange={e => setCcBulkQty(e.target.value)} onKeyDown={e => e.key === "Enter" && ccConfirmBulk()} placeholder="Counted qty" />
+                              <button style={S.primaryBtnSm} onClick={ccConfirmBulk}>✓ Confirm</button>
+                              <button style={S.secondaryBtnSm} onClick={() => { setCcMatchedLine(null); setCcBulkQty(""); }}>Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                        {ccUnknownProduct && (
+                          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #F5A623", background: "#FFF9EE" }}>
+                            <div style={{ color: "#E5484D", fontWeight: 600, fontSize: 12, marginBottom: 6 }}>⚠ EXCESS — is bin ki expected list mein nahi thi</div>
+                            <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{ccUnknownProduct.barcode}</div>
+                            <div style={{ color: "#2B2620", fontSize: 14, marginBottom: 8 }}>{ccUnknownProduct.name}</div>
+                            {activeCount.scope_type !== "bin" && (
+                              <input style={{ ...S.input, maxWidth: 160, marginBottom: 8 }} placeholder="Bin code (jahan mili)" value={ccUnknownBinCode} onChange={e => setCcUnknownBinCode(e.target.value)} />
+                            )}
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button style={S.primaryBtnSm} onClick={ccAddExcessItem}>+ Excess Item Add Karein</button>
+                              <button style={S.secondaryBtnSm} onClick={() => { setCcUnknownProduct(null); setCcUnknownBinCode(""); }}>Cancel</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={S.panel}>
+                        <div style={S.panelTitle}>Progress — {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined).length} / {countLines.length} counted</div>
+                        <table>
+                          <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th></tr></thead>
+                          <tbody>
+                            {countLines.map(l => {
+                              const p = products[l.product_id];
+                              const done = l.counted_qty !== null && l.counted_qty !== undefined;
+                              return (
+                                <tr key={l.id}>
+                                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                                  <td style={S.td}>{p?.name || "—"}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
+                                  <td style={{ ...S.td, color: done ? "#4CAF7D" : "#8A8272" }}>{done ? `✓ Counted — ${l.counted_qty}` : "Pending"}</td>
+                                </tr>
+                              );
+                            })}
+                            {countLines.length === 0 && <tr><td colSpan={3}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
+                          </tbody>
+                        </table>
+                        {countLines.length > 0 && countLines.every(l => l.counted_qty !== null && l.counted_qty !== undefined) ? (
+                          <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitForReview}>✓ Submit for Warehouse Lead Verification</button>
+                        ) : (
+                          <div style={{ color: "#8A8272", fontSize: 12, marginTop: 14 }}>Sab lines count hone k baad hi submit hoga.</div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
                   <table>
                     <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>System Qty</th><th style={S.th}>Counted Qty</th><th style={S.th}>Variance</th></tr></thead>
                     <tbody>
@@ -3828,8 +3966,9 @@ function InventoryView({ token, profile, showToast }) {
                       })}
                     </tbody>
                   </table>
+                  )}
 
-                  {activeCount.status === "counting" && (profile.id === activeCount.assigned_to || canAssignCounts) && (
+                  {!isMyBlindCount && activeCount.status === "counting" && (profile.id === activeCount.assigned_to || canAssignCounts) && (
                     <button style={{ ...S.primaryBtnSm, marginTop: 14 }} onClick={submitForReview}>✓ Submit for Warehouse Lead Verification</button>
                   )}
 
