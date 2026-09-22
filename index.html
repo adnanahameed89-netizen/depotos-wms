@@ -145,6 +145,39 @@ async function mergePdfsToUrl(base64Array) {
   return URL.createObjectURL(blob);
 }
 
+// M&P's label API returns ONE full-size page per tracking number (unlike PostEx, whose bulk
+// endpoint already bundles several CNs onto one page). Printed as-is at A4 that wastes a whole
+// sheet per parcel, so this stacks up to 3 labels per A4 page — same layout M&P's own portal
+// prints — scaling each label down to fit its slot while keeping its aspect ratio.
+async function composeMnpGridPdf(base64Array, perPage = 3) {
+  const { PDFDocument } = PDFLib;
+  const out = await PDFDocument.create();
+  const PAGE_W = 595.28, PAGE_H = 841.89; // A4 portrait, points
+  const MARGIN = 12, GAP = 8;
+  const slotW = PAGE_W - 2 * MARGIN;
+  const slotH = (PAGE_H - 2 * MARGIN - (perPage - 1) * GAP) / perPage;
+
+  for (let i = 0; i < base64Array.length; i += perPage) {
+    const chunk = base64Array.slice(i, i + perPage);
+    const page = out.addPage([PAGE_W, PAGE_H]);
+    for (let row = 0; row < chunk.length; row++) {
+      try {
+        const bytes = Uint8Array.from(atob(chunk[row]), c => c.charCodeAt(0));
+        const [embedded] = await out.embedPdf(bytes, [0]);
+        const scale = Math.min(slotW / embedded.width, slotH / embedded.height);
+        const drawW = embedded.width * scale, drawH = embedded.height * scale;
+        const slotTopY = PAGE_H - MARGIN - row * (slotH + GAP);
+        const x = MARGIN + (slotW - drawW) / 2;
+        const y = (slotTopY - slotH) + (slotH - drawH) / 2;
+        page.drawPage(embedded, { x, y, width: drawW, height: drawH });
+      } catch (e) { /* skip a single corrupt/unreadable label rather than failing the whole page */ }
+    }
+  }
+  const bytes = await out.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  return URL.createObjectURL(blob);
+}
+
 // Tolerant PostEx courier match — strips spaces/dots/dashes before comparing, so
 // "PostEx", "Post Ex", "POSTEX", "Postex.", "Post-Ex" etc. are all recognized.
 function isPostex(courierText) {
@@ -3858,8 +3891,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+        const mergedUrl = await composeMnpGridPdf(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3-per-page PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -3902,8 +3935,8 @@ function OrdersView({ token, profile, showToast, setView }) {
       if (mnpOrders.length > 0) {
         const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
         const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+        const mergedUrl = await composeMnpGridPdf(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — 3-per-page PDF)`, url: mergedUrl }]);
       }
       if (otherOrders.length > 0) {
         let rowsHtml = "";
@@ -4646,16 +4679,17 @@ function OrdersView({ token, profile, showToast, setView }) {
               <button style={S.secondaryBtnSm} onClick={() => { setLastAssignedTote(null); setFetchedLabelPdfs([]); }}>Dismiss</button>
             </div>
           </div>
-          {fetchedLabelPdfs.length > 0 && (
-            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #F0D9A0" }}>
-              <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega (click karein, browser popup block nahi karega):</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {fetchedLabelPdfs.map((p, i) => (
-                  <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
-                ))}
-              </div>
-            </div>
-          )}
+        </div>
+      )}
+
+      {fetchedLabelPdfs.length > 0 && (
+        <div style={{ ...S.panel, borderColor: "#F5A623", background: "#FFF9EE" }}>
+          <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega (click karein, browser popup block nahi karega):</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {fetchedLabelPdfs.map((p, i) => (
+              <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
+            ))}
+          </div>
         </div>
       )}
 
