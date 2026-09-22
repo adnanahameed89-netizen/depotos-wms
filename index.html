@@ -136,6 +136,7 @@ async function composeLabelsNPerPage(base64Array, perPage = 3) {
   const pageWidth = 595.28;  // A4 width in points
   const pageHeight = 841.89; // A4 height in points
   const slotHeight = pageHeight / perPage;
+  const marginX = 30, marginY = 12;
 
   let currentPage = null;
   let slotIndex = perPage; // forces a new page on the first label
@@ -146,6 +147,11 @@ async function composeLabelsNPerPage(base64Array, perPage = 3) {
       const srcDoc = await PDFDocument.load(bytes);
       const [srcPage] = srcDoc.getPages();
       if (!srcPage) continue;
+      // Some couriers' PDFs (M&P specifically) define a CropBox much narrower than
+      // their actual MediaBox, clipping away the visible label content when embedded.
+      // Overriding CropBox with the full MediaBox restores the complete content.
+      const mb = srcPage.getMediaBox();
+      srcPage.setCropBox(mb.x, mb.y, mb.width, mb.height);
       const embedded = await outDoc.embedPage(srcPage);
       const { width: srcW, height: srcH } = embedded;
 
@@ -154,9 +160,26 @@ async function composeLabelsNPerPage(base64Array, perPage = 3) {
         slotIndex = 0;
       }
 
-      const scale = Math.min((pageWidth * 0.95) / srcW, (slotHeight * 0.92) / srcH);
-      const drawW = srcW * scale;
-      const drawH = srcH * scale;
+      const availW = pageWidth - marginX * 2;
+      const availH = slotHeight - marginY * 2;
+      // Some couriers' PDFs report an unreliable/oversized page box relative to their
+      // actual visible content, which can make an aspect-ratio-preserving scale collapse
+      // to near-zero. Guard against that: only preserve aspect ratio when srcW/srcH look
+      // sane; otherwise stretch to fill the slot so the label is always visibly readable.
+      const dimsLookSane = srcW > 20 && srcH > 20 && srcW < 3000 && srcH < 3000;
+      let drawW, drawH;
+      if (dimsLookSane) {
+        const scale = Math.min(availW / srcW, availH / srcH);
+        drawW = srcW * scale;
+        drawH = srcH * scale;
+        if (drawW < availW * 0.5 && drawH < availH * 0.5) {
+          // Scale came out surprisingly small even though dims looked sane — still
+          // fall back to filling the slot rather than risk an unreadably tiny label.
+          drawW = availW; drawH = availH;
+        }
+      } else {
+        drawW = availW; drawH = availH;
+      }
       const x = (pageWidth - drawW) / 2;
       const y = pageHeight - (slotIndex + 1) * slotHeight + (slotHeight - drawH) / 2;
 
