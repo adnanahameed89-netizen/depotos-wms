@@ -3878,6 +3878,50 @@ function OrdersView({ token, profile, showToast, setView }) {
     setAwbPrintingBulk(false);
   };
 
+  // Fetch AWB labels for whatever is checked in the filtered orders table below —
+  // works for ANY order status (picked, packed, dispatched...), not just orders still
+  // sitting in an open tote. This is the main way to re-fetch/print AWBs once picking
+  // has already closed the task and the order dropped out of the Picking screen.
+  const fetchAwbForSelected = async () => {
+    const selected = orders.filter(o => selectedOrders[o.id]);
+    if (!selected.length) { showToast("Pehle table mein se orders select karein", "err"); return; }
+    setAwbPrintingBulk(true);
+    setFetchedLabelPdfs([]);
+    try {
+      const withTracking = selected.map(o => ({ ref: o.external_order_id || o.id, trackingNumber: o.awb_number || o.external_order_id, courier: o.courier }));
+      const postexOrders = withTracking.filter(o => isPostex(o.courier));
+      const mnpOrders = withTracking.filter(o => isMnp(o.courier));
+      const otherOrders = withTracking.filter(o => !isPostex(o.courier) && !isMnp(o.courier));
+      if (postexOrders.length > 0) {
+        const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
+        const result = await postexProxy("labels", { trackingNumbers }, token);
+        const batches = result.pdfBase64Batches || [result.pdfBase64];
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+      }
+      if (mnpOrders.length > 0) {
+        const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
+        const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
+        const mergedUrl = await mergePdfsToUrl(batches);
+        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
+      }
+      if (otherOrders.length > 0) {
+        let rowsHtml = "";
+        for (const o of otherOrders) rowsHtml += `<div class="slip"><div class="bin">${o.ref}</div><div class="awb">${o.trackingNumber || "—"}</div><div class="meta">${o.courier || ""}</div></div>`;
+        const w = window.open("", "_blank");
+        w.document.write(`<html><head><title>AWB Sheet — Selected Orders</title><style>
+          body{font-family:Arial;padding:16px;color:#111} h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
+          .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
+          .bin{font-size:16px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px;font-family:'Courier New',monospace}
+          .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace} .meta{color:#555;font-size:12px;text-align:right}
+        </style></head><body><h2>AWB Sheet — Selected Orders</h2><div class="meta-top">${otherOrders.length} order(s).</div>${rowsHtml}</body></html>`);
+        w.document.close(); w.print();
+      }
+      showToast(`✅ AWB labels ready — ${selected.length} orders`);
+    } catch (e) { showToast(`⚠ AWB fetch failed: ${e.message}`, "err"); }
+    setAwbPrintingBulk(false);
+  };
+
   const load = useCallback(async () => {
     try {
       const o = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
@@ -3938,10 +3982,10 @@ function OrdersView({ token, profile, showToast, setView }) {
   const singleCount = receivedOrders.filter(o => orderSkuType(o.id) === "single").length;
   const multiCount = receivedOrders.filter(o => orderSkuType(o.id) === "multi").length;
   const selectedCount = Object.values(selectedOrders).filter(Boolean).length;
-  const toggleAll = (checked) => setSelectedOrders(Object.fromEntries(filteredReceived.map(o => [o.id, checked])));
+  const toggleAll = (checked) => setSelectedOrders(Object.fromEntries(displayedOrders.map(o => [o.id, checked])));
 
   const bulkReserveAndAssign = async () => {
-    const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k]);
+    const ids = Object.keys(selectedOrders).filter(k => selectedOrders[k] && orders.find(o => o.id === k)?.status === "received");
     if (ids.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
     if (!bulkToteId || !bulkPickerId) { showToast("Tote aur Picker select karein", "err"); return; }
     const orderById = Object.fromEntries(orders.map(o => [o.id, o]));
@@ -4638,12 +4682,15 @@ function OrdersView({ token, profile, showToast, setView }) {
           {(dateFrom || dateTo || userFilter || toteFilter) && (
             <button style={S.secondaryBtnSm} onClick={() => { setDateFrom(""); setDateTo(""); setUserFilter(""); setToteFilter(""); }}>Clear all</button>
           )}
+          {selectedCount > 0 && (
+            <button style={{ ...S.primaryBtnSm, marginLeft: 10 }} disabled={awbPrintingBulk} onClick={fetchAwbForSelected}>{awbPrintingBulk ? "Fetching…" : `🏷 Fetch AWB Labels (${selectedCount} selected)`}</button>
+          )}
         </div>
-        {(userFilter || toteFilter) && <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 10 }}>Showing filtered orders — useful for sorting AWBs tracking-wise.</div>}
+        {(userFilter || toteFilter) && <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 10 }}>Showing filtered orders — select orders (kisi bhi status ke) aur "Fetch AWB Labels" dabayein, chahe unki picking already complete ho chuki ho.</div>}
         <table>
           <thead>
             <tr>
-              <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === filteredReceived.length} /></th>
+              <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === displayedOrders.length} /></th>
               <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
               <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th>
               <th style={S.th}>Assigned To</th><th style={S.th}>Tote</th>
@@ -4662,9 +4709,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               return (
                 <tr key={o.id} style={{ cursor: "pointer" }} onClick={() => openOrderDetail(o)}>
                   <td style={S.td} onClick={e => e.stopPropagation()}>
-                    {o.status === "received" && (
-                      <input type="checkbox" checked={!!selectedOrders[o.id]} onChange={e => setSelectedOrders({ ...selectedOrders, [o.id]: e.target.checked })} />
-                    )}
+                    <input type="checkbox" checked={!!selectedOrders[o.id]} onChange={e => setSelectedOrders({ ...selectedOrders, [o.id]: e.target.checked })} />
                   </td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
                   <td style={S.td}>{o.courier}</td>
@@ -4721,7 +4766,6 @@ function PickingView({ token, profile, showToast }) {
   const [taskLines, setTaskLines] = useState({});
   const [totes, setTotes] = useState([]);
   const [selectedForTote, setSelectedForTote] = useState({});
-  const [awbPrinting, setAwbPrinting] = useState(false);
   const [toteAssignPicker, setToteAssignPicker] = useState("");
   const [selectedToteId, setSelectedToteId] = useState("");
   const [openTote, setOpenTote] = useState(null);
@@ -4814,50 +4858,6 @@ function PickingView({ token, profile, showToast }) {
   };
 
   const [lastAssignedTote, setLastAssignedTote] = useState(null);
-  const [awbPrintingBulk, setAwbPrintingBulk] = useState(false);
-  const [fetchedLabelPdfs, setFetchedLabelPdfs] = useState([]);
-  const [awbSelected, setAwbSelected] = useState({});
-  useEffect(() => { setAwbSelected({}); setFetchedLabelPdfs([]); }, [openTote?.id]);
-
-  const printAssignedAwb = async (assignedTote) => {
-    setAwbPrintingBulk(true);
-    setFetchedLabelPdfs([]);
-    try {
-      const postexOrders = assignedTote.orders.filter(o => isPostex(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const mnpOrders = assignedTote.orders.filter(o => isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      const otherOrders = assignedTote.orders.filter(o => !isPostex(o.courier) && !isMnp(o.courier)).sort((a, b) => a.binNumber - b.binNumber);
-      // Collect PDFs as clickable links instead of auto-opening windows — browsers silently
-      // block the 2nd+ window.open() call after an async fetch, which was why only PostEx
-      // labels ever opened when M&P was also present. A manually-clicked link is never blocked.
-      if (postexOrders.length > 0) {
-        const trackingNumbers = postexOrders.map(o => o.trackingNumber).filter(Boolean);
-        const result = await postexProxy("labels", { trackingNumbers }, token);
-        const batches = result.pdfBase64Batches || [result.pdfBase64];
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
-      }
-      if (mnpOrders.length > 0) {
-        const trackingNumbers = mnpOrders.map(o => o.trackingNumber).filter(Boolean);
-        const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-        const mergedUrl = await mergePdfsToUrl(batches);
-        setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
-      }
-      if (otherOrders.length > 0) {
-        let rowsHtml = "";
-        for (const o of otherOrders) rowsHtml += `<div class="slip"><div class="bin">BIN #${o.binNumber}</div><div class="awb">${o.trackingNumber || "—"}</div><div class="meta">${o.courier || ""}</div></div>`;
-        const w = window.open("", "_blank");
-        w.document.write(`<html><head><title>AWB Sheet — ${assignedTote.toteNumber}</title><style>
-          body{font-family:Arial;padding:16px;color:#111} h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
-          .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
-          .bin{font-size:22px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px}
-          .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace} .meta{color:#555;font-size:12px;text-align:right}
-        </style></head><body><h2>AWB Sheet — Tote ${assignedTote.toteNumber}</h2><div class="meta-top">Sorted by bin position.</div>${rowsHtml}</body></html>`);
-        w.document.close(); w.print();
-      }
-      showToast(`✅ AWB labels ready — ${assignedTote.orders.length} orders, Tote ${assignedTote.toteNumber}. Print karke Packer ko tote ke sath handover kar dein.`);
-    } catch (e) { showToast(`⚠ AWB fetch failed: ${e.message}`, "err"); }
-    setAwbPrintingBulk(false);
-  };
 
   const openToteDetail = (tote) => {
     const toteTasks = tasks.filter(t => t.tote_id === tote.id);
@@ -5247,96 +5247,9 @@ function PickingView({ token, profile, showToast }) {
           <div style={S.panel}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={S.panelTitle}>Tote allocation — order-wise (Bin 01 → Bin {toteTasks.length})</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ color: "#8A8272", fontSize: 11 }}>{Object.values(awbSelected).filter(Boolean).length} selected</span>
-                <button style={S.secondaryBtnSm} onClick={() => setAwbSelected(Object.fromEntries(toteTasks.map(t => [t.id, true])))}>Select All</button>
-                <button style={S.secondaryBtnSm} onClick={() => {
-                  const pendingIds = toteTasks.filter(t => {
-                    const lines = taskLines[t.id] || [];
-                    const required = lines.reduce((s, l) => s + l.qty_required, 0);
-                    const picked = lines.reduce((s, l) => { const g = consolidated.find(gr => gr.product_id === l.product_id); const ref = g?.refs.find(r => r.line_id === l.id); return s + (ref?.allocated || 0); }, 0);
-                    return !(picked >= required && required > 0);
-                  }).map(t => t.id);
-                  setAwbSelected(Object.fromEntries(pendingIds.map(id => [id, true])));
-                }}>Only Pending (not yet picked)</button>
-                <button style={S.secondaryBtnSm} onClick={() => setAwbSelected({})}>Clear</button>
-              <button style={S.secondaryBtnSm} disabled={awbPrinting} onClick={async () => {
-                const sorted = [...toteTasks].filter(t => awbSelected[t.id]).sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99));
-                if (sorted.length === 0) { showToast("Kam se kam ek order select karein", "err"); return; }
-                const postexOrders = sorted.filter(t => isPostex(orders[t.order_id]?.courier));
-                const mnpOrders = sorted.filter(t => isMnp(orders[t.order_id]?.courier));
-                const otherOrders = sorted.filter(t => !isPostex(orders[t.order_id]?.courier) && !isMnp(orders[t.order_id]?.courier));
-
-                setFetchedLabelPdfs([]);
-
-                if (postexOrders.length > 0) {
-                  setAwbPrinting(true);
-                  try {
-                    const trackingNumbers = postexOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
-                    const result = await postexProxy("labels", { trackingNumbers }, token);
-                    const batches = result.pdfBase64Batches || [result.pdfBase64];
-                    const mergedUrl = await mergePdfsToUrl(batches);
-                    setFetchedLabelPdfs(prev => [...prev, { label: `PostEx Labels (${postexOrders.length} orders — combined PDF)`, url: mergedUrl }]);
-                    showToast(`✅ ${postexOrders.length} PostEx label(s) fetched — link neeche milega`);
-                  } catch (e) {
-                    showToast(`⚠ PostEx label fetch failed: ${e.message} — falling back to text sheet`, "err");
-                    otherOrders.push(...postexOrders);
-                  }
-                  setAwbPrinting(false);
-                }
-
-                if (mnpOrders.length > 0) {
-                  setAwbPrinting(true);
-                  try {
-                    const trackingNumbers = mnpOrders.map(t => orders[t.order_id]?.awb_number || orders[t.order_id]?.external_order_id).filter(Boolean);
-                    const batches = await fetchMnpLabelsChunked(trackingNumbers, token);
-                    const mergedUrl = await mergePdfsToUrl(batches);
-                    setFetchedLabelPdfs(prev => [...prev, { label: `M&P Labels (${mnpOrders.length} orders — combined PDF)`, url: mergedUrl }]);
-                    showToast(`✅ ${mnpOrders.length} M&P label(s) fetched — link neeche milega`);
-                  } catch (e) {
-                    showToast(`⚠ M&P label fetch failed: ${e.message} — falling back to text sheet`, "err");
-                    otherOrders.push(...mnpOrders);
-                  }
-                  setAwbPrinting(false);
-                }
-
-                if (otherOrders.length > 0) {
-                  let rowsHtml = "";
-                  for (const t of otherOrders) {
-                    const o = orders[t.order_id];
-                    rowsHtml += `<div class="slip"><div class="bin">BIN #${t.tote_bin_number || "?"}</div><div class="awb">${o?.awb_number || o?.external_order_id || "—"}</div><div class="meta">${o?.courier || ""}</div></div>`;
-                  }
-                  const w = window.open("", "_blank");
-                  w.document.write(`<html><head><title>AWB Sheet — ${openTote?.tote_number || ""}</title><style>
-                    body{font-family:Arial;padding:16px;color:#111}
-                    h2{margin-bottom:4px} .meta-top{color:#555;font-size:13px;margin-bottom:16px}
-                    .slip{border:2px solid #111;border-radius:8px;padding:14px 16px;margin-bottom:10px;page-break-inside:avoid;display:flex;justify-content:space-between;align-items:center}
-                    .bin{font-size:22px;font-weight:800;background:#F5A623;color:#1A1206;padding:6px 14px;border-radius:6px}
-                    .awb{font-size:20px;font-weight:700;font-family:'Courier New',monospace}
-                    .meta{color:#555;font-size:12px;text-align:right}
-                  </style></head><body>
-                    <h2>AWB Sheet — Tote ${openTote?.tote_number || ""}</h2>
-                    <div class="meta-top">Sorted by physical bin position — print and match parcels bin-wise, no manual sorting needed.</div>
-                    ${rowsHtml}
-                  </body></html>`);
-                  w.document.close();
-                  w.print();
-                }
-              }}>{awbPrinting ? "Fetching labels…" : "🖨 Print AWB Sheet (Bin-wise)"}</button>
-              </div>
             </div>
-            {fetchedLabelPdfs.length > 0 && (
-              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega:</div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {fetchedLabelPdfs.map((p, i) => (
-                    <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
-                  ))}
-                </div>
-              </div>
-            )}
             <table>
-              <thead><tr><th style={S.th}></th><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
+              <thead><tr><th style={S.th}>Bin</th><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>SKU Qty</th><th style={S.th}>Picked Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
                 {[...toteTasks].sort((a, b) => (a.tote_bin_number || 99) - (b.tote_bin_number || 99)).map(t => {
                   const o = orders[t.order_id];
@@ -5351,7 +5264,6 @@ function PickingView({ token, profile, showToast }) {
                   const statusColor = status === "Completed" ? "#4CAF7D" : status === "Partial" ? "#F5A623" : "#6B6355";
                   return (
                     <tr key={t.id}>
-                      <td style={S.td}><input type="checkbox" checked={!!awbSelected[t.id]} onChange={e => setAwbSelected({ ...awbSelected, [t.id]: e.target.checked })} /></td>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{String(t.tote_bin_number || "?").padStart(2, "0")}</td>
                       <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{o?.external_order_id || "—"}</td>
                       <td style={{ ...S.td, color: "#6B6355" }}>{o?.courier || "—"}</td>
@@ -5499,23 +5411,10 @@ function PickingView({ token, profile, showToast }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                   <div>
                     <div style={{ fontWeight: 700, color: "#2B2620" }}>✅ Tote {lastAssignedTote.toteNumber} assign ho gayi — {lastAssignedTote.orders.length} orders</div>
-                    <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>Ab AWB labels print karein aur Packer ko tote ke sath handover kar dein.</div>
+                    <div style={{ color: "#6B6355", fontSize: 12, marginTop: 2 }}>AWB labels Sales Orders tab se fetch/print karein.</div>
                   </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button style={S.primaryBtnSm} disabled={awbPrintingBulk} onClick={() => printAssignedAwb(lastAssignedTote)}>{awbPrintingBulk ? "Fetching…" : "🏷 Print AWB Labels"}</button>
-                    <button style={S.secondaryBtnSm} onClick={() => { setLastAssignedTote(null); setFetchedLabelPdfs([]); }}>Dismiss</button>
-                  </div>
+                  <button style={S.secondaryBtnSm} onClick={() => setLastAssignedTote(null)}>Dismiss</button>
                 </div>
-                {fetchedLabelPdfs.length > 0 && (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #F0D9A0" }}>
-                    <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 8 }}>Labels ready — har link ek naye tab mein khulega:</div>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {fetchedLabelPdfs.map((p, i) => (
-                        <a key={i} href={p.url} target="_blank" rel="noopener noreferrer" style={{ ...S.secondaryBtnSm, textDecoration: "none", display: "inline-block" }}>📄 {p.label}</a>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
             <table>
