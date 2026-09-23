@@ -354,6 +354,9 @@ function App() {
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkoutbound" && <StockingOutboundView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkstr" && <StockingStrView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkpicking" && <StockingPickingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stklogistics" && <StockingLogisticsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
@@ -526,6 +529,9 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
     { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" },
     { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" },
+    { id: "stkstr", label: "STR", icon: "🧾" },
+    { id: "stkpicking", label: "Stocking Picking", icon: "🧑‍🤝‍🧑" },
+    { id: "stklogistics", label: "Stocking Logistics", icon: "🚚" },
     { id: "stkinventory", label: "Stocking Inventory", icon: "🧰" }
   ];
   const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
@@ -535,8 +541,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkinventory", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stklogistics", "stkinventory", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -6553,7 +6559,7 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Delete failed", "err"); }
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", outbound_officer: "Outbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", outbound_officer: "Outbound Officer", logistics_officer: "Logistics Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 
   return (
     <div>
@@ -6569,6 +6575,7 @@ function UsersView({ token, profile, showToast }) {
             <option value="packer">Packer</option>
             <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
             <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
+            <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
             <option value="dispatcher">Dispatcher</option>
             <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
@@ -6605,6 +6612,7 @@ function UsersView({ token, profile, showToast }) {
                 <option value="packer">Packer</option>
                 <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
                 <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
+                <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
                 <option value="dispatcher">Dispatcher</option>
                 <option value="supervisor">Supervisor</option>
                 <option value="warehouse_lead">Warehouse Lead</option>
@@ -9286,20 +9294,22 @@ function StockingOutboundView({ token, profile, showToast }) {
   const [allocForm, setAllocForm] = useState({}); // { [queueId]: { qty, destination, strRef } }
   const [binChoice, setBinChoice] = useState({}); // { [queueId]: binId }
   const [assignChoice, setAssignChoice] = useState({}); // { [dcId]: userId }
+  const [destinations, setDestinations] = useState([]);
 
   const load = async () => {
     if (!whId) return;
     setLoading(true);
     try {
-      const [q, a, b, d, p, o] = await Promise.all([
+      const [q, a, b, d, p, o, dest] = await Promise.all([
         sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
         sb(`/rest/v1/stk_grn_allocations?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
         sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*`, { token }),
         sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*`, { token }),
-        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token })
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token }),
+        sb(`/rest/v1/stk_destinations?warehouse_id=eq.${whId}&select=*&order=name.asc`, { token })
       ]);
-      setQueue(q || []); setAllocations(a || []); setBins(b || []); setDcs(d || []); setPos(p || []); setOfficers(o || []);
+      setQueue(q || []); setAllocations(a || []); setBins(b || []); setDcs(d || []); setPos(p || []); setOfficers(o || []); setDestinations(dest || []);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
@@ -9330,13 +9340,15 @@ function StockingOutboundView({ token, profile, showToast }) {
     const f = allocForm[q.id] || {};
     const qty = Number(f.qty || 0);
     if (!qty || qty <= 0 || qty > Number(q.qty)) { showToast("Valid qty enter karein (max " + q.qty + ")", "err"); return; }
-    if (!f.destination?.trim() || !f.strRef?.trim()) { showToast("Destination shop aur STR reference zaroori hain", "err"); return; }
+    if (!f.destination?.trim()) { showToast("Destination shop zaroori hai", "err"); return; }
     setLoading(true);
     try {
-      await sb(`/rest/v1/stk_grn_allocations`, { method: "POST", token, body: { dc_line_id: q.dc_line_id, dc_id: q.dc_id, po_id: q.po_id, warehouse_id: whId, product_name: q.product_name, qty, destination: f.destination.trim(), str_reference: f.strRef.trim(), created_by: profile.id } });
+      const alloc = await sb(`/rest/v1/stk_grn_allocations`, { method: "POST", token, prefer: "return=representation", body: { dc_line_id: q.dc_line_id, dc_id: q.dc_id, po_id: q.po_id, warehouse_id: whId, product_name: q.product_name, product_barcode: q.product_barcode, qty, destination: f.destination.trim(), status: "pending_str", created_by: profile.id } });
+      // No Odoo STR# yet — Outbound Executive enters it and confirms from the STR tab.
+      await sb(`/rest/v1/stk_str`, { method: "POST", token, body: { warehouse_id: whId, source: "grn_distribution", grn_allocation_id: alloc[0].id, destination: f.destination.trim(), product_barcode: q.product_barcode, product_name: q.product_name, qty, status: "draft", created_by: profile.id } });
       const remaining = Number(q.qty) - qty;
       await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: remaining } });
-      showToast(`${qty} units — STR ${f.strRef} k against ${f.destination} ko RTD pe transfer ho gayi`);
+      showToast(`${qty} units — ${f.destination} k liye STR tab mein draft ban gaya (Outbound Executive Odoo STR# add karega)`);
       setAllocForm(af => ({ ...af, [q.id]: {} }));
       load();
     } catch (e) { showToast("Allocate fail: " + e.message, "err"); }
@@ -9358,7 +9370,7 @@ function StockingOutboundView({ token, profile, showToast }) {
   const TABS = [
     ...(canAssign ? [{ key: "assignment", label: `Assignment (${Object.keys(unassignedByDc).length})` }] : []),
     ...(canWork ? [{ key: "allocation", label: `My Work — STR Allocation (${myWorkQueue.length})` }, { key: "putaway", label: "Putaway" }] : []),
-    { key: "rtd", label: `RTD (${allocations.filter(a => a.status === "rtd").length})` }
+    { key: "rtd", label: `Distribution Trail (${allocations.length})` }
   ];
 
   return (
@@ -9393,23 +9405,28 @@ function StockingOutboundView({ token, profile, showToast }) {
 
       {tab === "allocation" && canWork && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Assigned Items — Select & Create STR" : "All Assigned Items (oversight)"}</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Item select karein, kitni qty kis shop ko STR se bhejni hai woh daalein — baki remaining qty Putaway tab mai bin assign k liye chali jayegi.</div>
+          <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Assigned Items — Select & Create Distribution" : "All Assigned Items (oversight)"}</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Item select karein, kitni qty kis shop ko bhejni hai woh daalein — yeh (STR) tab mein draft ban jayega, jahan Outbound Executive Odoo STR# add kar ke confirm karega. Baki remaining qty Putaway tab mai bin assign k liye chali jayegi.</div>
+          {!destinations.length && <div style={{ fontSize: 12, color: "#E5484D", marginBottom: 14 }}>⚠ Abhi koi destination master mein nahi hai — Admin ko Logistics tab se destinations (Ecom, Shaheen, BC, DHA LHR, waghera) add karni hongi.</div>}
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Unallocated Qty</th><th style={S.th}>Destination Shop</th><th style={S.th}>STR Reference</th><th style={S.th}>Qty to STR</th><th style={S.th}></th></tr></thead>
+            <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Unallocated Qty</th><th style={S.th}>Destination Shop</th><th style={S.th}>Qty to Distribute</th><th style={S.th}></th></tr></thead>
             <tbody>
               {myWorkQueue.map(q => (
                 <tr key={q.id}>
                   {profile.role !== "putaway_officer" && <td style={S.td}>{officerName(q.assigned_to)}</td>}
                   <td style={S.td}>{q.product_name}</td>
                   <td style={S.td}>{q.qty}</td>
-                  <td style={S.td}><input style={{ ...S.input, width: 130 }} placeholder="Shop / location" value={allocForm[q.id]?.destination || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], destination: e.target.value } }))} /></td>
-                  <td style={S.td}><input style={{ ...S.input, width: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="STR#" value={allocForm[q.id]?.strRef || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], strRef: e.target.value } }))} /></td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, width: 140 }} value={allocForm[q.id]?.destination || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], destination: e.target.value } }))}>
+                      <option value="">Select destination…</option>
+                      {destinations.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                    </select>
+                  </td>
                   <td style={S.td}><input type="number" style={{ ...S.input, width: 90 }} placeholder="qty" value={allocForm[q.id]?.qty || ""} onChange={e => setAllocForm(af => ({ ...af, [q.id]: { ...af[q.id], qty: e.target.value } }))} /></td>
-                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => allocateToStr(q)} disabled={loading}>→ RTD</button></td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => allocateToStr(q)} disabled={loading}>→ Send to STR tab</button></td>
                 </tr>
               ))}
-              {!myWorkQueue.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 7 : 6}><EmptyNote text="Koi item assigned nahi" /></td></tr>}
+              {!myWorkQueue.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 6 : 5}><EmptyNote text="Koi item assigned nahi" /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -9455,15 +9472,549 @@ function StockingOutboundView({ token, profile, showToast }) {
 
       {tab === "rtd" && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>RTD — Awaiting Vehicle</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Vehicle alignment aur Gatepass generation agla step hai — filhal yeh sirf RTD trail dikhata hai.</div>
+          <div style={S.panelTitle}>Distribution Trail</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Odoo STR# entry, verification, aur Gatepass generation ab (STR) tab se hote hain — yeh sirf trail dikhata hai.</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>STR#</th><th style={S.th}>Since</th></tr></thead>
+            <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Status</th><th style={S.th}>Since</th></tr></thead>
             <tbody>
-              {allocations.filter(a => a.status === "rtd").map(a => (
-                <tr key={a.id}><td style={S.td}>{a.product_name}</td><td style={S.td}>{a.qty}</td><td style={S.td}>{a.destination}</td><td style={S.td}>{a.str_reference}</td><td style={S.td}>{fmtTime(a.created_at)}</td></tr>
+              {allocations.map(a => (
+                <tr key={a.id}><td style={S.td}>{a.product_name}</td><td style={S.td}>{a.qty}</td><td style={S.td}>{a.destination}</td><td style={S.td}>{a.status === "pending_str" ? "Pending STR#" : a.status === "rtd" ? "RTD" : "Dispatched"}</td><td style={S.td}>{fmtTime(a.created_at)}</td></tr>
               ))}
-              {!allocations.filter(a => a.status === "rtd").length && <tr><td style={S.td} colSpan={5}><EmptyNote text="RTD par abhi kuch nahi" /></td></tr>}
+              {!allocations.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi kuch nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — STR (Stock Transfer Requests) ================= */
+// The Stocking equivalent of "Sales Orders": every outbound commitment lands here regardless
+// of where it came from — a Putaway Officer's GRN-distribution (grn_allocation_id set), or a
+// bulk-uploaded Customer Order / Weekly Demand list. Outbound Executive enters the Odoo STR#
+// and confirms qty (draft → reserved) before anything can ship; Generate Gatepass (reserved →
+// dispatched) is the only point stock is actually deducted for non-GRN-distribution STRs, since
+// GRN-distribution stock never entered putaway/on-hand in the first place.
+function StockingStrView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const [tab, setTab] = useState("draft");
+  const [strs, setStrs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editForm, setEditForm] = useState({}); // { [strId]: { strNumber, qty } }
+  const [uploading, setUploading] = useState(false);
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const s = await sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token });
+      setStrs(s || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const draftStrs = strs.filter(s => s.status === "draft");
+  const reservedStrs = strs.filter(s => s.status === "reserved");
+  const dispatchedStrs = strs.filter(s => s.status === "dispatched");
+
+  const sourceLabel = (s) => s === "grn_distribution" ? "GRN Distribution" : s === "customer_order" ? "Customer Order" : "Weekly Demand";
+
+  const confirmStr = async (row) => {
+    const f = editForm[row.id] || {};
+    const strNumber = (f.strNumber ?? row.str_number ?? "").trim();
+    const qty = f.qty !== undefined ? Number(f.qty) : row.qty;
+    if (!strNumber) { showToast("Odoo STR# enter karein", "err"); return; }
+    if (!qty || qty <= 0) { showToast("Valid qty enter karein", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: strNumber, qty, status: "reserved", confirmed_by: profile.id, confirmed_at: new Date().toISOString() } });
+      if (row.grn_allocation_id) {
+        await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "rtd" } });
+      }
+      showToast(`✓ STR ${strNumber} confirm ho gaya — Logistics tab mein vehicle load k liye ready hai`);
+      setEditForm(f2 => ({ ...f2, [row.id]: {} }));
+      load();
+    } catch (e) { showToast("Confirm fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const uploadStrFile = async (file) => {
+    setUploading(true);
+    try {
+      const rows = await parseSheet(file);
+      const mapped = rows.map(r => ({
+        warehouse_id: whId,
+        source: String(r["Customer Order Ref"] ?? "").trim() ? "customer_order" : "weekly_demand",
+        customer_order_ref: String(r["Customer Order Ref"] ?? "").trim() || null,
+        destination: String(r["Destination"] ?? "").trim(),
+        product_barcode: String(r["Barcode"] ?? r["Internal Barcode"] ?? "").trim() || null,
+        product_name: String(r["Product Name"] ?? r["Display Name"] ?? "").trim(),
+        qty: Number(r["Qty"] ?? r["Quantity"] ?? 0) || 0,
+        status: "draft",
+        created_by: profile.id
+      })).filter(r => r.destination && r.product_name && r.qty > 0);
+      if (!mapped.length) { showToast("File mein koi valid row nahi mili (Destination, Product Name, Qty columns check karein)", "err"); setUploading(false); return; }
+      for (let i = 0; i < mapped.length; i += 200) {
+        await sb(`/rest/v1/stk_str`, { method: "POST", token, body: mapped.slice(i, i + 200) });
+      }
+      showToast(`✓ ${mapped.length} STR draft(s) upload ho gaye. NOTE: "Destination" column exact naam se match karega jaisa Logistics tab k destination master mein hai.`);
+      load();
+    } catch (e) { showToast("Upload fail: " + e.message, "err"); }
+    setUploading(false);
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  const TABS = [
+    { key: "draft", label: `Draft (${draftStrs.length})` },
+    { key: "reserved", label: `Reserved (${reservedStrs.length})` },
+    { key: "dispatched", label: `Dispatched (${dispatchedStrs.length})` }
+  ];
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — STR (Stock Transfer Requests)" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(t => <button key={t.key} onClick={() => setTab(t.key)} style={stkPill(tab === t.key)}>{t.label}</button>)}
+        <label style={{ ...S.secondaryBtnSm, cursor: "pointer", marginLeft: "auto" }}>
+          {uploading ? "Uploading…" : "📤 Bulk Upload STR (Customer Order / Weekly Demand)"}
+          <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={uploading} onChange={e => { const f = e.target.files[0]; if (f) uploadStrFile(f); e.target.value = ""; }} />
+        </label>
+      </div>
+
+      {tab === "draft" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Odoo STR# Add Karein & Confirm Karein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Odoo STR# daal kar qty verify karein aur Create karein — is se inventory reserve ho jayegi.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Destination</th><th style={S.th}>Qty</th><th style={S.th}>Odoo STR#</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {draftStrs.map(s => (
+                <tr key={s.id}>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}><input type="number" style={{ ...S.input, width: 80 }} defaultValue={s.qty} onChange={e => setEditForm(f => ({ ...f, [s.id]: { ...f[s.id], qty: e.target.value } }))} /></td>
+                  <td style={S.td}><input style={{ ...S.input, width: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR#" defaultValue={s.str_number || ""} onChange={e => setEditForm(f => ({ ...f, [s.id]: { ...f[s.id], strNumber: e.target.value } }))} /></td>
+                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => confirmStr(s)} disabled={loading}>✓ Create STR</button></td>
+                </tr>
+              ))}
+              {!draftStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi draft STR pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "reserved" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Reserved — Vehicle Load & Gatepass ab Logistics Tab Se</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yeh sirf trail hai. Vehicle assign, load confirm, ship, aur Gatepass generate karne k liye <strong>Stocking Logistics</strong> tab par jayein.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th></tr></thead>
+            <tbody>
+              {reservedStrs.map(s => (
+                <tr key={s.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                  <td style={S.td}>{sourceLabel(s.source)}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{s.destination}</td>
+                </tr>
+              ))}
+              {!reservedStrs.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Koi reserved STR nahi mila" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "dispatched" && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Dispatched — Gatepass History</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Dispatched At</th></tr></thead>
+            <tbody>
+              {dispatchedStrs.map(s => (
+                <tr key={s.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{s.gatepass_number}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}>{fmtTime(s.dispatched_at)}</td>
+                </tr>
+              ))}
+              {!dispatchedStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Abhi tak koi dispatch nahi hua" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — LOGISTICS ================= */
+// Vehicle loading + shipping + Gatepass now live here, separate from the STR tab. A Logistics
+// Officer picks a destination + vehicle, confirms exactly which reserved STRs are physically
+// loaded (creates a stk_vehicle_trips row), then Ship & Generate Gatepass is the single action
+// that marks those STRs dispatched, deducts real bin stock for non-GRN-distribution STRs
+// (GRN-distribution stock never touched a bin, so nothing to deduct there), and prints the PDF.
+function StockingLogisticsView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const isAdmin = profile.role === "admin";
+  const [strs, setStrs] = useState([]);
+  const [trips, setTrips] = useState([]);
+  const [destinations, setDestinations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadDestination, setLoadDestination] = useState("");
+  const [loadVehicle, setLoadVehicle] = useState("");
+  const [selected, setSelected] = useState({});
+  const [confirming, setConfirming] = useState(false);
+  const [shippingTripId, setShippingTripId] = useState(null);
+  const [newDestName, setNewDestName] = useState("");
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [s, t, d] = await Promise.all([
+        sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_vehicle_trips?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_destinations?warehouse_id=eq.${whId}&select=*&order=name.asc`, { token })
+      ]);
+      setStrs(s || []); setTrips(t || []); setDestinations(d || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const sourceLabel = (s) => s === "grn_distribution" ? "GRN Distribution" : s === "customer_order" ? "Customer Order" : "Weekly Demand";
+  // GRN-distribution stock never touched a bin (nothing to pick). Everything else must be
+  // physically picked first (Stocking Picking tab) before it can go on a vehicle.
+  const readyForLoad = strs.filter(s => s.status === "reserved" && !s.vehicle_trip_id && (s.source === "grn_distribution" || s.picked_at));
+  const eligibleForLoad = readyForLoad.filter(s => !loadDestination || s.destination === loadDestination);
+  const awaitingPick = strs.filter(s => s.status === "reserved" && !s.vehicle_trip_id && s.source !== "grn_distribution" && !s.picked_at);
+  const loadingTrips = trips.filter(t => t.status === "loading");
+  const shippedTrips = trips.filter(t => t.status === "shipped");
+  const strsForTrip = (tripId) => strs.filter(s => s.vehicle_trip_id === tripId);
+
+  const addDestination = async () => {
+    if (!newDestName.trim()) return;
+    try {
+      await sb(`/rest/v1/stk_destinations`, { method: "POST", token, body: { warehouse_id: whId, name: newDestName.trim() } });
+      setNewDestName(""); load();
+    } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
+  const confirmLoad = async () => {
+    const ids = Object.keys(selected).filter(k => selected[k]);
+    if (!loadDestination) { showToast("Destination select karein", "err"); return; }
+    if (!ids.length) { showToast("Kam se kam ek STR select karein", "err"); return; }
+    setConfirming(true);
+    try {
+      const trip = await sb(`/rest/v1/stk_vehicle_trips`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, vehicle_number: loadVehicle.trim() || null, destination: loadDestination, status: "loading", loaded_by: profile.id, loaded_at: new Date().toISOString() } });
+      for (const id of ids) {
+        await sb(`/rest/v1/stk_str?id=eq.${id}`, { method: "PATCH", token, body: { vehicle_trip_id: trip[0].id } });
+      }
+      showToast(`✓ ${ids.length} STR(s) vehicle ${loadVehicle || "—"} pe load confirm ho gaye — ${loadDestination}`);
+      setSelected({}); setLoadVehicle("");
+      load();
+    } catch (e) { showToast("Load confirm fail: " + e.message, "err"); }
+    setConfirming(false);
+  };
+
+  const nextGatepassNumber = async () => {
+    const rows = await sb(`/rest/v1/stk_str?gatepass_number=not.is.null&select=gatepass_number&order=gatepass_number.desc&limit=1`, { token });
+    let n = 0;
+    if (rows && rows[0]?.gatepass_number) { const m = String(rows[0].gatepass_number).match(/(\d+)$/); if (m) n = parseInt(m[1], 10); }
+    return `GP-${String(n + 1).padStart(5, "0")}`;
+  };
+
+  const shipTrip = async (trip) => {
+    const rows = strsForTrip(trip.id);
+    if (!rows.length) { showToast("Is trip mein koi STR nahi", "err"); return; }
+    setShippingTripId(trip.id);
+    try {
+      const gatepassNumber = await nextGatepassNumber();
+      const now = new Date().toISOString();
+      for (const row of rows) {
+        await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { status: "dispatched", gatepass_number: gatepassNumber, dispatched_by: profile.id, dispatched_at: now } });
+        if (row.grn_allocation_id) {
+          await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "dispatched" } });
+        }
+        // Non-GRN-distribution stock was already deducted from its bin at pick time
+        // (Stocking Picking tab) — nothing further to deduct here.
+      }
+      await sb(`/rest/v1/stk_vehicle_trips?id=eq.${trip.id}`, { method: "PATCH", token, body: { status: "shipped", shipped_by: profile.id, shipped_at: now, gatepass_number: gatepassNumber } });
+
+      let rowsHtml = "";
+      for (const r of rows) rowsHtml += `<tr><td>${r.str_number || "—"}</td><td>${r.product_name}</td><td style="text-align:right">${r.qty}</td><td>${sourceLabel(r.source)}</td></tr>`;
+      const w = window.open("", "_blank");
+      w.document.write(`<html><head><title>Gatepass ${gatepassNumber}</title><style>
+        body{font-family:Arial;padding:24px;color:#111} h2{margin-bottom:2px} .meta{color:#555;font-size:13px;margin-bottom:18px}
+        table{width:100%;border-collapse:collapse;margin-top:10px} th,td{border:1px solid #999;padding:8px 10px;font-size:13px;text-align:left}
+        th{background:#F5A623;color:#1A1206} .sign{margin-top:60px;display:flex;justify-content:space-between}
+        .sign div{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:12px}
+      </style></head><body>
+        <h2>Gatepass — ${gatepassNumber}</h2>
+        <div class="meta">Date: ${new Date().toLocaleString()} · Destination: ${trip.destination} ${trip.vehicle_number ? `· Vehicle: ${trip.vehicle_number}` : ""}</div>
+        <table><thead><tr><th>STR#</th><th>Product</th><th>Qty</th><th>Source</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+        <div class="sign"><div>Logistics Officer</div><div>Security / Gate</div><div>Driver</div></div>
+      </body></html>`);
+      w.document.close(); w.print();
+      showToast(`✅ Gatepass ${gatepassNumber} generate ho gaya — ${rows.length} STR(s) ship ho gaye`);
+      load();
+    } catch (e) { showToast("Ship fail: " + e.message, "err"); }
+    setShippingTripId(null);
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Logistics" />
+
+      {isAdmin && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Destination Master</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Odoo-based exact location names yahan add karein (jaise Ecom, Shaheen, BC, DHA LHR) — STR creation aur vehicle load isi list se lock hote hain.</div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <input style={{ ...S.input, maxWidth: 220 }} placeholder="Naya destination naam" value={newDestName} onChange={e => setNewDestName(e.target.value)} />
+            <button style={S.secondaryBtnSm} onClick={addDestination}>+ Add</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {destinations.map(d => <span key={d.id} style={S.badgeSm}>{d.name}</span>)}
+            {!destinations.length && <EmptyNote text="Koi destination abhi tak add nahi hui" />}
+          </div>
+        </div>
+      )}
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Vehicle Load Karein</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          <select style={{ ...S.input, minWidth: 180 }} value={loadDestination} onChange={e => { setLoadDestination(e.target.value); setSelected({}); }}>
+            <option value="">Destination select karein</option>
+            {destinations.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+          </select>
+          <input style={{ ...S.input, minWidth: 140 }} placeholder="Vehicle #" value={loadVehicle} onChange={e => setLoadVehicle(e.target.value)} />
+          <button style={S.primaryBtnSm} onClick={confirmLoad} disabled={confirming}>{confirming ? "Confirm ho raha…" : "✓ Confirm Vehicle Load"}</button>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}></th><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th></tr></thead>
+          <tbody>
+            {eligibleForLoad.map(s => (
+              <tr key={s.id}>
+                <td style={S.td}><input type="checkbox" checked={!!selected[s.id]} onChange={e => setSelected(sel => ({ ...sel, [s.id]: e.target.checked }))} /></td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                <td style={S.td}>{sourceLabel(s.source)}</td>
+                <td style={S.td}>{s.product_name}</td>
+                <td style={S.td}>{s.qty}</td>
+                <td style={S.td}>{s.destination}</td>
+              </tr>
+            ))}
+            {!eligibleForLoad.length && <tr><td style={S.td} colSpan={6}><EmptyNote text={loadDestination ? "Is destination k liye koi reserved STR nahi" : "Pehle destination select karein"} /></td></tr>}
+          </tbody>
+        </table>
+        {awaitingPick.length > 0 && (
+          <div style={{ marginTop: 12, fontSize: 12, color: "#F5A623" }}>⚠ {awaitingPick.length} STR(s) abhi bhi Stocking Picking tab se pick hone ka intezar kar rahi hain (Customer Order/Weekly Demand) — pick hone k baad hi yahan aayengi.</div>
+        )}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Loaded — Ship & Generate Gatepass</div>
+        {!loadingTrips.length && <EmptyNote text="Koi vehicle load confirm nahi hui abhi" />}
+        {loadingTrips.map(trip => {
+          const rows = strsForTrip(trip.id);
+          return (
+            <div key={trip.id} style={{ padding: "12px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600 }}>{trip.destination} {trip.vehicle_number ? `— Vehicle ${trip.vehicle_number}` : ""}</div>
+                  <div style={{ fontSize: 12, color: "#8A8272" }}>{rows.length} STR(s) · total qty {rows.reduce((s, r) => s + Number(r.qty), 0)}</div>
+                </div>
+                <button style={S.primaryBtnSm} onClick={() => shipTrip(trip)} disabled={shippingTripId === trip.id}>{shippingTripId === trip.id ? "Ship ho raha…" : "🚚 Ship & Generate Gatepass"}</button>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Source</th></tr></thead>
+                <tbody>
+                  {rows.map(r => <tr key={r.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number}</td><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.qty}</td><td style={S.td}>{sourceLabel(r.source)}</td></tr>)}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Shipped — Gatepass History</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>Destination</th><th style={S.th}>Vehicle</th><th style={S.th}>STRs</th><th style={S.th}>Shipped At</th></tr></thead>
+          <tbody>
+            {shippedTrips.map(trip => (
+              <tr key={trip.id}>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{trip.gatepass_number}</td>
+                <td style={S.td}>{trip.destination}</td>
+                <td style={S.td}>{trip.vehicle_number || "—"}</td>
+                <td style={S.td}>{strsForTrip(trip.id).length}</td>
+                <td style={S.td}>{fmtTime(trip.shipped_at)}</td>
+              </tr>
+            ))}
+            {!shippedTrips.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi tak koi shipment nahi hui" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — PICKING ================= */
+// Only Customer Order / Weekly Demand STRs land here — GRN-distribution stock never touched a
+// bin, so it skips picking entirely and goes straight to Logistics once its STR# is confirmed.
+// Outbound Executive/Admin/Lead assigns a reserved-but-unpicked STR to a Picker; the Picker
+// picks it from a bin that actually holds the product (qty capped to what's really there),
+// which is the single point real stock leaves that bin (an stk_inventory_adjustments row).
+function StockingPickingView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const canAssign = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
+  const canWork = ["admin", "warehouse_lead", "picker"].includes(profile.role);
+  const [tab, setTab] = useState(canAssign ? "assignment" : "mytasks");
+  const [strs, setStrs] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [pickers, setPickers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [assignChoice, setAssignChoice] = useState({});
+  const [pickForm, setPickForm] = useState({}); // { [strId]: { binId, qty } }
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [s, q, adj, b, p] = await Promise.all([
+        sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&status=eq.reserved&select=*`, { token }),
+        sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
+        sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.picker&select=id,full_name`, { token })
+      ]);
+      setStrs((s || []).filter(x => x.source !== "grn_distribution"));
+      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setPickers(p || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const pickerName = (id) => pickers.find(p => p.id === id)?.full_name || "—";
+  const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
+
+  // Per-bin on-hand for a given product, so a Picker can only pick what's really there.
+  const binsForProduct = (barcode, name) => {
+    const key = barcode || name;
+    const perBin = {};
+    for (const q of queue) if ((q.product_barcode || q.product_name) === key) perBin[q.bin_id] = (perBin[q.bin_id] || 0) + Number(q.qty || 0);
+    for (const a of adjustments) if ((a.product_barcode || a.product_name) === key) perBin[a.bin_id] = (perBin[a.bin_id] || 0) + Number(a.qty_delta || 0);
+    return Object.entries(perBin).filter(([, v]) => v > 0).map(([binId, avail]) => ({ binId, avail }));
+  };
+
+  const unassigned = strs.filter(s => !s.assigned_picker && !s.picked_at);
+  const myTasks = profile.role === "picker" ? strs.filter(s => s.assigned_picker === profile.id && !s.picked_at) : strs.filter(s => s.assigned_picker && !s.picked_at);
+
+  const assignPicker = async (str) => {
+    const pickerId = assignChoice[str.id];
+    if (!pickerId) { showToast("Picker select karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { assigned_picker: pickerId } });
+      showToast(`✓ ${str.product_name} — ${pickerName(pickerId)} ko assign ho gaya`);
+      load();
+    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
+  };
+
+  const confirmPick = async (str) => {
+    const f = pickForm[str.id] || {};
+    const binId = f.binId;
+    const qty = f.qty !== undefined ? Number(f.qty) : str.qty;
+    if (!binId) { showToast("Bin select karein", "err"); return; }
+    const avail = binsForProduct(str.product_barcode, str.product_name).find(b => b.binId === binId)?.avail || 0;
+    if (!qty || qty <= 0 || qty > avail) { showToast(`Valid qty enter karein (max ${avail} is bin mein)`, "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: str.product_barcode, product_name: str.product_name, bin_id: binId, qty_delta: -qty, reason: `Picked for STR ${str.str_number || ""}`, source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { picked_by: profile.id, picked_at: new Date().toISOString(), picked_bin_id: binId, qty } });
+      showToast(`✓ ${str.product_name} — ${qty} pick ho gayi ${binCode(binId)} se, Logistics tab mein ready hai`);
+      setPickForm(pf => ({ ...pf, [str.id]: {} }));
+      load();
+    } catch (e) { showToast("Pick fail: " + e.message, "err"); }
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  const TABS = [
+    ...(canAssign ? [{ key: "assignment", label: `Assignment (${unassigned.length})` }] : []),
+    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "picker" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : [])
+  ];
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Picking" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(t => <button key={t.key} onClick={() => setTab(t.key)} style={stkPill(tab === t.key)}>{t.label}</button>)}
+      </div>
+
+      {tab === "assignment" && canAssign && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Customer Order / Weekly Demand STRs — Picker Assign Karein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>GRN-distribution STRs yahan nahi aatin — woh direct Logistics tab mein ready hoti hain.</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Assign To</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {unassigned.map(s => (
+                <tr key={s.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, width: 160 }} value={assignChoice[s.id] || ""} onChange={e => setAssignChoice(a => ({ ...a, [s.id]: e.target.value }))}>
+                      <option value="">Select picker…</option>
+                      {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => assignPicker(s)}>Assign</button></td>
+                </tr>
+              ))}
+              {!unassigned.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi STR assignment k liye pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "mytasks" && canWork && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>{profile.role === "picker" ? "My Picking Tasks" : "All Assigned (oversight)"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{profile.role !== "picker" && <th style={S.th}>Picker</th>}<th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty Needed</th><th style={S.th}>Pick From Bin</th><th style={S.th}>Qty to Pick</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {myTasks.map(s => {
+                const availableBins = binsForProduct(s.product_barcode, s.product_name);
+                return (
+                  <tr key={s.id}>
+                    {profile.role !== "picker" && <td style={S.td}>{pickerName(s.assigned_picker)}</td>}
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                    <td style={S.td}>{s.product_name}</td>
+                    <td style={S.td}>{s.qty}</td>
+                    <td style={S.td}>
+                      <select style={{ ...S.input, width: 140 }} value={pickForm[s.id]?.binId || ""} onChange={e => setPickForm(pf => ({ ...pf, [s.id]: { ...pf[s.id], binId: e.target.value } }))}>
+                        <option value="">Select bin…</option>
+                        {availableBins.map(b => <option key={b.binId} value={b.binId}>{binCode(b.binId)} ({b.avail} avail)</option>)}
+                      </select>
+                    </td>
+                    <td style={S.td}><input type="number" style={{ ...S.input, width: 80 }} placeholder={s.qty} value={pickForm[s.id]?.qty ?? ""} onChange={e => setPickForm(pf => ({ ...pf, [s.id]: { ...pf[s.id], qty: e.target.value } }))} /></td>
+                    <td style={S.td}><button style={S.primaryBtnSm} onClick={() => confirmPick(s)}>✓ Confirm Pick</button></td>
+                  </tr>
+                );
+              })}
+              {!myTasks.length && <tr><td style={S.td} colSpan={profile.role !== "picker" ? 7 : 6}><EmptyNote text="Koi picking task pending nahi" /></td></tr>}
             </tbody>
           </table>
         </div>
