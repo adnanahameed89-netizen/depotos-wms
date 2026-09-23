@@ -10,6 +10,7 @@
 <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
 <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script src="https://unpkg.com/chart.js@4.4.4/dist/chart.umd.js"></script>
 <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
 <style>
@@ -349,6 +350,7 @@ function App() {
           {view === "returns" && <ReturnsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "reports" && <ReportsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "bins" && profile.role === "admin" && <BinsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkbins" && profile.role === "admin" && <BinsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
@@ -356,6 +358,7 @@ function App() {
           {view === "stkoutbound" && <StockingOutboundView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkstr" && <StockingStrView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkpicking" && <StockingPickingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkpacking" && <StockingPackingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stklogistics" && <StockingLogisticsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
@@ -531,18 +534,19 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" },
     { id: "stkstr", label: "STR", icon: "🧾" },
     { id: "stkpicking", label: "Stocking Picking", icon: "🧑‍🤝‍🧑" },
+    { id: "stkpacking", label: "Stocking Packing", icon: "📦" },
     { id: "stklogistics", label: "Stocking Logistics", icon: "🚚" },
     { id: "stkinventory", label: "Stocking Inventory", icon: "🧰" }
   ];
   const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
   const ecomExtras = warehouseType !== "stocking";
-  const baseItems = profile.role === "admin" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }] : []), { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
     : profile.role === "warehouse_lead" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }] : []), { id: "users", label: "Users", icon: "👥" }]
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stklogistics", "stkinventory", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stkpacking", "stklogistics", "stkinventory", "stkbins", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -9654,6 +9658,211 @@ function StockingStrView({ token, profile, showToast }) {
   );
 }
 
+/* ================= STOCKING WAREHOUSE — PACKING ================= */
+// Runs after Picking (or immediately after STR confirm for GRN-distribution, which skips
+// Picking entirely). Packer splits the STR's qty across cartons/sacks, each one getting its
+// own QR token — printed on the Gatepass as a cut-out label for that physical carton. Only
+// once packed_at is set does the STR become visible in Logistics for vehicle loading.
+function StockingPackingView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const canAssign = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
+  const canWork = ["admin", "warehouse_lead", "packer"].includes(profile.role);
+  const [tab, setTab] = useState(canAssign ? "assignment" : "mytasks");
+  const [strs, setStrs] = useState([]);
+  const [packers, setPackers] = useState([]);
+  const [cartons, setCartons] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [assignChoice, setAssignChoice] = useState({});
+  const [activeStrId, setActiveStrId] = useState(null);
+  const [cartonNumber, setCartonNumber] = useState("");
+  const [cartonQty, setCartonQty] = useState("");
+
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [s, p, c] = await Promise.all([
+        sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&status=eq.reserved&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.packer&select=id,full_name`, { token }),
+        sb(`/rest/v1/stk_str_cartons?warehouse_id=eq.${whId}&select=*`, { token })
+      ]);
+      setStrs(s || []); setPackers(p || []); setCartons(c || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const packerName = (id) => packers.find(p => p.id === id)?.full_name || "—";
+  const cartonsForStr = (strId) => cartons.filter(c => c.str_id === strId);
+  const packedQty = (strId) => cartonsForStr(strId).reduce((s, c) => s + Number(c.qty || 0), 0);
+
+  // Ready for packing once past whatever Picking requires it to clear (GRN-distribution skips
+  // Picking entirely and is ready as soon as its STR# is confirmed).
+  const readyForPacking = strs.filter(s => (s.source === "grn_distribution" || s.picked_at) && !s.packed_at);
+  const unassigned = readyForPacking.filter(s => !s.assigned_packer);
+  const myTasks = profile.role === "packer" ? readyForPacking.filter(s => s.assigned_packer === profile.id) : readyForPacking.filter(s => s.assigned_packer);
+  const activeStr = activeStrId ? strs.find(s => s.id === activeStrId) : null;
+
+  const assignPacker = async (str) => {
+    const packerId = assignChoice[str.id];
+    if (!packerId) { showToast("Packer select karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { assigned_packer: packerId } });
+      showToast(`✓ ${str.product_name} — ${packerName(packerId)} ko assign ho gaya`);
+      load();
+    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
+  };
+
+  const addCarton = async () => {
+    if (!activeStr) return;
+    const qty = Number(cartonQty);
+    const remaining = activeStr.qty - packedQty(activeStr.id);
+    if (!cartonNumber.trim()) { showToast("Carton/Sack number likhein", "err"); return; }
+    if (!qty || qty <= 0 || qty > remaining) { showToast(`Valid qty enter karein (max ${remaining} baaki hai)`, "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_str_cartons`, { method: "POST", token, body: { warehouse_id: whId, str_id: activeStr.id, carton_number: cartonNumber.trim(), product_barcode: activeStr.product_barcode, product_name: activeStr.product_name, qty, qr_token: uid(), created_by: profile.id } });
+      setCartonNumber(""); setCartonQty("");
+      showToast(`✓ Carton ${cartonNumber} — ${qty} pcs add ho gaya`);
+      load();
+    } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
+  const removeCarton = async (carton) => {
+    try {
+      await sb(`/rest/v1/stk_str_cartons?id=eq.${carton.id}`, { method: "DELETE", token });
+      load();
+    } catch (e) { showToast("Remove fail: " + e.message, "err"); }
+  };
+
+  const markPackingDone = async (str) => {
+    const myCartons = cartonsForStr(str.id);
+    if (!myCartons.length) { showToast("Kam se kam ek carton/sack add karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { packed_by: profile.id, packed_at: new Date().toISOString() } });
+
+      // Print carton labels right now — this is the moment the physical cartons exist and
+      // need QR labels pasted on them, well before any vehicle/Logistics involvement.
+      const qrImages = await Promise.all(myCartons.map(async c => {
+        try { return { carton: c, dataUrl: await QRCode.toDataURL(c.qr_token, { width: 160, margin: 1 }) }; }
+        catch (e) { return { carton: c, dataUrl: null }; }
+      }));
+      let labelsHtml = "";
+      for (const { carton, dataUrl } of qrImages) {
+        labelsHtml += `<div class="label">${dataUrl ? `<img src="${dataUrl}" />` : ""}<div class="lbl-text"><div class="cn">${carton.carton_number}</div>${str.product_name}<br/>Qty: ${carton.qty}<br/>STR: ${str.str_number || "—"}<br/>Dest: ${str.destination}</div></div>`;
+      }
+      const w = window.open("", "_blank");
+      w.document.write(`<html><head><title>Carton Labels — ${str.str_number || str.product_name}</title><style>
+        body{font-family:Arial;padding:20px;color:#111}
+        h2{margin-bottom:2px} .meta{color:#555;font-size:13px;margin-bottom:18px}
+        .labels{display:flex;flex-wrap:wrap;gap:14px}
+        .label{border:2px dashed #999;border-radius:6px;padding:10px;display:flex;gap:10px;align-items:center;width:280px;page-break-inside:avoid}
+        .label img{width:100px;height:100px}
+        .lbl-text{font-size:12px;line-height:1.5}
+        .cn{font-size:16px;font-weight:800;color:#F5A623}
+      </style></head><body>
+        <h2>Carton/Sack Labels</h2>
+        <div class="meta">STR ${str.str_number || "—"} · ${str.product_name} · ${myCartons.length} carton(s) · Print kar ke har label us carton pe paste karein.</div>
+        <div class="labels">${labelsHtml}</div>
+      </body></html>`);
+      w.document.close(); w.print();
+
+      showToast(`✓ ${str.product_name} packing complete — ${myCartons.length} carton label(s) print ho rahe hain, Logistics tab mein ready hai`);
+      setActiveStrId(null);
+      load();
+    } catch (e) { showToast("Done fail: " + e.message, "err"); }
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  const TABS = [
+    ...(canAssign ? [{ key: "assignment", label: `Assignment (${unassigned.length})` }] : []),
+    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "packer" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : [])
+  ];
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Packing" />
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        {TABS.map(t => <button key={t.key} onClick={() => { setTab(t.key); setActiveStrId(null); }} style={stkPill(tab === t.key)}>{t.label}</button>)}
+      </div>
+
+      {tab === "assignment" && canAssign && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Ready for Packing — Packer Assign Karein</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Assign To</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {unassigned.map(s => (
+                <tr key={s.id}>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, width: 160 }} value={assignChoice[s.id] || ""} onChange={e => setAssignChoice(a => ({ ...a, [s.id]: e.target.value }))}>
+                      <option value="">Select packer…</option>
+                      {packers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => assignPacker(s)}>Assign</button></td>
+                </tr>
+              ))}
+              {!unassigned.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi STR packing assignment k liye pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "mytasks" && canWork && !activeStr && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>{profile.role === "packer" ? "My Packing Tasks" : "All Assigned (oversight)"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{profile.role !== "packer" && <th style={S.th}>Packer</th>}<th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Packed / Cartons</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {myTasks.map(s => (
+                <tr key={s.id}>
+                  {profile.role !== "packer" && <td style={S.td}>{packerName(s.assigned_packer)}</td>}
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
+                  <td style={S.td}>{s.product_name}</td>
+                  <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{packedQty(s.id)} / {s.qty} — {cartonsForStr(s.id).length} carton(s)</td>
+                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => setActiveStrId(s.id)}>Open</button></td>
+                </tr>
+              ))}
+              {!myTasks.length && <tr><td style={S.td} colSpan={profile.role !== "packer" ? 6 : 5}><EmptyNote text="Koi packing task pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "mytasks" && activeStr && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>Packing — {activeStr.product_name} ({activeStr.str_number})</div>
+            <button style={S.secondaryBtnSm} onClick={() => setActiveStrId(null)}>← Back</button>
+          </div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Total qty: {activeStr.qty} · Packed so far: {packedQty(activeStr.id)} · Remaining: {activeStr.qty - packedQty(activeStr.id)}</div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+            <input style={{ ...S.input, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Carton/Sack #" value={cartonNumber} onChange={e => setCartonNumber(e.target.value)} />
+            <input type="number" style={{ ...S.input, width: 100 }} placeholder="Qty" value={cartonQty} onChange={e => setCartonQty(e.target.value)} />
+            <button style={S.secondaryBtnSm} onClick={addCarton}>+ Add Carton</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 16 }}>
+            <thead><tr><th style={S.th}>Carton/Sack #</th><th style={S.th}>Qty</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {cartonsForStr(activeStr.id).map(c => (
+                <tr key={c.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{c.carton_number}</td><td style={S.td}>{c.qty}</td><td style={S.td}><button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => removeCarton(c)}>Remove</button></td></tr>
+              ))}
+              {!cartonsForStr(activeStr.id).length && <tr><td style={S.td} colSpan={3}><EmptyNote text="Abhi koi carton add nahi hua" /></td></tr>}
+            </tbody>
+          </table>
+          <button style={S.primaryBtnSm} onClick={() => markPackingDone(activeStr)}>✓ Packing Done</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================= STOCKING WAREHOUSE — LOGISTICS ================= */
 // Vehicle loading + shipping + Gatepass now live here, separate from the STR tab. A Logistics
 // Officer picks a destination + vehicle, confirms exactly which reserved STRs are physically
@@ -9665,39 +9874,46 @@ function StockingLogisticsView({ token, profile, showToast }) {
   const isAdmin = profile.role === "admin";
   const [strs, setStrs] = useState([]);
   const [trips, setTrips] = useState([]);
+  const [cartons, setCartons] = useState([]);
   const [destinations, setDestinations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [loadDestination, setLoadDestination] = useState("");
-  const [loadVehicle, setLoadVehicle] = useState("");
-  const [selected, setSelected] = useState({});
-  const [confirming, setConfirming] = useState(false);
+  const [activeTripId, setActiveTripId] = useState(null);
+  const [scanInput, setScanInput] = useState("");
+  const [scanError, setScanError] = useState("");
+  const [vehicleNumber, setVehicleNumber] = useState("");
+  const [driverName, setDriverName] = useState("");
+  const [starting, setStarting] = useState(false);
   const [shippingTripId, setShippingTripId] = useState(null);
   const [newDestName, setNewDestName] = useState("");
+  const [cartonLookupInput, setCartonLookupInput] = useState("");
+  const [cartonLookupResult, setCartonLookupResult] = useState(null);
+  const [cartonLookupError, setCartonLookupError] = useState("");
 
   const load = async () => {
     if (!whId) return;
     setLoading(true);
     try {
-      const [s, t, d] = await Promise.all([
+      const [s, t, c, d] = await Promise.all([
         sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
         sb(`/rest/v1/stk_vehicle_trips?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_str_cartons?warehouse_id=eq.${whId}&select=*`, { token }),
         sb(`/rest/v1/stk_destinations?warehouse_id=eq.${whId}&select=*&order=name.asc`, { token })
       ]);
-      setStrs(s || []); setTrips(t || []); setDestinations(d || []);
+      setStrs(s || []); setTrips(t || []); setCartons(c || []); setDestinations(d || []);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [whId]);
 
+  const strById = (id) => strs.find(s => s.id === id);
+  const cartonsForStr = (strId) => cartons.filter(c => c.str_id === strId);
   const sourceLabel = (s) => s === "grn_distribution" ? "GRN Distribution" : s === "customer_order" ? "Customer Order" : "Weekly Demand";
-  // GRN-distribution stock never touched a bin (nothing to pick). Everything else must be
-  // physically picked first (Stocking Picking tab) before it can go on a vehicle.
-  const readyForLoad = strs.filter(s => s.status === "reserved" && !s.vehicle_trip_id && (s.source === "grn_distribution" || s.picked_at));
-  const eligibleForLoad = readyForLoad.filter(s => !loadDestination || s.destination === loadDestination);
-  const awaitingPick = strs.filter(s => s.status === "reserved" && !s.vehicle_trip_id && s.source !== "grn_distribution" && !s.picked_at);
+  const awaitingPick = strs.filter(s => s.status === "reserved" && s.source !== "grn_distribution" && !s.picked_at);
+  const awaitingPack = strs.filter(s => s.status === "reserved" && (s.source === "grn_distribution" || s.picked_at) && !s.packed_at);
   const loadingTrips = trips.filter(t => t.status === "loading");
   const shippedTrips = trips.filter(t => t.status === "shipped");
-  const strsForTrip = (tripId) => strs.filter(s => s.vehicle_trip_id === tripId);
+  const cartonsInTrip = (tripId) => cartons.filter(c => c.vehicle_trip_id === tripId && c.status === "loaded");
+  const activeTrip = activeTripId ? trips.find(t => t.id === activeTripId) : null;
 
   const addDestination = async () => {
     if (!newDestName.trim()) return;
@@ -9707,21 +9923,55 @@ function StockingLogisticsView({ token, profile, showToast }) {
     } catch (e) { showToast("Add fail: " + e.message, "err"); }
   };
 
-  const confirmLoad = async () => {
-    const ids = Object.keys(selected).filter(k => selected[k]);
-    if (!loadDestination) { showToast("Destination select karein", "err"); return; }
-    if (!ids.length) { showToast("Kam se kam ek STR select karein", "err"); return; }
-    setConfirming(true);
+  // Scan/type a carton's QR token to see exactly what's inside it — the same lookup a shop
+  // could do once they scan the physical label pasted on the carton.
+  const lookupCarton = async () => {
+    const t = cartonLookupInput.trim();
+    setCartonLookupResult(null); setCartonLookupError("");
+    if (!t) return;
     try {
-      const trip = await sb(`/rest/v1/stk_vehicle_trips`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, vehicle_number: loadVehicle.trim() || null, destination: loadDestination, status: "loading", loaded_by: profile.id, loaded_at: new Date().toISOString() } });
-      for (const id of ids) {
-        await sb(`/rest/v1/stk_str?id=eq.${id}`, { method: "PATCH", token, body: { vehicle_trip_id: trip[0].id } });
-      }
-      showToast(`✓ ${ids.length} STR(s) vehicle ${loadVehicle || "—"} pe load confirm ho gaye — ${loadDestination}`);
-      setSelected({}); setLoadVehicle("");
+      const rows = await sb(`/rest/v1/stk_str_cartons?warehouse_id=eq.${whId}&qr_token=eq.${encodeURIComponent(t)}&select=*`, { token });
+      if (!rows || !rows.length) { setCartonLookupError("Yeh carton code kisi record se match nahi hua"); return; }
+      setCartonLookupResult(rows[0]);
+    } catch (e) { setCartonLookupError("Lookup fail: " + e.message); }
+  };
+
+  const startNewLoad = async () => {
+    setStarting(true);
+    try {
+      const trip = await sb(`/rest/v1/stk_vehicle_trips`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, status: "loading" } });
+      await load();
+      setActiveTripId(trip[0].id);
+      setVehicleNumber(""); setDriverName("");
+    } catch (e) { showToast("Start fail: " + e.message, "err"); }
+    setStarting(false);
+  };
+
+  // Logistics Officer scans each carton's pasted QR/barcode as it physically goes onto the
+  // vehicle — the single point of truth for "what's actually loaded", independent of whether
+  // an STR's other cartons made it on or are left for a later vehicle.
+  const scanCartonToLoad = async (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : scanInput).trim();
+    setScanInput(""); setScanError("");
+    if (!code || !activeTripId) return;
+    const carton = cartons.find(c => c.qr_token === code);
+    if (!carton) { setScanError(`"${code}" kisi carton se match nahi hua`); return; }
+    if (carton.status !== "packed") { setScanError(`Carton ${carton.carton_number} already ${carton.status === "shipped" ? "shipped" : "kisi aur vehicle pe loaded"} hai`); return; }
+    const str = strById(carton.str_id);
+    const existingDest = cartonsInTrip(activeTripId).map(c => strById(c.str_id)?.destination).find(Boolean);
+    if (existingDest && str && str.destination !== existingDest && !window.confirm(`Is vehicle mein ab tak "${existingDest}" ki cartons hain — yeh "${str.destination}" ki hai. Phir bhi load karein?`)) return;
+    try {
+      await sb(`/rest/v1/stk_str_cartons?id=eq.${carton.id}`, { method: "PATCH", token, body: { status: "loaded", vehicle_trip_id: activeTripId, loaded_by: profile.id, loaded_at: new Date().toISOString() } });
+      showToast(`✓ Carton ${carton.carton_number} loaded — ${str?.product_name || ""}`);
       load();
-    } catch (e) { showToast("Load confirm fail: " + e.message, "err"); }
-    setConfirming(false);
+    } catch (e) { setScanError("Scan fail: " + e.message); }
+  };
+
+  const unscanCarton = async (carton) => {
+    try {
+      await sb(`/rest/v1/stk_str_cartons?id=eq.${carton.id}`, { method: "PATCH", token, body: { status: "packed", vehicle_trip_id: null, loaded_by: null, loaded_at: null } });
+      load();
+    } catch (e) { showToast("Remove fail: " + e.message, "err"); }
   };
 
   const nextGatepassNumber = async () => {
@@ -9731,39 +9981,73 @@ function StockingLogisticsView({ token, profile, showToast }) {
     return `GP-${String(n + 1).padStart(5, "0")}`;
   };
 
+  // Ships only the cartons actually scanned onto this vehicle — an STR is only marked fully
+  // "dispatched" once every one of its cartons has shipped; if space ran out mid-STR, its
+  // remaining (still 'packed') cartons simply wait for the next vehicle.
   const shipTrip = async (trip) => {
-    const rows = strsForTrip(trip.id);
-    if (!rows.length) { showToast("Is trip mein koi STR nahi", "err"); return; }
+    const loadedCartons = cartonsInTrip(trip.id);
+    if (!loadedCartons.length) { showToast("Is vehicle mein koi carton scan nahi hui", "err"); return; }
+    if (!vehicleNumber.trim() || !driverName.trim()) { showToast("Vehicle # aur Driver Name enter karein", "err"); return; }
     setShippingTripId(trip.id);
     try {
       const gatepassNumber = await nextGatepassNumber();
       const now = new Date().toISOString();
-      for (const row of rows) {
-        await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { status: "dispatched", gatepass_number: gatepassNumber, dispatched_by: profile.id, dispatched_at: now } });
-        if (row.grn_allocation_id) {
-          await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "dispatched" } });
-        }
-        // Non-GRN-distribution stock was already deducted from its bin at pick time
-        // (Stocking Picking tab) — nothing further to deduct here.
+      await sb(`/rest/v1/stk_vehicle_trips?id=eq.${trip.id}`, { method: "PATCH", token, body: { status: "shipped", vehicle_number: vehicleNumber.trim(), driver_name: driverName.trim(), shipped_by: profile.id, shipped_at: now, gatepass_number: gatepassNumber } });
+      for (const c of loadedCartons) {
+        await sb(`/rest/v1/stk_str_cartons?id=eq.${c.id}`, { method: "PATCH", token, body: { status: "shipped" } });
       }
-      await sb(`/rest/v1/stk_vehicle_trips?id=eq.${trip.id}`, { method: "PATCH", token, body: { status: "shipped", shipped_by: profile.id, shipped_at: now, gatepass_number: gatepassNumber } });
+      const touchedStrIds = [...new Set(loadedCartons.map(c => c.str_id))];
+      for (const strId of touchedStrIds) {
+        const str = strById(strId);
+        const allCartons = cartonsForStr(strId);
+        const allShipped = allCartons.every(c => c.id in Object.fromEntries(loadedCartons.map(lc => [lc.id, true])) || c.status === "shipped");
+        if (allShipped) {
+          await sb(`/rest/v1/stk_str?id=eq.${strId}`, { method: "PATCH", token, body: { status: "dispatched", gatepass_number: gatepassNumber, dispatched_by: profile.id, dispatched_at: now } });
+          if (str?.grn_allocation_id) {
+            await sb(`/rest/v1/stk_grn_allocations?id=eq.${str.grn_allocation_id}`, { method: "PATCH", token, body: { status: "dispatched" } });
+          }
+        }
+      }
 
+      // Group by STR for the printed summary — carton numbers only (labels were already
+      // printed with QR codes at packing time), plus how many of each STR's total made it.
       let rowsHtml = "";
-      for (const r of rows) rowsHtml += `<tr><td>${r.str_number || "—"}</td><td>${r.product_name}</td><td style="text-align:right">${r.qty}</td><td>${sourceLabel(r.source)}</td></tr>`;
+      for (const strId of touchedStrIds) {
+        const str = strById(strId);
+        const shippedHere = loadedCartons.filter(c => c.str_id === strId);
+        const totalCartons = cartonsForStr(strId).length;
+        rowsHtml += `<tr><td>${str?.str_number || "—"}</td><td>${str ? fmtTime(str.created_at) : "—"}</td><td>${str?.product_name || "—"}</td><td style="text-align:right">${str?.qty ?? "—"}</td><td style="text-align:right">${shippedHere.length} / ${totalCartons}</td><td>${shippedHere.map(c => c.carton_number).join(", ")}</td></tr>`;
+      }
+
       const w = window.open("", "_blank");
       w.document.write(`<html><head><title>Gatepass ${gatepassNumber}</title><style>
-        body{font-family:Arial;padding:24px;color:#111} h2{margin-bottom:2px} .meta{color:#555;font-size:13px;margin-bottom:18px}
-        table{width:100%;border-collapse:collapse;margin-top:10px} th,td{border:1px solid #999;padding:8px 10px;font-size:13px;text-align:left}
-        th{background:#F5A623;color:#1A1206} .sign{margin-top:60px;display:flex;justify-content:space-between}
+        body{font-family:Arial;padding:24px;color:#111}
+        .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1A1206;padding-bottom:14px;margin-bottom:14px}
+        .brand{font-size:20px;font-weight:800;letter-spacing:1px}
+        .gp-title{font-size:14px;color:#555;margin-top:4px}
+        .gp-number{font-size:20px;font-weight:800;text-align:right}
+        .meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;font-size:13px;margin-bottom:18px}
+        .meta-grid span{color:#555}
+        table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #999;padding:8px 10px;font-size:13px;text-align:left}
+        th{background:#F5A623;color:#1A1206}
+        .sign{margin-top:60px;display:flex;justify-content:space-between}
         .sign div{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:12px}
       </style></head><body>
-        <h2>Gatepass — ${gatepassNumber}</h2>
-        <div class="meta">Date: ${new Date().toLocaleString()} · Destination: ${trip.destination} ${trip.vehicle_number ? `· Vehicle: ${trip.vehicle_number}` : ""}</div>
-        <table><thead><tr><th>STR#</th><th>Product</th><th>Qty</th><th>Source</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+        <div class="header">
+          <div><div class="brand">MUGHAL FULFILLMENT WAREHOUSE</div><div class="gp-title">Gatepass — Stock Transfer Dispatch</div></div>
+          <div class="gp-number">${gatepassNumber}</div>
+        </div>
+        <div class="meta-grid">
+          <div><span>Vehicle #:</span> ${vehicleNumber}</div>
+          <div><span>Driver:</span> ${driverName}</div>
+          <div><span>Shipped Date:</span> ${new Date().toLocaleString()}</div>
+        </div>
+        <table><thead><tr><th>STR#</th><th>Created Date</th><th>Product</th><th>STR Qty</th><th>Cartons Shipped</th><th>Carton #s</th></tr></thead><tbody>${rowsHtml}</tbody></table>
         <div class="sign"><div>Logistics Officer</div><div>Security / Gate</div><div>Driver</div></div>
       </body></html>`);
       w.document.close(); w.print();
-      showToast(`✅ Gatepass ${gatepassNumber} generate ho gaya — ${rows.length} STR(s) ship ho gaye`);
+      showToast(`✅ Gatepass ${gatepassNumber} generate ho gaya — ${loadedCartons.length} carton(s) shipped`);
+      setActiveTripId(null); setVehicleNumber(""); setDriverName("");
       load();
     } catch (e) { showToast("Ship fail: " + e.message, "err"); }
     setShippingTripId(null);
@@ -9775,10 +10059,34 @@ function StockingLogisticsView({ token, profile, showToast }) {
     <div>
       <SectionTitle title="Stocking Warehouse — Logistics" />
 
+      <div style={S.panel}>
+        <div style={S.panelTitle}>📦 Carton Lookup</div>
+        <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Carton/Sack pe paste QR code scan ya code type karein — uske andar ki poori detail yahan dikh jayegi.</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <input style={{ ...S.input, minWidth: 220, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Carton QR code scan/type karein" value={cartonLookupInput} onChange={e => setCartonLookupInput(e.target.value)} onKeyDown={e => e.key === "Enter" && lookupCarton()} />
+          <CameraScanButton onScan={(text) => { setCartonLookupInput(text); setTimeout(lookupCarton, 0); }} />
+          <button style={S.secondaryBtnSm} onClick={lookupCarton}>🔍 Lookup</button>
+        </div>
+        {cartonLookupError && <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 8 }}>{cartonLookupError}</div>}
+        {cartonLookupResult && (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Carton/Sack #</th><th style={S.th}>Barcode</th><th style={S.th}>Product Name</th><th style={S.th}>Qty</th></tr></thead>
+            <tbody>
+              <tr>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{cartonLookupResult.carton_number}</td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{cartonLookupResult.product_barcode || "—"}</td>
+                <td style={S.td}>{cartonLookupResult.product_name}</td>
+                <td style={S.td}>{cartonLookupResult.qty}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
       {isAdmin && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Destination Master</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Odoo-based exact location names yahan add karein (jaise Ecom, Shaheen, BC, DHA LHR) — STR creation aur vehicle load isi list se lock hote hain.</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Odoo-based exact location names yahan add karein (jaise Ecom, Shaheen, BC, DHA LHR) — STR creation isi list se lock hoti hai.</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input style={{ ...S.input, maxWidth: 220 }} placeholder="Naya destination naam" value={newDestName} onChange={e => setNewDestName(e.target.value)} />
             <button style={S.secondaryBtnSm} onClick={addDestination}>+ Add</button>
@@ -9790,73 +10098,91 @@ function StockingLogisticsView({ token, profile, showToast }) {
         </div>
       )}
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Vehicle Load Karein</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-          <select style={{ ...S.input, minWidth: 180 }} value={loadDestination} onChange={e => { setLoadDestination(e.target.value); setSelected({}); }}>
-            <option value="">Destination select karein</option>
-            {destinations.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
-          </select>
-          <input style={{ ...S.input, minWidth: 140 }} placeholder="Vehicle #" value={loadVehicle} onChange={e => setLoadVehicle(e.target.value)} />
-          <button style={S.primaryBtnSm} onClick={confirmLoad} disabled={confirming}>{confirming ? "Confirm ho raha…" : "✓ Confirm Vehicle Load"}</button>
+      {(awaitingPick.length > 0 || awaitingPack.length > 0) && (
+        <div style={S.panel}>
+          {awaitingPick.length > 0 && <div style={{ fontSize: 12, color: "#F5A623" }}>⚠ {awaitingPick.length} STR(s) Stocking Picking tab se pick hone ka intezar kar rahi hain.</div>}
+          {awaitingPack.length > 0 && <div style={{ fontSize: 12, color: "#F5A623", marginTop: 6 }}>⚠ {awaitingPack.length} STR(s) Stocking Packing tab se packing ka intezar kar rahi hain.</div>}
         </div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}></th><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th></tr></thead>
-          <tbody>
-            {eligibleForLoad.map(s => (
-              <tr key={s.id}>
-                <td style={S.td}><input type="checkbox" checked={!!selected[s.id]} onChange={e => setSelected(sel => ({ ...sel, [s.id]: e.target.checked }))} /></td>
-                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
-                <td style={S.td}>{sourceLabel(s.source)}</td>
-                <td style={S.td}>{s.product_name}</td>
-                <td style={S.td}>{s.qty}</td>
-                <td style={S.td}>{s.destination}</td>
-              </tr>
-            ))}
-            {!eligibleForLoad.length && <tr><td style={S.td} colSpan={6}><EmptyNote text={loadDestination ? "Is destination k liye koi reserved STR nahi" : "Pehle destination select karein"} /></td></tr>}
-          </tbody>
-        </table>
-        {awaitingPick.length > 0 && (
-          <div style={{ marginTop: 12, fontSize: 12, color: "#F5A623" }}>⚠ {awaitingPick.length} STR(s) abhi bhi Stocking Picking tab se pick hone ka intezar kar rahi hain (Customer Order/Weekly Demand) — pick hone k baad hi yahan aayengi.</div>
-        )}
-      </div>
+      )}
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Loaded — Ship & Generate Gatepass</div>
-        {!loadingTrips.length && <EmptyNote text="Koi vehicle load confirm nahi hui abhi" />}
-        {loadingTrips.map(trip => {
-          const rows = strsForTrip(trip.id);
-          return (
-            <div key={trip.id} style={{ padding: "12px 0", borderBottom: "1px solid #EFE8D8" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
-                <div>
-                  <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600 }}>{trip.destination} {trip.vehicle_number ? `— Vehicle ${trip.vehicle_number}` : ""}</div>
-                  <div style={{ fontSize: 12, color: "#8A8272" }}>{rows.length} STR(s) · total qty {rows.reduce((s, r) => s + Number(r.qty), 0)}</div>
-                </div>
-                <button style={S.primaryBtnSm} onClick={() => shipTrip(trip)} disabled={shippingTripId === trip.id}>{shippingTripId === trip.id ? "Ship ho raha…" : "🚚 Ship & Generate Gatepass"}</button>
-              </div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Source</th></tr></thead>
-                <tbody>
-                  {rows.map(r => <tr key={r.id}><td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{r.str_number}</td><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.qty}</td><td style={S.td}>{sourceLabel(r.source)}</td></tr>)}
-                </tbody>
-              </table>
-            </div>
-          );
-        })}
-      </div>
+      {!activeTripId && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>Vehicle Loading</div>
+            <button style={S.primaryBtnSm} onClick={startNewLoad} disabled={starting}>{starting ? "Shuru ho raha…" : "+ Start New Vehicle Load"}</button>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>Started</th><th style={S.th}>Cartons Scanned</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {loadingTrips.map(trip => (
+                <tr key={trip.id}>
+                  <td style={S.td}>{fmtTime(trip.created_at)}</td>
+                  <td style={S.td}>{cartonsInTrip(trip.id).length}</td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => setActiveTripId(trip.id)}>Resume</button></td>
+                </tr>
+              ))}
+              {!loadingTrips.length && <tr><td style={S.td} colSpan={3}><EmptyNote text="Koi vehicle load abhi shuru nahi hui" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {activeTripId && activeTrip && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>Scan Cartons — Vehicle Loading</div>
+            <button style={S.secondaryBtnSm} onClick={() => setActiveTripId(null)}>← Back (load save rahega)</button>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+            <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan carton QR/barcode, then Enter" value={scanInput} onChange={e => setScanInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanCartonToLoad()} />
+            <CameraScanButton onScan={(text) => scanCartonToLoad(text)} />
+            <button style={S.primaryBtnSm} onClick={() => scanCartonToLoad()}>Scan</button>
+          </div>
+          {scanError && <div style={{ color: "#E5484D", fontSize: 12, marginBottom: 10 }}>{scanError}</div>}
+
+          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 16 }}>
+            <thead><tr><th style={S.th}>Carton #</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>STR Progress</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {cartonsInTrip(activeTripId).map(c => {
+                const str = strById(c.str_id);
+                const total = cartonsForStr(c.str_id).length;
+                const shippedOrLoaded = cartonsForStr(c.str_id).filter(x => x.status !== "packed").length;
+                return (
+                  <tr key={c.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{c.carton_number}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{str?.str_number}</td>
+                    <td style={S.td}>{c.product_name}</td>
+                    <td style={S.td}>{c.qty}</td>
+                    <td style={S.td}>{str?.destination}</td>
+                    <td style={{ ...S.td, color: shippedOrLoaded === total ? "#4CAF7D" : "#8A8272" }}>{shippedOrLoaded} / {total} cartons</td>
+                    <td style={S.td}><button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => unscanCarton(c)}>Remove</button></td>
+                  </tr>
+                );
+              })}
+              {!cartonsInTrip(activeTripId).length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Abhi koi carton scan nahi hui" /></td></tr>}
+            </tbody>
+          </table>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <input style={{ ...S.input, minWidth: 140 }} placeholder="Vehicle #" value={vehicleNumber} onChange={e => setVehicleNumber(e.target.value)} />
+            <input style={{ ...S.input, minWidth: 160 }} placeholder="Driver Name" value={driverName} onChange={e => setDriverName(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={() => shipTrip(activeTrip)} disabled={shippingTripId === activeTripId}>{shippingTripId === activeTripId ? "Ship ho raha…" : "🚚 Ship & Generate Gatepass"}</button>
+          </div>
+          <div style={{ fontSize: 11, color: "#8A8272", marginTop: 8 }}>Jab jagah complete ho jaye to baki cartons chhor k ship kar sakte hain — unki STR agli vehicle k liye pending reh jayegi.</div>
+        </div>
+      )}
 
       <div style={S.panel}>
         <div style={S.panelTitle}>Shipped — Gatepass History</div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>Destination</th><th style={S.th}>Vehicle</th><th style={S.th}>STRs</th><th style={S.th}>Shipped At</th></tr></thead>
+          <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>Vehicle</th><th style={S.th}>Driver</th><th style={S.th}>Cartons</th><th style={S.th}>Shipped At</th></tr></thead>
           <tbody>
             {shippedTrips.map(trip => (
               <tr key={trip.id}>
                 <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{trip.gatepass_number}</td>
-                <td style={S.td}>{trip.destination}</td>
                 <td style={S.td}>{trip.vehicle_number || "—"}</td>
-                <td style={S.td}>{strsForTrip(trip.id).length}</td>
+                <td style={S.td}>{trip.driver_name || "—"}</td>
+                <td style={S.td}>{cartons.filter(c => c.vehicle_trip_id === trip.id).length}</td>
                 <td style={S.td}>{fmtTime(trip.shipped_at)}</td>
               </tr>
             ))}
@@ -9878,35 +10204,44 @@ function StockingPickingView({ token, profile, showToast }) {
   const whId = useStkWarehouseId(token, profile);
   const canAssign = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
   const canWork = ["admin", "warehouse_lead", "picker"].includes(profile.role);
+  const canDoPutaway = ["admin", "warehouse_lead", "putaway_officer"].includes(profile.role);
   const [tab, setTab] = useState(canAssign ? "assignment" : "mytasks");
   const [strs, setStrs] = useState([]);
   const [queue, setQueue] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [bins, setBins] = useState([]);
   const [pickers, setPickers] = useState([]);
+  const [putawayOfficers, setPutawayOfficers] = useState([]);
+  const [repairItems, setRepairItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignChoice, setAssignChoice] = useState({});
   const [pickForm, setPickForm] = useState({}); // { [strId]: { binId, qty } }
+  const [repairForm, setRepairForm] = useState({ barcode: "", name: "", binId: "", qty: "" });
+  const [repairAssignChoice, setRepairAssignChoice] = useState({});
+  const [repairBinChoice, setRepairBinChoice] = useState({});
 
   const load = async () => {
     if (!whId) return;
     setLoading(true);
     try {
-      const [s, q, adj, b, p] = await Promise.all([
+      const [s, q, adj, b, p, po, rep] = await Promise.all([
         sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&status=eq.reserved&select=*`, { token }),
         sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
         sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
-        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.picker&select=id,full_name`, { token })
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.picker&select=id,full_name`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token }),
+        sb(`/rest/v1/stk_repair_queue?warehouse_id=eq.${whId}&select=*&order=reported_at.desc`, { token })
       ]);
       setStrs((s || []).filter(x => x.source !== "grn_distribution"));
-      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setPickers(p || []);
+      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setPickers(p || []); setPutawayOfficers(po || []); setRepairItems(rep || []);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [whId]);
 
   const pickerName = (id) => pickers.find(p => p.id === id)?.full_name || "—";
+  const putawayOfficerName = (id) => putawayOfficers.find(p => p.id === id)?.full_name || "—";
   const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
 
   // Per-bin on-hand for a given product, so a Picker can only pick what's really there.
@@ -9917,9 +10252,20 @@ function StockingPickingView({ token, profile, showToast }) {
     for (const a of adjustments) if ((a.product_barcode || a.product_name) === key) perBin[a.bin_id] = (perBin[a.bin_id] || 0) + Number(a.qty_delta || 0);
     return Object.entries(perBin).filter(([, v]) => v > 0).map(([binId, avail]) => ({ binId, avail }));
   };
+  // All bins that currently hold ANY stock at all (for the Repair report form's barcode-agnostic bin picker).
+  const allStockedBins = useMemo(() => {
+    const set = new Set();
+    for (const q of queue) if (Number(q.qty) > 0) set.add(q.bin_id);
+    for (const a of adjustments) if (Number(a.qty_delta) > 0) set.add(a.bin_id);
+    return [...set];
+  }, [queue, adjustments]);
 
   const unassigned = strs.filter(s => !s.assigned_picker && !s.picked_at);
   const myTasks = profile.role === "picker" ? strs.filter(s => s.assigned_picker === profile.id && !s.picked_at) : strs.filter(s => s.assigned_picker && !s.picked_at);
+  const pendingRepair = repairItems.filter(r => r.status === "pending");
+  const assignedRepair = repairItems.filter(r => r.status === "assigned_putaway");
+  const myRepairPutaway = profile.role === "putaway_officer" ? assignedRepair.filter(r => r.assigned_putaway_officer === profile.id) : assignedRepair;
+  const completedRepair = repairItems.filter(r => r.status === "completed");
 
   const assignPicker = async (str) => {
     const pickerId = assignChoice[str.id];
@@ -9947,11 +10293,49 @@ function StockingPickingView({ token, profile, showToast }) {
     } catch (e) { showToast("Pick fail: " + e.message, "err"); }
   };
 
+  // A picker who, while picking, finds physically damaged/needs-touchup units pulls them
+  // straight out of that bin (so the bin's on-hand stays accurate) and into the Repair queue —
+  // separate from whatever STR they were actually picking for.
+  const reportToRepair = async () => {
+    const { barcode, name, binId, qty } = repairForm;
+    const q = Number(qty);
+    if (!binId || !name.trim() || !q || q <= 0) { showToast("Bin, product naam aur valid qty enter karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), bin_id: binId, qty_delta: -q, reason: "Sent to Repair/Touch-up", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_repair_queue`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), qty: q, source_bin_id: binId, reported_by: profile.id, reported_at: new Date().toISOString(), status: "pending" } });
+      showToast(`✓ ${q} × ${name} Repair/Touch-up mein transfer ho gaya`);
+      setRepairForm({ barcode: "", name: "", binId: "", qty: "" });
+      load();
+    } catch (e) { showToast("Transfer fail: " + e.message, "err"); }
+  };
+
+  const fixAndAssignRepair = async (item) => {
+    const putawayId = repairAssignChoice[item.id];
+    if (!putawayId) { showToast("Putaway Officer select karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "assigned_putaway", fixed_by: profile.id, fixed_at: new Date().toISOString(), assigned_putaway_officer: putawayId } });
+      showToast(`✓ Fixed mark ho gaya — ${putawayOfficerName(putawayId)} ko putaway k liye assign ho gaya`);
+      load();
+    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
+  };
+
+  const completeRepairPutaway = async (item) => {
+    const binId = repairBinChoice[item.id];
+    if (!binId) { showToast("Bin select karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: item.product_barcode, product_name: item.product_name, bin_id: binId, qty_delta: item.qty, reason: "Repair/Touch-up completed — putaway", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "completed", putaway_bin_id: binId, completed_by: profile.id, completed_at: new Date().toISOString() } });
+      showToast(`✓ ${item.product_name} wapas ${binCode(binId)} mein putaway ho gaya`);
+      load();
+    } catch (e) { showToast("Putaway fail: " + e.message, "err"); }
+  };
+
   if (loading) return <EmptyNote text="Loading..." />;
 
   const TABS = [
     ...(canAssign ? [{ key: "assignment", label: `Assignment (${unassigned.length})` }] : []),
-    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "picker" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : [])
+    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "picker" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : []),
+    { key: "repair", label: `Repair/Touch-up (${pendingRepair.length + assignedRepair.length})` }
   ];
 
   return (
@@ -10018,6 +10402,89 @@ function StockingPickingView({ token, profile, showToast }) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {tab === "repair" && (
+        <>
+          {canWork && (
+            <div style={S.panel}>
+              <div style={S.panelTitle}>Item Repair/Touch-up Mein Bhejein</div>
+              <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Picking k dauran agar koi item damaged/touch-up wala mile, use yahan report karein — bin se turant nikal k dedicated Repair area mein transfer ho jayega.</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input style={{ ...S.input, minWidth: 130, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode (optional)" value={repairForm.barcode} onChange={e => setRepairForm(f => ({ ...f, barcode: e.target.value }))} />
+                <input style={{ ...S.input, minWidth: 160 }} placeholder="Product naam" value={repairForm.name} onChange={e => setRepairForm(f => ({ ...f, name: e.target.value }))} />
+                <select style={{ ...S.input, minWidth: 140 }} value={repairForm.binId} onChange={e => setRepairForm(f => ({ ...f, binId: e.target.value }))}>
+                  <option value="">Kis bin se mila…</option>
+                  {allStockedBins.map(id => <option key={id} value={id}>{binCode(id)}</option>)}
+                </select>
+                <input type="number" style={{ ...S.input, width: 90 }} placeholder="Qty" value={repairForm.qty} onChange={e => setRepairForm(f => ({ ...f, qty: e.target.value }))} />
+                <button style={S.primaryBtnSm} onClick={reportToRepair}>🔧 Transfer to Repair</button>
+              </div>
+            </div>
+          )}
+
+          <div style={S.panel}>
+            <div style={S.panelTitle}>Pending — Fix Karke Putaway Officer Assign Karein</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>From Bin</th><th style={S.th}>Reported</th><th style={S.th}>Assign Putaway Officer</th><th style={S.th}></th></tr></thead>
+              <tbody>
+                {pendingRepair.map(r => (
+                  <tr key={r.id}>
+                    <td style={S.td}>{r.product_name}</td>
+                    <td style={S.td}>{r.qty}</td>
+                    <td style={{ ...S.td, color: "#6B6355" }}>{binCode(r.source_bin_id)}</td>
+                    <td style={S.td}>{fmtTime(r.reported_at)}</td>
+                    <td style={S.td}>
+                      <select style={{ ...S.input, width: 160 }} value={repairAssignChoice[r.id] || ""} onChange={e => setRepairAssignChoice(a => ({ ...a, [r.id]: e.target.value }))}>
+                        <option value="">Select…</option>
+                        {putawayOfficers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                      </select>
+                    </td>
+                    <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => fixAndAssignRepair(r)}>✓ Fixed & Assign</button></td>
+                  </tr>
+                ))}
+                {!pendingRepair.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi item repair mein pending nahi" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+
+          {canDoPutaway && (
+            <div style={S.panel}>
+              <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Repair Putaway Tasks" : "All Repair Putaway (oversight)"}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}></th></tr></thead>
+                <tbody>
+                  {myRepairPutaway.map(r => (
+                    <tr key={r.id}>
+                      {profile.role !== "putaway_officer" && <td style={S.td}>{putawayOfficerName(r.assigned_putaway_officer)}</td>}
+                      <td style={S.td}>{r.product_name}</td>
+                      <td style={S.td}>{r.qty}</td>
+                      <td style={S.td}>
+                        <select style={{ ...S.input, width: 140 }} value={repairBinChoice[r.id] || ""} onChange={e => setRepairBinChoice(b => ({ ...b, [r.id]: e.target.value }))}>
+                          <option value="">Select bin…</option>
+                          {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+                        </select>
+                      </td>
+                      <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completeRepairPutaway(r)}>✓ Putaway Complete</button></td>
+                    </tr>
+                  ))}
+                  {!myRepairPutaway.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 5 : 4}><EmptyNote text="Koi repair-putaway task pending nahi" /></td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div style={S.panel}>
+            <div style={S.panelTitle}>Completed</div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Putaway Bin</th><th style={S.th}>Completed At</th></tr></thead>
+              <tbody>
+                {completedRepair.slice(0, 20).map(r => <tr key={r.id}><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.qty}</td><td style={S.td}>{binCode(r.putaway_bin_id)}</td><td style={S.td}>{fmtTime(r.completed_at)}</td></tr>)}
+                {!completedRepair.length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Abhi tak koi complete nahi hua" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
