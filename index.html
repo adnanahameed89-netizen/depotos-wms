@@ -2559,12 +2559,13 @@ function ReceivingView({ token, profile, showToast }) {
     setLineQty(1); loadLines(openGrn.id);
   };
   const receiveLine = async (line) => {
+    if (!bulkOfficerId) { showToast("Pehle Put Away Officer select karein", "err"); return; }
     const qty = line.qty_expected - (line.qty_received || 0);
     if (qty <= 0) return;
     await sb(`/rest/v1/grn_lines?id=eq.${line.id}`, { method: "PATCH", token, body: { qty_received: line.qty_expected } });
-    await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: line.id, product_id: line.product_id, qty, status: "pending" } });
-    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty } } });
-    showToast("Received — sent to putaway queue");
+    await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { grn_line_id: line.id, product_id: line.product_id, qty, status: "pending", assigned_to: bulkOfficerId } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "grn_line", entity_id: line.id, user_id: profile.id, action: "received_to_putaway_queue", metadata: { qty, assigned_to: bulkOfficerId } } });
+    showToast(`Received — ${staff.find(s => s.id === bulkOfficerId)?.full_name || "officer"} ko putaway assign ho gaya`);
     loadLines(openGrn.id);
   };
   const completeGrn = async () => {
@@ -2586,6 +2587,14 @@ function ReceivingView({ token, profile, showToast }) {
             <input style={{ ...S.input, width: 90 }} type="number" min={1} value={lineQty} onChange={e => setLineQty(e.target.value)} />
             <button style={S.primaryBtnSm} onClick={() => { addLine(pendingProduct); setPendingProduct(null); }}>+ Add line</button>
           </div>
+        </div>
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Receive Karne Se Pehle Put Away Officer Select Karein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Yeh officer har line k "Receive → Putaway" pe use hoga — is se koi bhi task unassigned nahi banega.</div>
+          <select style={{ ...S.input, minWidth: 220 }} value={bulkOfficerId} onChange={e => setBulkOfficerId(e.target.value)}>
+            <option value="">Put Away Officer select karein…</option>
+            {staff.filter(s => s.id !== profile.id).map(s => <option key={s.id} value={s.id}>{s.full_name} ({s.role})</option>)}
+          </select>
         </div>
         <div style={S.panel}>
           <div style={S.panelTitle}>Lines</div>
@@ -2610,7 +2619,7 @@ function ReceivingView({ token, profile, showToast }) {
                     <td style={S.td}><span style={{ ...S.badgeSm, color: pwColor, borderColor: pwColor }}>{pwStatus}</span></td>
                     <td style={S.td}>
                       {!done ? (
-                        <button style={S.secondaryBtnSm} onClick={() => receiveLine(l)}>📍 Receive → Putaway</button>
+                        <button style={S.secondaryBtnSm} onClick={() => receiveLine(l)} disabled={!bulkOfficerId} title={!bulkOfficerId ? "Pehle officer select karein" : ""}>📍 Receive → Putaway</button>
                       ) : <span style={{ color: "#8A8272", fontSize: 11 }}>Dock-received ✓</span>}
                     </td>
                   </tr>
@@ -7245,7 +7254,7 @@ function ReturnsView({ token, profile, showToast }) {
       <div style={S.panel}>
         <input style={{ ...S.input, maxWidth: 260, marginBottom: 14 }} placeholder="🔍 Search tracking # (full ya last 5 digits)" value={searchTracking} onChange={e => setSearchTracking(e.target.value)} />
         <table>
-          <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
+          <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Order #</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
           <tbody>
             {returns.filter(r => !searchTracking.trim() || (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).map(r => {
               const order = orders.find(o => o.id === r.order_id);
@@ -7253,6 +7262,7 @@ function ReturnsView({ token, profile, showToast }) {
               return (
                 <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openReturnDetail(r)}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tracking_number || order?.external_order_id || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{order?.external_order_id || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{agg?.qty || 0}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{r.origin_city || order?.delivery_city || "—"}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: r.status === "pending" ? "#6B6355" : r.status === "restocked" ? "#4CAF7D" : "#E5484D", borderColor: r.status === "pending" ? "#E0D8C5" : r.status === "restocked" ? "#4CAF7D" : "#E5484D" }}>{r.status}</span></td>
@@ -7261,8 +7271,8 @@ function ReturnsView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {returns.length === 0 && <tr><td colSpan={6}><EmptyNote text="No returns logged yet." /></td></tr>}
-            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={6}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
+            {returns.length === 0 && <tr><td colSpan={7}><EmptyNote text="No returns logged yet." /></td></tr>}
+            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={7}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -7283,6 +7293,21 @@ function categorizeEvent(ev) {
 const CATEGORIES = ["GRN", "Put Away", "Pick", "Pack", "Dispatch", "Returns"];
 
 function ReportsView({ token, profile, showToast }) {
+  const isAdmin = profile.role === "admin";
+  const [debugTracking, setDebugTracking] = useState("");
+  const [debugResult, setDebugResult] = useState(null);
+  const [debugLoading, setDebugLoading] = useState(false);
+
+  const runMnpDebug = async () => {
+    if (!debugTracking.trim()) { showToast("Tracking number enter karein", "err"); return; }
+    setDebugLoading(true); setDebugResult(null);
+    try {
+      const result = await mnpProxy("debug", { trackingNumber: debugTracking.trim() }, token);
+      setDebugResult(result);
+    } catch (e) { setDebugResult({ error: e.message }); }
+    setDebugLoading(false);
+  };
+
   const REPORTS = [
     { key: "inventory_bin_ledger", label: "Inventory Bin Ledger" },
     { key: "inventory_ledger", label: "Inventory Ledger" },
@@ -7500,6 +7525,23 @@ function ReportsView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Reports" />
+
+      {isAdmin && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>🔧 M&P Courier Debug (Temporary Tool)</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Ek asal M&P consignment number daal k dekhein API se raw response kya aata hai — is se pata chalega tracking/city sync kyun fail ho rahi hai.</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <input style={{ ...S.input, minWidth: 200, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="M&P consignment number" value={debugTracking} onChange={e => setDebugTracking(e.target.value)} />
+            <button style={S.primaryBtnSm} onClick={runMnpDebug} disabled={debugLoading}>{debugLoading ? "Calling…" : "▶ Run Debug"}</button>
+          </div>
+          {debugResult && (
+            <pre style={{ marginTop: 12, background: "#2B2620", color: "#E8E6E1", padding: 12, borderRadius: 8, fontSize: 11, overflowX: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+              {JSON.stringify(debugResult, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+
       <div style={S.panel}>
         <div style={S.panelTitle}>Select report</div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
