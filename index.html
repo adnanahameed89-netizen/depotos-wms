@@ -355,12 +355,16 @@ function App() {
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkcatalogue" && <StockingCatalogueView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkrtv" && <StockingRtvView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkoutbound" && <StockingOutboundView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkstr" && <StockingStrView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkpicking" && <StockingPickingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkrepair" && <StockingRepairView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkpacking" && <StockingPackingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stklogistics" && <StockingLogisticsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkreports" && <StockingReportsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
@@ -530,13 +534,17 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
   ];
   const STOCKING_ITEMS = [
     { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
+    { id: "stkcatalogue", label: "Stocking Catalogue", icon: "📚" },
     { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" },
+    { id: "stkrtv", label: "RTV", icon: "↩" },
     { id: "stkoutbound", label: "Stocking Outbound", icon: "📤" },
     { id: "stkstr", label: "STR", icon: "🧾" },
     { id: "stkpicking", label: "Stocking Picking", icon: "🧑‍🤝‍🧑" },
+    { id: "stkrepair", label: "Repair/Touch-up", icon: "🔧" },
     { id: "stkpacking", label: "Stocking Packing", icon: "📦" },
     { id: "stklogistics", label: "Stocking Logistics", icon: "🚚" },
-    { id: "stkinventory", label: "Stocking Inventory", icon: "🧰" }
+    { id: "stkinventory", label: "Stocking Inventory", icon: "🧰" },
+    { id: "stkreports", label: "Stocking Reports", icon: "📊" }
   ];
   const items = warehouseType === "stocking" ? STOCKING_ITEMS : ECOM_ITEMS;
   const ecomExtras = warehouseType !== "stocking";
@@ -545,8 +553,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stkpacking", "stklogistics", "stkinventory", "stkbins", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkcatalogue", "stkrtv", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports", "stkbins", "returns", "damage", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkcatalogue: { label: "Stocking Catalogue", icon: "📚" }, stkrtv: { label: "RTV", icon: "↩" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkrepair: { label: "Repair/Touch-up", icon: "🔧" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkreports: { label: "Stocking Reports", icon: "📊" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -6563,7 +6571,7 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Delete failed", "err"); }
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", outbound_officer: "Outbound Officer", logistics_officer: "Logistics Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", outbound_officer: "Outbound Officer", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
 
   return (
     <div>
@@ -6580,6 +6588,7 @@ function UsersView({ token, profile, showToast }) {
             <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
             <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
             <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
+            <option value="rtv_officer">RTV Officer (Prepare/Handover)</option>
             <option value="dispatcher">Dispatcher</option>
             <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
@@ -6617,6 +6626,7 @@ function UsersView({ token, profile, showToast }) {
                 <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
                 <option value="outbound_officer">Outbound Officer (Allocation/RTD)</option>
                 <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
+                <option value="rtv_officer">RTV Officer (Prepare/Handover)</option>
                 <option value="dispatcher">Dispatcher</option>
                 <option value="supervisor">Supervisor</option>
                 <option value="warehouse_lead">Warehouse Lead</option>
@@ -8821,6 +8831,20 @@ function EmptyNote({ text }) { return <div style={{ color: "#8A8272", fontSize: 
 const STK_SOURCES = ["E-COM", "LOCAL", "IMPORT"];
 const STK_BENCHMARK_DAYS = { "E-COM": 1, "LOCAL": 3, "IMPORT": 15 };
 const STK_DC_STATUS_LABEL = { pending_import: "Pending Import", ready_for_inspection: "Ready for Inspection", in_progress: "Inspection In Progress", completed: "Inspection Complete", grn_posted: "GRN Posted" };
+// A single derived STR status label used everywhere (status cards, list views, exports) — kept
+// purely computed from stk_str's existing fields (status/picked_at/packed_at) rather than a new
+// stored value, so it can never drift out of sync with the actual workflow state.
+const STK_STR_STAGES = ["Total Creation", "In Process", "Packing Process", "RTD", "Shipped"];
+function stkStrStage(str) {
+  if (str.status === "dispatched") return "Shipped";
+  if (str.status === "draft") return "Total Creation";
+  if (str.packed_at) return "RTD";
+  if (str.source === "grn_distribution" || str.picked_at) return "Packing Process";
+  return "In Process";
+}
+function stkStrStageColor(stage) {
+  return { "Total Creation": "#B084F5", "In Process": "#5B9EE8", "Packing Process": "#F5A623", "RTD": "#4CAF7D", "Shipped": "#6B6355" }[stage] || "#8A8272";
+}
 function stkPill(active, color = "#F5A623") { return { display: "inline-flex", alignItems: "center", gap: 5, background: active ? color : "transparent", color: active ? "#1A1206" : "#2B2620", border: `1px solid ${active ? color : "#E0D8C5"}`, borderRadius: 20, padding: "7px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif", fontWeight: active ? 600 : 400 }; }
 function stkBizDaysExclSunday(startISO, endISO) {
   if (!startISO || !endISO) return null;
@@ -8855,7 +8879,6 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [tab, setTab] = useState("arrival");
   const [pos, setPos] = useState([]);
   const [dcs, setDcs] = useState([]);
-  const [rtvRows, setRtvRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
   const [poNumber, setPoNumber] = useState(""); const [scheduledDate, setScheduledDate] = useState("");
@@ -8867,62 +8890,19 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [newItemName, setNewItemName] = useState(""); const [newItemBarcode, setNewItemBarcode] = useState(""); const [newItemExcess, setNewItemExcess] = useState("");
 
   const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
-  const [rtvFilter, setRtvFilter] = useState("pending");
-  const [catalogueCount, setCatalogueCount] = useState(null);
-  const [catalogueUploading, setCatalogueUploading] = useState(false);
-
-  const uploadCatalogueFile = async (file) => {
-    setCatalogueUploading(true);
-    try {
-      const rows = await parseSheet(file);
-      const cleanNum = (v) => { const n = Number(String(v ?? "").replace(/,/g, "").trim()); return isNaN(n) ? null : n; };
-      const mapped = rows
-        .map(r => ({
-          department: String(r["Department"] ?? "").trim() || null,
-          division: String(r["Division"] ?? "").trim() || null,
-          group_name: String(r["Group"] ?? "").trim() || null,
-          category: String(r["Product Category"] ?? "").trim() || null,
-          sale_barcode: String(r["Product/Sale Barcode"] ?? "").trim() || null,
-          internal_barcode: String(r["Internal Barcode"] ?? "").trim(),
-          internal_reference: String(r["Internal Reference"] ?? "").trim() || null,
-          display_name: String(r["Display Name"] ?? "").trim() || null,
-          sales_price: cleanNum(r["Sales Price"]),
-          odoo_qty_on_hand: cleanNum(r["Quantity On Hand"]),
-          odoo_free_to_use_qty: cleanNum(r["Free To Use Quantity"])
-        }))
-        .filter(r => r.internal_barcode);
-      if (!mapped.length) { showToast("File mai koi valid row nahi mili — 'Internal Barcode' column check karein", "err"); setCatalogueUploading(false); return; }
-      for (let i = 0; i < mapped.length; i += 500) {
-        await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: mapped.slice(i, i + 500) });
-      }
-      setCatalogueCount(c => (c || 0) + mapped.length);
-      showToast(`✓ Catalogue update ho gaya — ${mapped.length} products upsert hue`);
-    } catch (e) { showToast("Catalogue upload fail: " + e.message, "err"); }
-    setCatalogueUploading(false);
-  };
 
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [poRows, dcRows, rtv] = await Promise.all([
+      const [poRows, dcRows] = await Promise.all([
         sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
-        sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*&order=received_at.desc`, { token }),
-        sb(`/rest/v1/stk_rtv_queue?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token })
+        sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*&order=received_at.desc`, { token })
       ]);
-      setPos(poRows || []); setDcs(dcRows || []); setRtvRows(rtv || []);
+      setPos(poRows || []); setDcs(dcRows || []);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { if (whId) loadAll(); }, [whId]);
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/stk_products?select=id`, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact", Range: "0-0" } });
-        const range = res.headers.get("content-range");
-        setCatalogueCount(range ? parseInt(range.split("/")[1], 10) || 0 : 0);
-      } catch (e) { /* non-critical */ }
-    })();
-  }, []);
 
   const poByPo = (num) => pos.find(p => p.po_number === num.trim());
 
@@ -9062,25 +9042,15 @@ function StockingReceivingView({ token, profile, showToast }) {
     setLoading(false);
   };
 
-  const markRtvPicked = async (row) => {
-    try {
-      await sb(`/rest/v1/stk_rtv_queue?id=eq.${row.id}`, { method: "PATCH", token, body: { status: row.status === "picked" ? "pending" : "picked", picked_by: profile.id, picked_at: row.status === "picked" ? null : new Date().toISOString() } });
-      loadAll();
-    } catch (e) { showToast("Update fail: " + e.message, "err"); }
-  };
-
   const pendingImportDcs = dcs.filter(d => d.status === "pending_import");
   const inspectionDcs = dcs.filter(d => d.status === "ready_for_inspection" || d.status === "in_progress");
   const completedDcs = dcs.filter(d => d.status === "completed");
-  const rtvFiltered = rtvRows.filter(r => r.status === rtvFilter);
 
   const TABS = [
     { key: "arrival", label: "Arrival" },
     { key: "import", label: `Odoo Import (${pendingImportDcs.length})` },
     { key: "inspection", label: `Inspection (${inspectionDcs.length})` },
-    { key: "grn", label: `GRN (${completedDcs.length})` },
-    { key: "rtv", label: "RTV" },
-    { key: "catalogue", label: "Catalogue" }
+    { key: "grn", label: `GRN (${completedDcs.length})` }
   ];
 
   return (
@@ -9237,47 +9207,146 @@ function StockingReceivingView({ token, profile, showToast }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-      {tab === "rtv" && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>RTV Queue</div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-            <button style={stkPill(rtvFilter === "pending", "#E5484D")} onClick={() => setRtvFilter("pending")}>Pending ({rtvRows.filter(r => r.status === "pending").length})</button>
-            <button style={stkPill(rtvFilter === "picked", "#4CAF7D")} onClick={() => setRtvFilter("picked")}>Picked ({rtvRows.filter(r => r.status === "picked").length})</button>
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Product</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short</th><th style={S.th}></th></tr></thead>
-            <tbody>
-              {rtvFiltered.map(r => (
-                <tr key={r.id}>
-                  <td style={S.td}>{r.supplier}</td><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.dmg_qty}</td><td style={S.td}>{r.mnf_qty}</td><td style={S.td}>{r.wrong_qty}</td><td style={S.td}>{r.excess_qty}</td><td style={S.td}>{r.short_qty}</td>
-                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => markRtvPicked(r)}>{r.status === "pending" ? "Mark Picked" : "Reopen"}</button></td>
-                </tr>
-              ))}
-              {!rtvFiltered.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Yahan kuch nahi" /></td></tr>}
-            </tbody>
-          </table>
-        </div>
-      )}
+/* ================= STOCKING WAREHOUSE — RTV ================= */
+// Deliberately NOT part of the on-hand inventory system — the exception qty here (DMG/MNF/
+// Wrong/Excess/Short) never entered stk_putaway_queue in the first place (only OK qty does),
+// so this is purely a tracking record of what's owed back to which supplier against which
+// PO/DC, until the dedicated RTV Officer prepares it and hands it over for clearance.
+function StockingRtvView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const canHandle = ["admin", "warehouse_lead", "rtv_officer"].includes(profile.role);
+  const [rtvRows, setRtvRows] = useState([]);
+  const [pos, setPos] = useState([]);
+  const [dcs, setDcs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [rtvFilter, setRtvFilter] = useState("pending");
 
-      {tab === "catalogue" && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Product Catalogue — Bulk Upload</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>
-            Odoo se product master export upload karein (columns: Department, Division, Group, Product Category, Product/Sale Barcode, Internal Barcode, Internal Reference, Display Name, Sales Price, Quantity On Hand, Free To Use Quantity). Match "Internal Barcode" pe hota hai — dobara upload karne se existing entries update ho jati hain, duplicate nahi banti.
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
-            <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
-              {catalogueUploading ? "Uploading…" : "📤 Upload Catalogue Excel"}
-              <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={catalogueUploading} onChange={e => { const f = e.target.files[0]; if (f) uploadCatalogueFile(f); e.target.value = ""; }} />
-            </label>
-            <div style={{ color: "#6B6355", fontSize: 12 }}>Abhi catalogue mein <strong>{catalogueCount ?? "…"}</strong> products hain.</div>
-          </div>
-          <div style={{ fontSize: 11, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
-            NOTE: DC ki Odoo Import se bhi naye barcode/naam khud-ba-khud catalogue mein seed ho jate hain (agar wahan pehle se nahi hain) — lekin woh kabhi is bulk-upload ki rich detail (category, price waghera) ko overwrite nahi karte.
-          </div>
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [rtv, poRows, dcRows] = await Promise.all([
+        sb(`/rest/v1/stk_rtv_queue?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*`, { token })
+      ]);
+      setRtvRows(rtv || []); setPos(poRows || []); setDcs(dcRows || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const poNumberFor = (id) => pos.find(p => p.id === id)?.po_number || "—";
+  const dcNumberFor = (id) => dcs.find(d => d.id === id)?.dc_number || "—";
+  const rtvFiltered = rtvRows.filter(r => r.status === rtvFilter);
+
+  const markRtvPicked = async (row) => {
+    try {
+      await sb(`/rest/v1/stk_rtv_queue?id=eq.${row.id}`, { method: "PATCH", token, body: { status: row.status === "picked" ? "pending" : "picked", picked_by: profile.id, picked_at: row.status === "picked" ? null : new Date().toISOString() } });
+      load();
+    } catch (e) { showToast("Update fail: " + e.message, "err"); }
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — RTV" />
+      <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 16 }}>Yeh inventory system ka hissa nahi hai — sirf ek record hai ke kis supplier ko, kis PO/DC k against, kitna stock wapas jana hai (jab tak handover na ho, tab tak yahi track hoti hai).</div>
+      <div style={S.panel}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button style={stkPill(rtvFilter === "pending", "#E5484D")} onClick={() => setRtvFilter("pending")}>Pending Handover ({rtvRows.filter(r => r.status === "pending").length})</button>
+          <button style={stkPill(rtvFilter === "picked", "#4CAF7D")} onClick={() => setRtvFilter("picked")}>Handed Over ({rtvRows.filter(r => r.status === "picked").length})</button>
         </div>
-      )}
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>PO#</th><th style={S.th}>DC#</th><th style={S.th}>Product</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short</th><th style={S.th}></th></tr></thead>
+          <tbody>
+            {rtvFiltered.map(r => (
+              <tr key={r.id}>
+                <td style={S.td}>{r.supplier}</td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{poNumberFor(r.po_id)}</td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{dcNumberFor(r.dc_id)}</td>
+                <td style={S.td}>{r.product_name}</td>
+                <td style={S.td}>{r.dmg_qty}</td><td style={S.td}>{r.mnf_qty}</td><td style={S.td}>{r.wrong_qty}</td><td style={S.td}>{r.excess_qty}</td><td style={S.td}>{r.short_qty}</td>
+                <td style={S.td}>{canHandle ? <button style={S.secondaryBtnSm} onClick={() => markRtvPicked(r)}>{r.status === "pending" ? "Mark Handed Over" : "Reopen"}</button> : "—"}</td>
+              </tr>
+            ))}
+            {!rtvFiltered.length && <tr><td style={S.td} colSpan={10}><EmptyNote text="Yahan kuch nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — CATALOGUE ================= */
+function StockingCatalogueView({ token, profile, showToast }) {
+  const [catalogueCount, setCatalogueCount] = useState(null);
+  const [catalogueUploading, setCatalogueUploading] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/stk_products?select=id`, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${token}`, Prefer: "count=exact", Range: "0-0" } });
+        const range = res.headers.get("content-range");
+        setCatalogueCount(range ? parseInt(range.split("/")[1], 10) || 0 : 0);
+      } catch (e) { /* non-critical */ }
+    })();
+  }, []);
+
+  const uploadCatalogueFile = async (file) => {
+    setCatalogueUploading(true);
+    try {
+      const rows = await parseSheet(file);
+      const cleanNum = (v) => { const n = Number(String(v ?? "").replace(/,/g, "").trim()); return isNaN(n) ? null : n; };
+      const mapped = rows
+        .map(r => ({
+          department: String(r["Department"] ?? "").trim() || null,
+          division: String(r["Division"] ?? "").trim() || null,
+          group_name: String(r["Group"] ?? "").trim() || null,
+          category: String(r["Product Category"] ?? "").trim() || null,
+          sale_barcode: String(r["Product/Sale Barcode"] ?? "").trim() || null,
+          internal_barcode: String(r["Internal Barcode"] ?? "").trim(),
+          internal_reference: String(r["Internal Reference"] ?? "").trim() || null,
+          display_name: String(r["Display Name"] ?? "").trim() || null,
+          sales_price: cleanNum(r["Sales Price"]),
+          odoo_qty_on_hand: cleanNum(r["Quantity On Hand"]),
+          odoo_free_to_use_qty: cleanNum(r["Free To Use Quantity"])
+        }))
+        .filter(r => r.internal_barcode);
+      if (!mapped.length) { showToast("File mai koi valid row nahi mili — 'Internal Barcode' column check karein", "err"); setCatalogueUploading(false); return; }
+      for (let i = 0; i < mapped.length; i += 500) {
+        await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=merge-duplicates,return=minimal", body: mapped.slice(i, i + 500) });
+      }
+      setCatalogueCount(c => (c || 0) + mapped.length);
+      showToast(`✓ Catalogue update ho gaya — ${mapped.length} products upsert hue`);
+    } catch (e) { showToast("Catalogue upload fail: " + e.message, "err"); }
+    setCatalogueUploading(false);
+  };
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Catalogue" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Product Catalogue — Bulk Upload</div>
+        <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>
+          Odoo se product master export upload karein (columns: Department, Division, Group, Product Category, Product/Sale Barcode, Internal Barcode, Internal Reference, Display Name, Sales Price, Quantity On Hand, Free To Use Quantity). Match "Internal Barcode" pe hota hai — dobara upload karne se existing entries update ho jati hain, duplicate nahi banti.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
+          <label style={{ ...S.primaryBtnSm, cursor: "pointer" }}>
+            {catalogueUploading ? "Uploading…" : "📤 Upload Catalogue Excel"}
+            <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={catalogueUploading} onChange={e => { const f = e.target.files[0]; if (f) uploadCatalogueFile(f); e.target.value = ""; }} />
+          </label>
+          <div style={{ color: "#6B6355", fontSize: 12 }}>Abhi catalogue mein <strong>{catalogueCount ?? "…"}</strong> products hain.</div>
+        </div>
+        <div style={{ fontSize: 11, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>
+          NOTE: DC ki Odoo Import se bhi naye barcode/naam khud-ba-khud catalogue mein seed ho jate hain (agar wahan pehle se nahi hain) — lekin woh kabhi is bulk-upload ki rich detail (category, price waghera) ko overwrite nahi karte.
+        </div>
+      </div>
     </div>
   );
 }
@@ -9580,6 +9649,17 @@ function StockingStrView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Stocking Warehouse — STR (Stock Transfer Requests)" />
+      <div style={S.statGrid}>
+        {STK_STR_STAGES.map(stage => {
+          const count = strs.filter(s => stkStrStage(s) === stage).length;
+          return (
+            <div key={stage} style={S.statCard}>
+              <div style={{ fontSize: 10, color: "#8A8272", letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{stage.toUpperCase()}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: stkStrStageColor(stage), marginTop: 4 }}>{count}</div>
+            </div>
+          );
+        })}
+      </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map(t => <button key={t.key} onClick={() => setTab(t.key)} style={stkPill(tab === t.key)}>{t.label}</button>)}
         <label style={{ ...S.secondaryBtnSm, cursor: "pointer", marginLeft: "auto" }}>
@@ -10204,44 +10284,35 @@ function StockingPickingView({ token, profile, showToast }) {
   const whId = useStkWarehouseId(token, profile);
   const canAssign = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
   const canWork = ["admin", "warehouse_lead", "picker"].includes(profile.role);
-  const canDoPutaway = ["admin", "warehouse_lead", "putaway_officer"].includes(profile.role);
   const [tab, setTab] = useState(canAssign ? "assignment" : "mytasks");
   const [strs, setStrs] = useState([]);
   const [queue, setQueue] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [bins, setBins] = useState([]);
   const [pickers, setPickers] = useState([]);
-  const [putawayOfficers, setPutawayOfficers] = useState([]);
-  const [repairItems, setRepairItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [assignChoice, setAssignChoice] = useState({});
   const [pickForm, setPickForm] = useState({}); // { [strId]: { binId, qty } }
-  const [repairForm, setRepairForm] = useState({ barcode: "", name: "", binId: "", qty: "" });
-  const [repairAssignChoice, setRepairAssignChoice] = useState({});
-  const [repairBinChoice, setRepairBinChoice] = useState({});
 
   const load = async () => {
     if (!whId) return;
     setLoading(true);
     try {
-      const [s, q, adj, b, p, po, rep] = await Promise.all([
+      const [s, q, adj, b, p] = await Promise.all([
         sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&status=eq.reserved&select=*`, { token }),
         sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
         sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
-        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.picker&select=id,full_name`, { token }),
-        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token }),
-        sb(`/rest/v1/stk_repair_queue?warehouse_id=eq.${whId}&select=*&order=reported_at.desc`, { token })
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.picker&select=id,full_name`, { token })
       ]);
       setStrs((s || []).filter(x => x.source !== "grn_distribution"));
-      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setPickers(p || []); setPutawayOfficers(po || []); setRepairItems(rep || []);
+      setQueue(q || []); setAdjustments(adj || []); setBins(b || []); setPickers(p || []);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [whId]);
 
   const pickerName = (id) => pickers.find(p => p.id === id)?.full_name || "—";
-  const putawayOfficerName = (id) => putawayOfficers.find(p => p.id === id)?.full_name || "—";
   const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
 
   // Per-bin on-hand for a given product, so a Picker can only pick what's really there.
@@ -10252,20 +10323,9 @@ function StockingPickingView({ token, profile, showToast }) {
     for (const a of adjustments) if ((a.product_barcode || a.product_name) === key) perBin[a.bin_id] = (perBin[a.bin_id] || 0) + Number(a.qty_delta || 0);
     return Object.entries(perBin).filter(([, v]) => v > 0).map(([binId, avail]) => ({ binId, avail }));
   };
-  // All bins that currently hold ANY stock at all (for the Repair report form's barcode-agnostic bin picker).
-  const allStockedBins = useMemo(() => {
-    const set = new Set();
-    for (const q of queue) if (Number(q.qty) > 0) set.add(q.bin_id);
-    for (const a of adjustments) if (Number(a.qty_delta) > 0) set.add(a.bin_id);
-    return [...set];
-  }, [queue, adjustments]);
 
   const unassigned = strs.filter(s => !s.assigned_picker && !s.picked_at);
   const myTasks = profile.role === "picker" ? strs.filter(s => s.assigned_picker === profile.id && !s.picked_at) : strs.filter(s => s.assigned_picker && !s.picked_at);
-  const pendingRepair = repairItems.filter(r => r.status === "pending");
-  const assignedRepair = repairItems.filter(r => r.status === "assigned_putaway");
-  const myRepairPutaway = profile.role === "putaway_officer" ? assignedRepair.filter(r => r.assigned_putaway_officer === profile.id) : assignedRepair;
-  const completedRepair = repairItems.filter(r => r.status === "completed");
 
   const assignPicker = async (str) => {
     const pickerId = assignChoice[str.id];
@@ -10293,49 +10353,11 @@ function StockingPickingView({ token, profile, showToast }) {
     } catch (e) { showToast("Pick fail: " + e.message, "err"); }
   };
 
-  // A picker who, while picking, finds physically damaged/needs-touchup units pulls them
-  // straight out of that bin (so the bin's on-hand stays accurate) and into the Repair queue —
-  // separate from whatever STR they were actually picking for.
-  const reportToRepair = async () => {
-    const { barcode, name, binId, qty } = repairForm;
-    const q = Number(qty);
-    if (!binId || !name.trim() || !q || q <= 0) { showToast("Bin, product naam aur valid qty enter karein", "err"); return; }
-    try {
-      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), bin_id: binId, qty_delta: -q, reason: "Sent to Repair/Touch-up", source: "manual", created_by: profile.id } });
-      await sb(`/rest/v1/stk_repair_queue`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), qty: q, source_bin_id: binId, reported_by: profile.id, reported_at: new Date().toISOString(), status: "pending" } });
-      showToast(`✓ ${q} × ${name} Repair/Touch-up mein transfer ho gaya`);
-      setRepairForm({ barcode: "", name: "", binId: "", qty: "" });
-      load();
-    } catch (e) { showToast("Transfer fail: " + e.message, "err"); }
-  };
-
-  const fixAndAssignRepair = async (item) => {
-    const putawayId = repairAssignChoice[item.id];
-    if (!putawayId) { showToast("Putaway Officer select karein", "err"); return; }
-    try {
-      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "assigned_putaway", fixed_by: profile.id, fixed_at: new Date().toISOString(), assigned_putaway_officer: putawayId } });
-      showToast(`✓ Fixed mark ho gaya — ${putawayOfficerName(putawayId)} ko putaway k liye assign ho gaya`);
-      load();
-    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
-  };
-
-  const completeRepairPutaway = async (item) => {
-    const binId = repairBinChoice[item.id];
-    if (!binId) { showToast("Bin select karein", "err"); return; }
-    try {
-      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: item.product_barcode, product_name: item.product_name, bin_id: binId, qty_delta: item.qty, reason: "Repair/Touch-up completed — putaway", source: "manual", created_by: profile.id } });
-      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "completed", putaway_bin_id: binId, completed_by: profile.id, completed_at: new Date().toISOString() } });
-      showToast(`✓ ${item.product_name} wapas ${binCode(binId)} mein putaway ho gaya`);
-      load();
-    } catch (e) { showToast("Putaway fail: " + e.message, "err"); }
-  };
-
   if (loading) return <EmptyNote text="Loading..." />;
 
   const TABS = [
     ...(canAssign ? [{ key: "assignment", label: `Assignment (${unassigned.length})` }] : []),
-    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "picker" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : []),
-    { key: "repair", label: `Repair/Touch-up (${pendingRepair.length + assignedRepair.length})` }
+    ...(canWork ? [{ key: "mytasks", label: `${profile.role === "picker" ? "My Tasks" : "All Assigned"} (${myTasks.length})` }] : [])
   ];
 
   return (
@@ -10403,89 +10425,196 @@ function StockingPickingView({ token, profile, showToast }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
 
-      {tab === "repair" && (
-        <>
-          {canWork && (
-            <div style={S.panel}>
-              <div style={S.panelTitle}>Item Repair/Touch-up Mein Bhejein</div>
-              <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Picking k dauran agar koi item damaged/touch-up wala mile, use yahan report karein — bin se turant nikal k dedicated Repair area mein transfer ho jayega.</div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <input style={{ ...S.input, minWidth: 130, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode (optional)" value={repairForm.barcode} onChange={e => setRepairForm(f => ({ ...f, barcode: e.target.value }))} />
-                <input style={{ ...S.input, minWidth: 160 }} placeholder="Product naam" value={repairForm.name} onChange={e => setRepairForm(f => ({ ...f, name: e.target.value }))} />
-                <select style={{ ...S.input, minWidth: 140 }} value={repairForm.binId} onChange={e => setRepairForm(f => ({ ...f, binId: e.target.value }))}>
-                  <option value="">Kis bin se mila…</option>
-                  {allStockedBins.map(id => <option key={id} value={id}>{binCode(id)}</option>)}
-                </select>
-                <input type="number" style={{ ...S.input, width: 90 }} placeholder="Qty" value={repairForm.qty} onChange={e => setRepairForm(f => ({ ...f, qty: e.target.value }))} />
-                <button style={S.primaryBtnSm} onClick={reportToRepair}>🔧 Transfer to Repair</button>
-              </div>
-            </div>
-          )}
+/* ================= STOCKING WAREHOUSE — REPAIR/TOUCH-UP ================= */
+// A physically dedicated, non-saleable bin ("REPAIR-HOLD") is used the same way E-commerce
+// uses "PNA-HOLD" — auto-created if missing. Reporting an item debits its source bin and
+// credits REPAIR-HOLD (a clean bin-to-bin trail); completing the repair-putaway debits
+// REPAIR-HOLD and credits wherever the Putaway Officer actually puts it away.
+const STK_REPAIR_BIN_CODE = "REPAIR-HOLD";
+function StockingRepairView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const canReport = ["admin", "warehouse_lead", "picker", "outbound_officer"].includes(profile.role);
+  const canFix = ["admin", "warehouse_lead", "outbound_officer"].includes(profile.role);
+  const canDoPutaway = ["admin", "warehouse_lead", "putaway_officer"].includes(profile.role);
+  const [bins, setBins] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
+  const [putawayOfficers, setPutawayOfficers] = useState([]);
+  const [repairItems, setRepairItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [repairForm, setRepairForm] = useState({ barcode: "", name: "", binId: "", qty: "" });
+  const [repairAssignChoice, setRepairAssignChoice] = useState({});
+  const [repairBinChoice, setRepairBinChoice] = useState({});
 
-          <div style={S.panel}>
-            <div style={S.panelTitle}>Pending — Fix Karke Putaway Officer Assign Karein</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>From Bin</th><th style={S.th}>Reported</th><th style={S.th}>Assign Putaway Officer</th><th style={S.th}></th></tr></thead>
-              <tbody>
-                {pendingRepair.map(r => (
-                  <tr key={r.id}>
-                    <td style={S.td}>{r.product_name}</td>
-                    <td style={S.td}>{r.qty}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{binCode(r.source_bin_id)}</td>
-                    <td style={S.td}>{fmtTime(r.reported_at)}</td>
-                    <td style={S.td}>
-                      <select style={{ ...S.input, width: 160 }} value={repairAssignChoice[r.id] || ""} onChange={e => setRepairAssignChoice(a => ({ ...a, [r.id]: e.target.value }))}>
-                        <option value="">Select…</option>
-                        {putawayOfficers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
-                      </select>
-                    </td>
-                    <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => fixAndAssignRepair(r)}>✓ Fixed & Assign</button></td>
-                  </tr>
-                ))}
-                {!pendingRepair.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi item repair mein pending nahi" /></td></tr>}
-              </tbody>
-            </table>
+  const load = async () => {
+    if (!whId) return;
+    setLoading(true);
+    try {
+      const [b, q, adj, po, rep] = await Promise.all([
+        sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*&order=code.asc`, { token }),
+        sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
+        sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&role=eq.putaway_officer&select=id,full_name`, { token }),
+        sb(`/rest/v1/stk_repair_queue?warehouse_id=eq.${whId}&select=*&order=reported_at.desc`, { token })
+      ]);
+      setBins(b || []); setQueue(q || []); setAdjustments(adj || []); setPutawayOfficers(po || []); setRepairItems(rep || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [whId]);
+
+  const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
+  const putawayOfficerName = (id) => putawayOfficers.find(p => p.id === id)?.full_name || "—";
+  const allStockedBins = useMemo(() => {
+    const set = new Set();
+    for (const q of queue) if (Number(q.qty) > 0) set.add(q.bin_id);
+    for (const a of adjustments) if (Number(a.qty_delta) > 0) set.add(a.bin_id);
+    return [...set];
+  }, [queue, adjustments]);
+
+  const pendingRepair = repairItems.filter(r => r.status === "pending");
+  const assignedRepair = repairItems.filter(r => r.status === "assigned_putaway");
+  const myRepairPutaway = profile.role === "putaway_officer" ? assignedRepair.filter(r => r.assigned_putaway_officer === profile.id) : assignedRepair;
+  const completedRepair = repairItems.filter(r => r.status === "completed");
+
+  // Finds the dedicated Repair/Touch-up bin for this warehouse, auto-creating it (non-saleable
+  // by naming convention, same as PNA-HOLD) the first time it's needed.
+  const ensureRepairBin = async () => {
+    const existing = bins.find(b => b.code === STK_REPAIR_BIN_CODE);
+    if (existing) return existing.id;
+    const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, code: STK_REPAIR_BIN_CODE } });
+    setBins(bs => [...bs, created[0]]);
+    return created[0].id;
+  };
+
+  const reportToRepair = async () => {
+    const { barcode, name, binId, qty } = repairForm;
+    const q = Number(qty);
+    if (!binId || !name.trim() || !q || q <= 0) { showToast("Bin, product naam aur valid qty enter karein", "err"); return; }
+    try {
+      const repairBinId = await ensureRepairBin();
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), bin_id: binId, qty_delta: -q, reason: "Sent to Repair/Touch-up", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), bin_id: repairBinId, qty_delta: q, reason: "Received into Repair/Touch-up", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_repair_queue`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: barcode.trim() || null, product_name: name.trim(), qty: q, source_bin_id: binId, reported_by: profile.id, reported_at: new Date().toISOString(), status: "pending" } });
+      showToast(`✓ ${q} × ${name} — ${binCode(binId)} se ${STK_REPAIR_BIN_CODE} mein transfer ho gaya`);
+      setRepairForm({ barcode: "", name: "", binId: "", qty: "" });
+      load();
+    } catch (e) { showToast("Transfer fail: " + e.message, "err"); }
+  };
+
+  const fixAndAssignRepair = async (item) => {
+    const putawayId = repairAssignChoice[item.id];
+    if (!putawayId) { showToast("Putaway Officer select karein", "err"); return; }
+    try {
+      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "assigned_putaway", fixed_by: profile.id, fixed_at: new Date().toISOString(), assigned_putaway_officer: putawayId } });
+      showToast(`✓ Fixed mark ho gaya — ${putawayOfficerName(putawayId)} ko putaway k liye assign ho gaya`);
+      load();
+    } catch (e) { showToast("Assign fail: " + e.message, "err"); }
+  };
+
+  const completeRepairPutaway = async (item) => {
+    const binId = repairBinChoice[item.id];
+    if (!binId) { showToast("Bin select karein", "err"); return; }
+    try {
+      const repairBinId = await ensureRepairBin();
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: item.product_barcode, product_name: item.product_name, bin_id: repairBinId, qty_delta: -item.qty, reason: "Repair/Touch-up completed — left holding bin", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: item.product_barcode, product_name: item.product_name, bin_id: binId, qty_delta: item.qty, reason: "Repair/Touch-up completed — putaway", source: "manual", created_by: profile.id } });
+      await sb(`/rest/v1/stk_repair_queue?id=eq.${item.id}`, { method: "PATCH", token, body: { status: "completed", putaway_bin_id: binId, completed_by: profile.id, completed_at: new Date().toISOString() } });
+      showToast(`✓ ${item.product_name} wapas ${binCode(binId)} mein putaway ho gaya`);
+      load();
+    } catch (e) { showToast("Putaway fail: " + e.message, "err"); }
+  };
+
+  if (loading) return <EmptyNote text="Loading..." />;
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Repair/Touch-up" />
+      <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 16 }}>Yeh sab ek dedicated "{STK_REPAIR_BIN_CODE}" bin (non-saleable) k zariye track hota hai — jab item report hoti hai to source bin se debit ho k is bin mein credit hoti hai, aur putaway complete hone pe is bin se debit ho k asal bin mein credit hoti hai.</div>
+
+      {canReport && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Item Repair/Touch-up Mein Bhejein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Picking ya kisi aur waqt agar koi item damaged/touch-up wala mile, use yahan report karein.</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input style={{ ...S.input, minWidth: 130, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Barcode (optional)" value={repairForm.barcode} onChange={e => setRepairForm(f => ({ ...f, barcode: e.target.value }))} />
+            <input style={{ ...S.input, minWidth: 160 }} placeholder="Product naam" value={repairForm.name} onChange={e => setRepairForm(f => ({ ...f, name: e.target.value }))} />
+            <select style={{ ...S.input, minWidth: 140 }} value={repairForm.binId} onChange={e => setRepairForm(f => ({ ...f, binId: e.target.value }))}>
+              <option value="">Kis bin se mila…</option>
+              {allStockedBins.map(id => <option key={id} value={id}>{binCode(id)}</option>)}
+            </select>
+            <input type="number" style={{ ...S.input, width: 90 }} placeholder="Qty" value={repairForm.qty} onChange={e => setRepairForm(f => ({ ...f, qty: e.target.value }))} />
+            <button style={S.primaryBtnSm} onClick={reportToRepair}>🔧 Transfer to Repair</button>
           </div>
-
-          {canDoPutaway && (
-            <div style={S.panel}>
-              <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Repair Putaway Tasks" : "All Repair Putaway (oversight)"}</div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}></th></tr></thead>
-                <tbody>
-                  {myRepairPutaway.map(r => (
-                    <tr key={r.id}>
-                      {profile.role !== "putaway_officer" && <td style={S.td}>{putawayOfficerName(r.assigned_putaway_officer)}</td>}
-                      <td style={S.td}>{r.product_name}</td>
-                      <td style={S.td}>{r.qty}</td>
-                      <td style={S.td}>
-                        <select style={{ ...S.input, width: 140 }} value={repairBinChoice[r.id] || ""} onChange={e => setRepairBinChoice(b => ({ ...b, [r.id]: e.target.value }))}>
-                          <option value="">Select bin…</option>
-                          {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-                        </select>
-                      </td>
-                      <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completeRepairPutaway(r)}>✓ Putaway Complete</button></td>
-                    </tr>
-                  ))}
-                  {!myRepairPutaway.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 5 : 4}><EmptyNote text="Koi repair-putaway task pending nahi" /></td></tr>}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <div style={S.panel}>
-            <div style={S.panelTitle}>Completed</div>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Putaway Bin</th><th style={S.th}>Completed At</th></tr></thead>
-              <tbody>
-                {completedRepair.slice(0, 20).map(r => <tr key={r.id}><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.qty}</td><td style={S.td}>{binCode(r.putaway_bin_id)}</td><td style={S.td}>{fmtTime(r.completed_at)}</td></tr>)}
-                {!completedRepair.length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Abhi tak koi complete nahi hua" /></td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </>
+        </div>
       )}
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Pending — Fix Karke Putaway Officer Assign Karein</div>
+        <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>"Fixed" yahan iska matlab: external repair team se kaam ho chuka hai (physical repair app se bahar hota hai) — ab sirf record aur putaway assignment karna hai.</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>From Bin</th><th style={S.th}>Reported</th><th style={S.th}>Assign Putaway Officer</th><th style={S.th}></th></tr></thead>
+          <tbody>
+            {pendingRepair.map(r => (
+              <tr key={r.id}>
+                <td style={S.td}>{r.product_name}</td>
+                <td style={S.td}>{r.qty}</td>
+                <td style={{ ...S.td, color: "#6B6355" }}>{binCode(r.source_bin_id)}</td>
+                <td style={S.td}>{fmtTime(r.reported_at)}</td>
+                <td style={S.td}>
+                  <select style={{ ...S.input, width: 160 }} value={repairAssignChoice[r.id] || ""} onChange={e => setRepairAssignChoice(a => ({ ...a, [r.id]: e.target.value }))}>
+                    <option value="">Select…</option>
+                    {putawayOfficers.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                  </select>
+                </td>
+                <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => fixAndAssignRepair(r)}>✓ Fixed & Assign</button></td>
+              </tr>
+            ))}
+            {!pendingRepair.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi item repair mein pending nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {canDoPutaway && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>{profile.role === "putaway_officer" ? "My Repair Putaway Tasks" : "All Repair Putaway (oversight)"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}></th></tr></thead>
+            <tbody>
+              {myRepairPutaway.map(r => (
+                <tr key={r.id}>
+                  {profile.role !== "putaway_officer" && <td style={S.td}>{putawayOfficerName(r.assigned_putaway_officer)}</td>}
+                  <td style={S.td}>{r.product_name}</td>
+                  <td style={S.td}>{r.qty}</td>
+                  <td style={S.td}>
+                    <select style={{ ...S.input, width: 140 }} value={repairBinChoice[r.id] || ""} onChange={e => setRepairBinChoice(b => ({ ...b, [r.id]: e.target.value }))}>
+                      <option value="">Select bin…</option>
+                      {bins.filter(b => b.code !== STK_REPAIR_BIN_CODE).map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completeRepairPutaway(r)}>✓ Putaway Complete</button></td>
+                </tr>
+              ))}
+              {!myRepairPutaway.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 5 : 4}><EmptyNote text="Koi repair-putaway task pending nahi" /></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Completed</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Putaway Bin</th><th style={S.th}>Completed At</th></tr></thead>
+          <tbody>
+            {completedRepair.slice(0, 20).map(r => <tr key={r.id}><td style={S.td}>{r.product_name}</td><td style={S.td}>{r.qty}</td><td style={S.td}>{binCode(r.putaway_bin_id)}</td><td style={S.td}>{fmtTime(r.completed_at)}</td></tr>)}
+            {!completedRepair.length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Abhi tak koi complete nahi hua" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -11089,6 +11218,130 @@ function StockingInventoryView({ token, profile, showToast }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ================= STOCKING WAREHOUSE — REPORTS ================= */
+function StockingReportsView({ token, profile, showToast }) {
+  const whId = useStkWarehouseId(token, profile);
+  const [busy, setBusy] = useState("");
+  const sourceLabel = (s) => s === "grn_distribution" ? "GRN Distribution" : s === "customer_order" ? "Customer Order" : "Weekly Demand";
+
+  const run = async (key, fn) => {
+    setBusy(key);
+    try { await fn(); } catch (e) { showToast("Export fail: " + e.message, "err"); }
+    setBusy("");
+  };
+
+  const exportBinWiseInventory = () => run("bins", async () => {
+    const [queue, adjustments, bins, staff, catalogue] = await Promise.all([
+      sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
+      sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
+      sb(`/rest/v1/bins?warehouse_id=eq.${whId}&select=*`, { token }),
+      sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&select=id,full_name`, { token }),
+      sb(`/rest/v1/stk_products?select=internal_barcode,display_name,department`, { token })
+    ]);
+    const grouped = {};
+    for (const q of queue || []) {
+      const key = `${q.product_barcode || q.product_name}|${q.bin_id}`;
+      if (!grouped[key]) grouped[key] = { barcode: q.product_barcode, name: q.product_name, bin_id: q.bin_id, on_hand: 0, last_by: null, last_at: null };
+      grouped[key].on_hand += Number(q.qty || 0);
+      if (!grouped[key].last_at || new Date(q.completed_at) > new Date(grouped[key].last_at)) { grouped[key].last_at = q.completed_at; grouped[key].last_by = q.completed_by; }
+    }
+    for (const a of adjustments || []) {
+      const key = `${a.product_barcode || a.product_name}|${a.bin_id}`;
+      if (!grouped[key]) grouped[key] = { barcode: a.product_barcode, name: a.product_name, bin_id: a.bin_id, on_hand: 0, last_by: null, last_at: null };
+      grouped[key].on_hand += Number(a.qty_delta || 0);
+      if (!grouped[key].last_at || new Date(a.created_at) > new Date(grouped[key].last_at)) { grouped[key].last_at = a.created_at; grouped[key].last_by = a.created_by; }
+    }
+    const rows = Object.values(grouped).filter(r => r.on_hand > 0);
+    const binCode = (id) => (bins || []).find(b => b.id === id)?.code || "";
+    const staffName = (id) => (staff || []).find(s => s.id === id)?.full_name || "";
+    const dept = (barcode) => (catalogue || []).find(c => c.internal_barcode === barcode)?.department || "";
+    const nameFor = (barcode, fallback) => (catalogue || []).find(c => c.internal_barcode === barcode)?.display_name || fallback;
+    exportCSV(`stocking-bin-wise-inventory-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Barcode", "Product", "Department", "Bin", "On Hand", "Last Activity By", "Last Activity At"],
+      rows.map(r => [r.barcode, nameFor(r.barcode, r.name), dept(r.barcode), binCode(r.bin_id), r.on_hand, staffName(r.last_by), r.last_at ? new Date(r.last_at).toLocaleString() : ""]));
+    showToast(`✓ ${rows.length} rows export ho gayi`);
+  });
+
+  const exportInventoryLedger = () => run("ledger", async () => {
+    const [queue, adjustments, catalogue] = await Promise.all([
+      sb(`/rest/v1/stk_putaway_queue?warehouse_id=eq.${whId}&status=eq.completed&select=*`, { token }),
+      sb(`/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${whId}&select=*`, { token }),
+      sb(`/rest/v1/stk_products?select=internal_barcode,display_name,department`, { token })
+    ]);
+    const grouped = {};
+    for (const q of queue || []) {
+      const key = q.product_barcode || q.product_name;
+      if (!grouped[key]) grouped[key] = { barcode: q.product_barcode, name: q.product_name, on_hand: 0, bins: new Set() };
+      grouped[key].on_hand += Number(q.qty || 0); grouped[key].bins.add(q.bin_id);
+    }
+    for (const a of adjustments || []) {
+      const key = a.product_barcode || a.product_name;
+      if (!grouped[key]) grouped[key] = { barcode: a.product_barcode, name: a.product_name, on_hand: 0, bins: new Set() };
+      grouped[key].on_hand += Number(a.qty_delta || 0); grouped[key].bins.add(a.bin_id);
+    }
+    const dept = (barcode) => (catalogue || []).find(c => c.internal_barcode === barcode)?.department || "";
+    const nameFor = (barcode, fallback) => (catalogue || []).find(c => c.internal_barcode === barcode)?.display_name || fallback;
+    const rows = Object.values(grouped);
+    exportCSV(`stocking-inventory-ledger-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Barcode", "Product", "Department", "Total On Hand", "Bins"],
+      rows.map(r => [r.barcode, nameFor(r.barcode, r.name), dept(r.barcode), r.on_hand, r.bins.size]));
+    showToast(`✓ ${rows.length} rows export ho gayi`);
+  });
+
+  const exportStrOverall = () => run("str", async () => {
+    const rows = await sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token });
+    exportCSV(`stocking-str-overall-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["STR#", "Status", "Source", "Customer Order Ref", "Product", "Barcode", "Qty", "Destination", "Created At", "Confirmed At", "Picked At", "Packed At", "Dispatched At", "Gatepass#"],
+      (rows || []).map(r => [r.str_number, stkStrStage(r), sourceLabel(r.source), r.customer_order_ref, r.product_name, r.product_barcode, r.qty, r.destination,
+        r.created_at ? new Date(r.created_at).toLocaleString() : "", r.confirmed_at ? new Date(r.confirmed_at).toLocaleString() : "", r.picked_at ? new Date(r.picked_at).toLocaleString() : "",
+        r.packed_at ? new Date(r.packed_at).toLocaleString() : "", r.dispatched_at ? new Date(r.dispatched_at).toLocaleString() : "", r.gatepass_number]));
+    showToast(`✓ ${(rows || []).length} STR(s) export ho gayi — Status column se filter/pivot kar sakte hain`);
+  });
+
+  const exportReceiving = () => run("receiving", async () => {
+    const [pos, dcs, lines] = await Promise.all([
+      sb(`/rest/v1/stk_purchase_orders?warehouse_id=eq.${whId}&select=*`, { token }),
+      sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*`, { token }),
+      sb(`/rest/v1/stk_dc_lines?select=*`, { token })
+    ]);
+    const poById = (id) => (pos || []).find(p => p.id === id);
+    const dcById = (id) => (dcs || []).find(d => d.id === id);
+    const relevantLines = (lines || []).filter(l => dcById(l.dc_id));
+    exportCSV(`stocking-receiving-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["PO#", "Supplier", "Source", "DC#", "Odoo Reference", "Product", "Barcode", "Demand Qty", "OK Qty", "DMG", "MNF", "Wrong", "Excess", "Short", "GRN#", "DC Status"],
+      relevantLines.map(l => {
+        const dc = dcById(l.dc_id); const po = dc ? poById(dc.po_id) : null;
+        return [po?.po_number, po?.supplier, po?.source, dc?.dc_number, dc?.odoo_reference, l.product_name, l.product_barcode, l.demand_qty, l.ok_qty, l.dmg_qty, l.mnf_qty, l.wrong_qty, l.excess_qty, l.short_qty, dc?.grn_number, dc?.status];
+      }));
+    showToast(`✓ ${relevantLines.length} rows export ho gayi`);
+  });
+
+  return (
+    <div>
+      <SectionTitle title="Stocking Warehouse — Reports" />
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Export Reports (CSV)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {[
+            { key: "bins", label: "Bin-wise Inventory", desc: "Har product, har bin mein, kitni qty — kisne/kab last touch kiya.", fn: exportBinWiseInventory },
+            { key: "ledger", label: "Inventory Ledger", desc: "Product-level rollup — poori warehouse mein total on-hand.", fn: exportInventoryLedger },
+            { key: "str", label: "STR Report (Overall)", desc: "Har STR — status (Total Creation/In Process/Packing Process/RTD/Shipped) k sath, sab dates aur Gatepass#. Filter/pivot khud laga len.", fn: exportStrOverall },
+            { key: "receiving", label: "Receiving Report", desc: "PO/DC/GRN level detail — demand vs OK/DMG/MNF/Wrong/Excess/Short.", fn: exportReceiving }
+          ].map(r => (
+            <div key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid #EFE8D8" }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{r.label}</div>
+                <div style={{ fontSize: 12, color: "#8A8272" }}>{r.desc}</div>
+              </div>
+              <button style={S.primaryBtnSm} onClick={r.fn} disabled={busy === r.key}>{busy === r.key ? "Exporting…" : "⬇ Export CSV"}</button>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
