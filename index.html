@@ -353,6 +353,7 @@ function App() {
           {view === "stkbins" && profile.role === "admin" && <BinsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "complaints" && ["admin", "warehouse_lead", "compliance_officer"].includes(profile.role) && <ComplaintsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkcatalogue" && <StockingCatalogueView token={session.token} profile={effectiveProfile} showToast={showToast} />}
@@ -560,14 +561,15 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     logistics_officer: ["stkdashboard", "stklogistics"],
     rtv_officer: ["stkdashboard", "stkrtv"]
   };
-  const baseItems = profile.role === "admin" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
-    : profile.role === "warehouse_lead" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "reports", label: "Reports", icon: "📊" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
+  const baseItems = profile.role === "admin" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "complaints", label: "Complaints", icon: "🗣" }, { id: "reports", label: "Reports", icon: "📊" }, { id: "bins", label: "Bin Master", icon: "🗺" }, { id: "totemaster", label: "Tote Master", icon: "🧺" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
+    : profile.role === "warehouse_lead" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "complaints", label: "Complaints", icon: "🗣" }, { id: "reports", label: "Reports", icon: "📊" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
+    : ecomExtras && profile.role === "compliance_officer" ? [{ id: "dashboard", label: "Dashboard", icon: "🗂" }, { id: "complaints", label: "Complaints", icon: "🗣" }]
     : !ecomExtras && STOCKING_ROLE_TABS[profile.role] ? STOCKING_ITEMS.filter(it => STOCKING_ROLE_TABS[profile.role].includes(it.id))
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkcatalogue", "stkrtv", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports", "stkbins", "returns", "damage", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkcatalogue: { label: "Stocking Catalogue", icon: "📚" }, stkrtv: { label: "RTV", icon: "↩" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkrepair: { label: "Repair/Touch-up", icon: "🔧" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkreports: { label: "Stocking Reports", icon: "📊" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkcatalogue", "stkrtv", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports", "stkbins", "returns", "damage", "complaints", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkcatalogue: { label: "Stocking Catalogue", icon: "📚" }, stkrtv: { label: "RTV", icon: "↩" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkrepair: { label: "Repair/Touch-up", icon: "🔧" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkreports: { label: "Stocking Reports", icon: "📊" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, complaints: { label: "Complaints", icon: "🗣" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -3080,14 +3082,14 @@ function PutawayView({ token, profile, showToast }) {
 
           <div style={S.label}>2. SCAN LOCATION</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace", minWidth: 160 }} placeholder="Scan or type bin code"
+            <input list="ecomBinCodesDatalist" style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace", minWidth: 200 }} placeholder="Scan, ya bin code type karein"
               value={scanLocationInput} onChange={e => setScanLocationInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && scanLocation()} />
+            <datalist id="ecomBinCodesDatalist">
+              {bins.map(b => <option key={b.id} value={b.code} />)}
+            </datalist>
             <CameraScanButton onScan={(text) => scanLocation(text)} />
-            <select style={{ ...S.input, minWidth: 140 }} value={matchedBinId} onChange={e => setMatchedBinId(e.target.value)}>
-              <option value="">or select…</option>
-              {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-            </select>
+            <button style={S.secondaryBtnSm} onClick={() => scanLocation()}>Set</button>
           </div>
           {matchedBinId && <div style={{ color: "#4CAF7D", fontSize: 12, marginTop: 6 }}>📍 {bins.find(b => b.id === matchedBinId)?.code}</div>}
 
@@ -6632,7 +6634,7 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Delete failed", "err"); }
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", inbound_executive: "Inbound Executive", outbound_executive: "Outbound Executive", physical_receiver: "Physical Receiver", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", inbound_executive: "Inbound Executive", outbound_executive: "Outbound Executive", physical_receiver: "Physical Receiver", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent", compliance_officer: "Compliance Officer" };
 
   return (
     <div>
@@ -6653,6 +6655,7 @@ function UsersView({ token, profile, showToast }) {
             <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
             <option value="rtv_officer">RTV Officer (Prepare/Handover)</option>
             <option value="dispatcher">Dispatcher</option>
+            <option value="compliance_officer">Compliance Officer (Complaints)</option>
             <option value="supervisor">Supervisor</option>
             <option value="warehouse_lead">Warehouse Lead</option>
             <option value="admin">Admin</option>
@@ -6693,6 +6696,7 @@ function UsersView({ token, profile, showToast }) {
                 <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
                 <option value="rtv_officer">RTV Officer (Prepare/Handover)</option>
                 <option value="dispatcher">Dispatcher</option>
+                <option value="compliance_officer">Compliance Officer (Complaints)</option>
                 <option value="supervisor">Supervisor</option>
                 <option value="warehouse_lead">Warehouse Lead</option>
                 <option value="admin">Admin</option>
@@ -8024,6 +8028,179 @@ function ToteMasterView({ token, profile, showToast }) {
 }
 
 /* ================= DAMAGE MANAGEMENT (Admin / Warehouse Lead) ================= */
+/* ================= COMPLAINTS (product complaint resolution — direct pick & dispatch) ================= */
+// A self-contained lane for ad-hoc complaint resolutions, separate from normal Picking/Packing.
+// Compliance Officer looks up the product, sees exactly which bin(s) currently hold it, picks
+// straight from there, and dispatches with a manually-entered courier CN — all in one screen.
+// Inventory is only deducted at the "Mark Dispatch" step (not at creation), same principle used
+// elsewhere in the app: nothing leaves stock until it's actually confirmed gone.
+function ComplaintsView({ token, profile, showToast }) {
+  const canManage = ["admin", "warehouse_lead", "compliance_officer"].includes(profile.role);
+  const [complaints, setComplaints] = useState([]);
+  const [bins, setBins] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const [orderRef, setOrderRef] = useState("");
+  const [barcodeInput, setBarcodeInput] = useState("");
+  const [matchedProduct, setMatchedProduct] = useState(null);
+  const [availableBins, setAvailableBins] = useState([]);
+  const [selectedBinId, setSelectedBinId] = useState("");
+  const [qty, setQty] = useState("");
+  const [comments, setComments] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [dispatchForm, setDispatchForm] = useState({});
+  const [dispatchingId, setDispatchingId] = useState(null);
+
+  const load = async () => {
+    if (!profile.warehouse_id) return;
+    setLoading(true);
+    try {
+      const [c, b, s] = await Promise.all([
+        sb(`/rest/v1/complaints?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=id,full_name`, { token })
+      ]);
+      setComplaints(c || []); setBins(b || []); setStaff(s || []);
+    } catch (e) { showToast("Load fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [profile.warehouse_id]);
+
+  const binCode = (id) => bins.find(b => b.id === id)?.code || "—";
+  const staffName = (id) => staff.find(s => s.id === id)?.full_name || "—";
+
+  const scanComplaintProduct = async (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : barcodeInput).trim();
+    setBarcodeInput("");
+    if (!code) return;
+    const product = await lookupProductByCode(token, code);
+    if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+    setMatchedProduct(product);
+    setSelectedBinId(""); setQty("");
+    try {
+      const inv = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&select=*`, { token });
+      const rows = (inv || []).filter(r => r.on_hand > 0).map(r => ({ bin_id: r.bin_id, on_hand: r.on_hand }));
+      setAvailableBins(rows);
+      showToast(rows.length ? `✓ Matched: ${product.barcode} — bin select karein` : `⚠ ${product.barcode} kisi bin mein available nahi hai`, rows.length ? "ok" : "err");
+    } catch (e) { showToast("Inventory check fail", "err"); }
+  };
+
+  const createComplaint = async () => {
+    if (!orderRef.trim()) { showToast("Order reference likhein", "err"); return; }
+    if (!matchedProduct) { showToast("Pehle product scan karein", "err"); return; }
+    if (!selectedBinId) { showToast("Bin select karein", "err"); return; }
+    const bin = availableBins.find(b => b.bin_id === selectedBinId);
+    const q = Number(qty);
+    if (!q || q <= 0 || q > (bin?.on_hand || 0)) { showToast(`Valid qty enter karein (max ${bin?.on_hand || 0})`, "err"); return; }
+    setCreating(true);
+    try {
+      await sb(`/rest/v1/complaints`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, order_reference: orderRef.trim(), product_id: matchedProduct.id, product_barcode: matchedProduct.barcode, product_name: matchedProduct.name, qty: q, bin_id: selectedBinId, comments: comments.trim() || null, status: "ready", created_by: profile.id } });
+      showToast(`✅ Complaint ready ho gayi — ${matchedProduct.barcode}, bin ${binCode(selectedBinId)}`);
+      setOrderRef(""); setMatchedProduct(null); setAvailableBins([]); setSelectedBinId(""); setQty(""); setComments("");
+      load();
+    } catch (e) { showToast("Create fail: " + e.message, "err"); }
+    setCreating(false);
+  };
+
+  const markDispatch = async (c) => {
+    const f = dispatchForm[c.id] || {};
+    if (!f.courier?.trim() || !f.cn?.trim()) { showToast("Courier aur CN/tracking number enter karein", "err"); return; }
+    setDispatchingId(c.id);
+    try {
+      await addOnHand(token, profile.warehouse_id, c.product_id, c.bin_id, -c.qty, { type: "complaint_dispatch", userId: profile.id });
+      await sb(`/rest/v1/complaints?id=eq.${c.id}`, { method: "PATCH", token, body: { status: "dispatched", courier: f.courier.trim(), tracking_number: f.cn.trim(), dispatched_by: profile.id, dispatched_at: new Date().toISOString() } });
+      showToast(`✅ Dispatch ho gaya — ${f.cn} — inventory update ho gayi`);
+      load();
+    } catch (e) { showToast("Dispatch fail: " + e.message, "err"); }
+    setDispatchingId(null);
+  };
+
+  const readyComplaints = complaints.filter(c => c.status === "ready");
+  const dispatchedComplaints = complaints.filter(c => c.status === "dispatched");
+
+  if (loading) return <EmptyNote text="Loading..." />;
+  if (!canManage) return <EmptyNote text="Is tab tak aapki access nahi hai." />;
+
+  return (
+    <div>
+      <SectionTitle title="Complaints — Product Resolution" />
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Nayi Complaint Banayein</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <input style={{ ...S.input, flex: 1, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Order reference / #" value={orderRef} onChange={e => setOrderRef(e.target.value)} />
+          <input style={{ ...S.input, flex: 1, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Product barcode/SKU scan ya type karein" value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanComplaintProduct()} />
+          <CameraScanButton onScan={(text) => scanComplaintProduct(text)} />
+          <button style={S.secondaryBtnSm} onClick={() => scanComplaintProduct()}>Scan</button>
+        </div>
+
+        {matchedProduct && (
+          <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{matchedProduct.barcode}</div>
+            <div style={{ color: "#2B2620", fontSize: 14, marginBottom: 10 }}>{matchedProduct.name}</div>
+            {availableBins.length > 0 ? (
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <select style={{ ...S.input, minWidth: 160 }} value={selectedBinId} onChange={e => setSelectedBinId(e.target.value)}>
+                  <option value="">Bin select karein…</option>
+                  {availableBins.map(b => <option key={b.bin_id} value={b.bin_id}>{binCode(b.bin_id)} ({b.on_hand} available)</option>)}
+                </select>
+                <input type="number" min={1} style={{ ...S.input, width: 100 }} placeholder="Qty" value={qty} onChange={e => setQty(e.target.value)} />
+              </div>
+            ) : <EmptyNote text="Yeh product kisi bin mein available nahi hai" />}
+          </div>
+        )}
+
+        <textarea style={{ ...S.input, width: "100%", minHeight: 60, marginBottom: 12 }} placeholder="Comments / complaint ki wajah…" value={comments} onChange={e => setComments(e.target.value)} />
+        <button style={S.primaryBtnSm} onClick={createComplaint} disabled={creating}>{creating ? "Ready ho raha…" : "+ Complaint Ready Karein"}</button>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Ready — Dispatch Karein</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Order Ref</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>Qty</th><th style={S.th}>Comments</th><th style={S.th}>Courier</th><th style={S.th}>CN / Tracking#</th><th style={S.th}></th></tr></thead>
+          <tbody>
+            {readyComplaints.map(c => (
+              <tr key={c.id}>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{c.order_reference}</td>
+                <td style={S.td}>{c.product_name} <span style={{ color: "#8A8272", fontSize: 11 }}>({c.product_barcode})</span></td>
+                <td style={{ ...S.td, color: "#6B6355" }}>{binCode(c.bin_id)}</td>
+                <td style={S.td}>{c.qty}</td>
+                <td style={{ ...S.td, fontSize: 12, color: "#6B6355" }}>{c.comments || "—"}</td>
+                <td style={S.td}><input style={{ ...S.input, width: 100 }} placeholder="Courier" value={dispatchForm[c.id]?.courier || ""} onChange={e => setDispatchForm(f => ({ ...f, [c.id]: { ...f[c.id], courier: e.target.value } }))} /></td>
+                <td style={S.td}><input style={{ ...S.input, width: 120, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="CN#" value={dispatchForm[c.id]?.cn || ""} onChange={e => setDispatchForm(f => ({ ...f, [c.id]: { ...f[c.id], cn: e.target.value } }))} /></td>
+                <td style={S.td}><button style={S.primaryBtnSm} onClick={() => markDispatch(c)} disabled={dispatchingId === c.id}>{dispatchingId === c.id ? "…" : "🚚 Mark Dispatch"}</button></td>
+              </tr>
+            ))}
+            {!readyComplaints.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Koi complaint dispatch k liye ready nahi" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={S.panel}>
+        <div style={S.panelTitle}>Dispatched — History</div>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr><th style={S.th}>Order Ref</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Courier</th><th style={S.th}>CN#</th><th style={S.th}>By</th><th style={S.th}>At</th></tr></thead>
+          <tbody>
+            {dispatchedComplaints.map(c => (
+              <tr key={c.id}>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{c.order_reference}</td>
+                <td style={S.td}>{c.product_name}</td>
+                <td style={S.td}>{c.qty}</td>
+                <td style={S.td}>{c.courier}</td>
+                <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{c.tracking_number}</td>
+                <td style={{ ...S.td, color: "#6B6355" }}>{staffName(c.dispatched_by)}</td>
+                <td style={S.td}>{fmtTime(c.dispatched_at)}</td>
+              </tr>
+            ))}
+            {!dispatchedComplaints.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Abhi tak koi dispatch nahi hui" /></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DamageView({ token, profile, showToast }) {
   const [rows, setRows] = useState([]);
   const [products, setProducts] = useState({});
@@ -10005,7 +10182,7 @@ function StockingStrView({ token, profile, showToast }) {
       if (row.grn_allocation_id) {
         await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "rtd" } });
       }
-      showToast(`✓ STR ${strNumber} confirm ho gaya — Logistics tab mein vehicle load k liye ready hai`);
+      showToast(row.source === "grn_distribution" ? `✓ STR ${strNumber} confirm ho gaya — Logistics tab mein vehicle load k liye ready hai` : `✓ STR ${strNumber} confirm ho gaya — Stocking Picking tab se picker assign karein`);
       setEditForm(f2 => ({ ...f2, [row.id]: {} }));
       load();
     } catch (e) { showToast("Confirm fail: " + e.message, "err"); }
@@ -10070,7 +10247,7 @@ function StockingStrView({ token, profile, showToast }) {
       {tab === "draft" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Odoo STR# Add Karein & Confirm Karein</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Odoo STR# daal kar qty verify karein aur Create karein — is se inventory reserve ho jayegi.</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Odoo STR# daal kar qty verify karein aur Create karein. GRN Distribution seedha Logistics k liye ready ho jati hai; baki (existing bin stock se) "Stocking Picking" tab se picker assign hoga.</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Destination</th><th style={S.th}>Qty</th><th style={S.th}>Odoo STR#</th><th style={S.th}></th></tr></thead>
             <tbody>
