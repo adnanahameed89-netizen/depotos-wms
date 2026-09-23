@@ -6757,6 +6757,7 @@ function ReturnsView({ token, profile, showToast }) {
   const [exportTo, setExportTo] = useState(new Date().toISOString().slice(0, 10));
   const [exporting, setExporting] = useState(false);
   const [reopenAdd, setReopenAdd] = useState(false);
+  const [searchTracking, setSearchTracking] = useState("");
 
   const exportReturnsCSV = async () => {
     setExporting(true);
@@ -7242,10 +7243,11 @@ function ReturnsView({ token, profile, showToast }) {
         </div>
       )}
       <div style={S.panel}>
+        <input style={{ ...S.input, maxWidth: 260, marginBottom: 14 }} placeholder="🔍 Search tracking # (full ya last 5 digits)" value={searchTracking} onChange={e => setSearchTracking(e.target.value)} />
         <table>
           <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
           <tbody>
-            {returns.map(r => {
+            {returns.filter(r => !searchTracking.trim() || (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).map(r => {
               const order = orders.find(o => o.id === r.order_id);
               const agg = returnLineAgg[r.id];
               return (
@@ -7260,6 +7262,7 @@ function ReturnsView({ token, profile, showToast }) {
               );
             })}
             {returns.length === 0 && <tr><td colSpan={6}><EmptyNote text="No returns logged yet." /></td></tr>}
+            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={6}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -7989,6 +7992,12 @@ function DamageView({ token, profile, showToast }) {
   const [selected, setSelected] = useState({});
   const [busy, setBusy] = useState(false);
   const canProcess = ["admin", "warehouse_lead"].includes(profile.role);
+  const [transferCode, setTransferCode] = useState("");
+  const [transferProduct, setTransferProduct] = useState(null);
+  const [transferBins, setTransferBins] = useState([]); // [{binId, avail}]
+  const [transferBinId, setTransferBinId] = useState("");
+  const [transferQty, setTransferQty] = useState("");
+  const [transferring, setTransferring] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -8031,9 +8040,73 @@ function DamageView({ token, profile, showToast }) {
     setBusy(false);
   };
 
+  // Manual bin → Damage transfer — a genuinely damaged item spotted in a bin outside of
+  // picking/packing (e.g. during a walk-through) can be pulled straight out of inventory here,
+  // same accountable path (damage_inventory + STR) as the automatic picking/packing reports.
+  const scanForDamageTransfer = async (codeArg) => {
+    const code = (codeArg !== undefined ? codeArg : transferCode).trim();
+    setTransferCode("");
+    if (!code) return;
+    const product = await lookupProductByCode(token, code);
+    if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
+    try {
+      const invRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&select=*`, { token });
+      const avail = (invRows || []).filter(r => r.on_hand > 0).map(r => ({ binId: r.bin_id, avail: r.on_hand }));
+      if (!avail.length) { showToast("Is product ki kisi bin mein stock nahi hai", "err"); return; }
+      setTransferProduct(product); setTransferBins(avail); setTransferBinId(""); setTransferQty("");
+    } catch (e) { showToast("Lookup fail: " + e.message, "err"); }
+  };
+
+  const submitDamageTransfer = async () => {
+    const qty = Number(transferQty);
+    const avail = transferBins.find(b => b.binId === transferBinId)?.avail || 0;
+    if (!transferBinId) { showToast("Bin select karein", "err"); return; }
+    if (!qty || qty <= 0 || qty > avail) { showToast(`Valid qty enter karein (max ${avail} is bin mein)`, "err"); return; }
+    setTransferring(true);
+    try {
+      await addOnHand(token, profile.warehouse_id, transferProduct.id, transferBinId, -qty, { type: "damage", userId: profile.id });
+      const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${transferProduct.id}&bin_id=eq.${transferBinId}&processed=eq.false&select=*`, { token });
+      if (existing && existing.length > 0) {
+        await sb(`/rest/v1/damage_inventory?id=eq.${existing[0].id}`, { method: "PATCH", token, body: { qty: existing[0].qty + qty } });
+      } else {
+        await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: transferProduct.id, bin_id: transferBinId, qty, found_at_stage: "warehouse_transfer", reported_by: profile.id } });
+      }
+      showToast(`✓ ${qty} × ${transferProduct.barcode} damage mein transfer ho gaya`);
+      setTransferProduct(null); setTransferBins([]); setTransferBinId(""); setTransferQty("");
+      load();
+    } catch (e) { showToast("Transfer fail: " + e.message, "err"); }
+    setTransferring(false);
+  };
+
   return (
     <div>
       <SectionTitle title="Damage Inventory" />
+
+      {canProcess && (
+        <div style={S.panel}>
+          <div style={S.panelTitle}>Bin Se Damage Mein Transfer Karein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Kisi bhi bin mein agar damaged item mile (picking/packing k bagair), yahan se seedha transfer karein — inventory se qty nikal jayegi aur damage_inventory mein record ban jayega, jise aap "Pending STR" tab se STR bana k release kar sakte hain.</div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <input style={{ ...S.input, minWidth: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode/SKU, then Enter" value={transferCode} onChange={e => setTransferCode(e.target.value)} onKeyDown={e => e.key === "Enter" && scanForDamageTransfer()} />
+            <CameraScanButton onScan={(text) => scanForDamageTransfer(text)} />
+            <button style={S.secondaryBtnSm} onClick={() => scanForDamageTransfer()}>Scan</button>
+          </div>
+          {transferProduct && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #EFE8D8", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 14 }}>{transferProduct.barcode}</div>
+              <div style={{ fontSize: 13 }}>{transferProduct.name}</div>
+              <select style={{ ...S.input, minWidth: 140 }} value={transferBinId} onChange={e => setTransferBinId(e.target.value)}>
+                <option value="">Select bin…</option>
+                {transferBins.map(b => <option key={b.binId} value={b.binId}>{bins[b.binId]?.code || b.binId} ({b.avail} avail)</option>)}
+              </select>
+              <input type="number" style={{ ...S.input, width: 90 }} placeholder="Qty" value={transferQty} onChange={e => setTransferQty(e.target.value)} />
+              <button style={S.primaryBtnSm} onClick={submitDamageTransfer} disabled={transferring}>{transferring ? "Transfer ho raha…" : "→ Transfer to Damage"}</button>
+              <button style={S.secondaryBtnSm} onClick={() => { setTransferProduct(null); setTransferBins([]); }}>Cancel</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
         <button onClick={() => setTab("pending")} style={{ ...S.pill, ...(tab === "pending" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Pending STR ({pending.length})</button>
         <button onClick={() => setTab("processed")} style={{ ...S.pill, ...(tab === "processed" ? { background: "#F5A623", color: "#1A1206", borderColor: "#F5A623" } : {}) }}>Processed ({processed.length})</button>
