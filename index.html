@@ -5038,7 +5038,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
               <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th>
               <th style={S.th}>Assigned To</th><th style={S.th}>Tote</th>
-              <th style={S.th}>Last-Mile Status</th><th style={S.th}>City</th>
+              <th style={S.th}>Last-Mile Status</th><th style={S.th}>City</th><th style={S.th}>Courier Order Ref</th>
               <th style={S.th}>Received</th><th style={S.th}></th>
             </tr>
           </thead>
@@ -5069,6 +5069,7 @@ function OrdersView({ token, profile, showToast, setView }) {
                     {o.courier_status ? <span style={{ ...S.badgeSm, color: lastMileColor, borderColor: lastMileColor }}>{o.courier_status}</span> : <span style={{ color: "#8A8272", fontSize: 11 }}>—</span>}
                   </td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{o.delivery_city || "—"}</td>
+                  <td style={{ ...S.td, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{o.courier_order_ref || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{fmtTime(o.received_at)}</td>
                   <td style={S.td}>
                     {o.status === "received" && (
@@ -5079,7 +5080,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               );
             })}
             {displayedOrders.length === 0 && (
-              <tr><td colSpan={13}><EmptyNote text="No orders in this status." /></td></tr>
+              <tr><td colSpan={14}><EmptyNote text="No orders in this status." /></td></tr>
             )}
           </tbody>
         </table>
@@ -6596,17 +6597,48 @@ function UsersView({ token, profile, showToast }) {
       showToast("Name, email, aur kam se kam 6-character password chahiye", "err");
       return;
     }
+    if (form.role !== "admin" && !profile.warehouse_id) {
+      showToast("Warehouse context load nahi hui — dobara warehouse select kar ke try karein", "err");
+      return;
+    }
     setBusy(true);
     try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-        method: "POST",
-        headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ email: form.email.trim(), password: form.password })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.msg || data.error_description || data.error || "Signup failed");
-      const newUserId = data.user?.id || data.id;
-      if (!newUserId) throw new Error("User ID nahi mila — response check karein");
+      let newUserId = null;
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+          method: "POST",
+          headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ email: form.email.trim(), password: form.password })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.msg || data.error_description || data.error || "Signup failed");
+        newUserId = data.user?.id || data.id;
+        if (!newUserId) throw new Error("User ID nahi mila — response check karein");
+      } catch (signupErr) {
+        // This email's auth account may already exist because an earlier attempt created it
+        // but then failed to save the profile row (e.g. a "null" constraint error) — leaving
+        // an "orphaned" auth user with no profile. Recover it by logging in with the SAME
+        // credentials just given, instead of failing outright on retry.
+        const msg = (signupErr.message || "").toLowerCase();
+        if (msg.includes("already registered") || msg.includes("already exists")) {
+          try {
+            const loginData = await login(form.email.trim(), form.password);
+            newUserId = loginData.user?.id;
+            if (!newUserId) throw signupErr;
+          } catch (loginErr) {
+            throw new Error("Yeh email pehle se registered hai aur diya gaya password match nahi ho raha — is email ka pehle se koi alag account hai. Alag email try karein ya sahi password confirm karein.");
+          }
+        } else {
+          throw signupErr;
+        }
+      }
+
+      const existing = await sb(`/rest/v1/profiles?id=eq.${newUserId}&select=id`, { token });
+      if (existing && existing.length) {
+        showToast(`${form.full_name} ka account pehle se maujood hai — dobara add karne ki zaroorat nahi`, "err");
+        setBusy(false);
+        return;
+      }
 
       await sb(`/rest/v1/profiles`, {
         method: "POST", token,
@@ -6616,7 +6648,7 @@ function UsersView({ token, profile, showToast }) {
       setForm({ full_name: "", email: "", password: "", role: "picker", warehouse_id: profile.warehouse_id || "" });
       load();
     } catch (e) {
-      showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err");
+      showToast(`Failed: ${(e.message || "").slice(0, 150)}`, "err");
     }
     setBusy(false);
   };
@@ -6758,6 +6790,17 @@ function ReturnsView({ token, profile, showToast }) {
   const [openReturn, setOpenReturn] = useState(null);
   const [openLines, setOpenLines] = useState([]);
   const [matchedOrder, setMatchedOrder] = useState(null);
+  const [originalOrderLines, setOriginalOrderLines] = useState([]);
+
+  const loadOriginalOrderLines = async (orderId) => {
+    if (!orderId) { setOriginalOrderLines([]); return; }
+    try {
+      const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
+      const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
+      setProducts(prev => ({ ...prev, ...newProducts }));
+      setOriginalOrderLines(lines || []);
+    } catch (e) { setOriginalOrderLines([]); }
+  };
   const [scanInput, setScanInput] = useState("");
   const [lineQty, setLineQty] = useState(1);
   const [lineCondition, setLineCondition] = useState("good");
@@ -6899,6 +6942,7 @@ function ReturnsView({ token, profile, showToast }) {
       }
       load();
       setMatchedOrder(order || null);
+      loadOriginalOrderLines(order?.id);
       setOpenLines([]);
       setOpenReturn(created[0]);
     } catch (e) { showToast(`Failed: ${(e.message || "").slice(0, 100)}`, "err"); }
@@ -6909,7 +6953,9 @@ function ReturnsView({ token, profile, showToast }) {
     setOpenLines(lines || []);
     const newProducts = await fetchProductsByIds(token, (lines || []).map(l => l.product_id));
     setProducts(prev => ({ ...prev, ...newProducts }));
-    setMatchedOrder(orders.find(o => o.id === ret.order_id) || null);
+    const matched = orders.find(o => o.id === ret.order_id) || null;
+    setMatchedOrder(matched);
+    loadOriginalOrderLines(matched?.id);
     setOpenReturn(ret);
   };
 
@@ -7084,7 +7130,25 @@ function ReturnsView({ token, profile, showToast }) {
       <div>
         <SectionTitle title={`Return — ${matchedOrder?.external_order_id || "Unlinked"} (${openReturn.courier || "—"})`} action={<button style={S.secondaryBtnSm} onClick={() => setOpenReturn(null)}>← Back</button>} />
         {matchedOrder && (
-          <div style={{ ...S.panel, fontSize: 12, color: "#6B6355" }}>ℹ️ Original order match mil gaya — customer/courier auto-linked. Original items reference ke liye order detail dekhein.</div>
+          <div style={S.panel}>
+            <div style={S.panelTitle}>ℹ️ Original Order Items — Reference ({matchedOrder.external_order_id})</div>
+            <table>
+              <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Ordered Qty</th></tr></thead>
+              <tbody>
+                {originalOrderLines.map(l => {
+                  const p = products[l.product_id];
+                  return (
+                    <tr key={l.id}>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
+                      <td style={S.td}>{p?.name || "—"}</td>
+                      <td style={S.td}>{l.qty}</td>
+                    </tr>
+                  );
+                })}
+                {!originalOrderLines.length && <tr><td colSpan={3}><EmptyNote text="Is order ki lines nahi mili" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
         )}
         {openReturn.status === "pending" && (
         <div style={S.panel}>
@@ -7258,7 +7322,7 @@ function ReturnsView({ token, profile, showToast }) {
       <div style={S.panel}>
         <input style={{ ...S.input, maxWidth: 260, marginBottom: 14 }} placeholder="🔍 Search tracking # (full ya last 5 digits)" value={searchTracking} onChange={e => setSearchTracking(e.target.value)} />
         <table>
-          <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Order #</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
+          <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Courier</th><th style={S.th}>Order #</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
           <tbody>
             {returns.filter(r => !searchTracking.trim() || (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).map(r => {
               const order = orders.find(o => o.id === r.order_id);
@@ -7266,6 +7330,7 @@ function ReturnsView({ token, profile, showToast }) {
               return (
                 <tr key={r.id} style={{ cursor: "pointer" }} onClick={() => openReturnDetail(r)}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{r.tracking_number || order?.external_order_id || "—"}</td>
+                  <td style={{ ...S.td, color: "#6B6355" }}>{r.courier || order?.courier || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355", fontFamily: "'IBM Plex Mono', monospace" }}>{order?.external_order_id || "—"}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{agg?.qty || 0}</td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{r.origin_city || order?.delivery_city || "—"}</td>
@@ -7275,8 +7340,8 @@ function ReturnsView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {returns.length === 0 && <tr><td colSpan={7}><EmptyNote text="No returns logged yet." /></td></tr>}
-            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={7}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
+            {returns.length === 0 && <tr><td colSpan={8}><EmptyNote text="No returns logged yet." /></td></tr>}
+            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={8}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
           </tbody>
         </table>
       </div>
