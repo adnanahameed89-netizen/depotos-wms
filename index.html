@@ -9449,6 +9449,7 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [newItemName, setNewItemName] = useState(""); const [newItemBarcode, setNewItemBarcode] = useState(""); const [newItemExcess, setNewItemExcess] = useState("");
 
   const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
+  const [dcLineTotals, setDcLineTotals] = useState({}); // { [dc_id]: { grnQty, rtvQty } }
 
   const loadAll = async () => {
     setLoading(true);
@@ -9458,6 +9459,22 @@ function StockingReceivingView({ token, profile, showToast }) {
         sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${whId}&select=*&order=received_at.desc`, { token })
       ]);
       setPos(poRows || []); setDcs(dcRows || []);
+
+      // GRN Qty / RTV Qty per DC for the Arrival table — chunked so a warehouse with many
+      // DCs never builds an in.(...) filter long enough to fail outright.
+      const dcIds = (dcRows || []).map(d => d.id);
+      const totals = {};
+      const CHUNK = 100;
+      for (let i = 0; i < dcIds.length; i += CHUNK) {
+        const chunk = dcIds.slice(i, i + CHUNK);
+        const lineRows = await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${chunk.join(",")})&select=dc_id,ok_qty,dmg_qty,mnf_qty,wrong_qty,excess_qty,short_qty`, { token });
+        for (const l of lineRows || []) {
+          if (!totals[l.dc_id]) totals[l.dc_id] = { grnQty: 0, rtvQty: 0 };
+          totals[l.dc_id].grnQty += Number(l.ok_qty || 0);
+          totals[l.dc_id].rtvQty += Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.excess_qty || 0) + Number(l.short_qty || 0);
+        }
+      }
+      setDcLineTotals(totals);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
@@ -9511,10 +9528,14 @@ function StockingReceivingView({ token, profile, showToast }) {
         try { await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=ignore-duplicates,return=minimal", body: catalogueSeed }); } catch (e) { /* catalogue seed is best-effort */ }
       }
       await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "ready_for_inspection", odoo_reference: odooRef || null } });
-      if (supplierFromFile || sourceChoice) {
-        await sb(`/rest/v1/stk_purchase_orders?id=eq.${dc.po_id}`, { method: "PATCH", token, body: { ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) } });
-        setPos(ps => ps.map(p => p.id === dc.po_id ? { ...p, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) } : p));
-      }
+      // PO Qty auto-calculates as the running sum of every imported DC's demand — this is what
+      // lets the Arrival table flag "DC qty < PO qty" (a partial delivery) at a glance.
+      const importedTotal = lines.reduce((s, l) => s + l.demand_qty, 0);
+      const currentPo = pos.find(p => p.id === dc.po_id);
+      const newPoQty = (currentPo?.po_qty || 0) + importedTotal;
+      const poPatch = { po_qty: newPoQty, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) };
+      await sb(`/rest/v1/stk_purchase_orders?id=eq.${dc.po_id}`, { method: "PATCH", token, body: poPatch });
+      setPos(ps => ps.map(p => p.id === dc.po_id ? { ...p, ...poPatch } : p));
       showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai`);
       loadAll();
     } catch (e) { showToast("Import fail: " + e.message, "err"); }
@@ -9610,7 +9631,7 @@ function StockingReceivingView({ token, profile, showToast }) {
       const allPosted = allDcs.every(d => d.status === "grn_posted" || d.id === grnDc.id);
       const poStatus = (allPosted && ordered > 0 && received >= ordered) ? "completed" : "partial";
       await sb(`/rest/v1/stk_purchase_orders?id=eq.${grnDc.po_id}`, { method: "PATCH", token, body: { status: poStatus } });
-      showToast(`GRN ${grnNumberInput} post ho gayi — DC ${grnDc.dc_number}`);
+      showToast(`✅ GRN ${grnNumberInput} post ho gayi — DC ${grnDc.dc_number} automatically Stocking Outbound tab mein forward ho gayi hai (Assignment k liye ready)`);
       setGrnDc(null); setGrnLines([]); setGrnNumberInput("");
       loadAll();
     } catch (e) { showToast("GRN post fail: " + e.message, "err"); }
@@ -9650,13 +9671,26 @@ function StockingReceivingView({ token, profile, showToast }) {
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>RECENT ARRIVALS</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead><tr><th style={S.th}>PO#</th><th style={S.th}>Supplier</th><th style={S.th}>DC#</th><th style={S.th}>DC Qty</th><th style={S.th}>Status</th></tr></thead>
+              <thead><tr><th style={S.th}>PO#</th><th style={S.th}>Supplier</th><th style={S.th}>DC#</th><th style={S.th}>PO Qty</th><th style={S.th}>DC Qty</th><th style={S.th}>GRN Qty</th><th style={S.th}>RTV Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
                 {dcs.slice(0, 10).map(d => {
                   const po = pos.find(p => p.id === d.po_id);
-                  return <tr key={d.id}><td style={S.td}>{po?.po_number}</td><td style={S.td}>{po?.supplier || "— pending import"}</td><td style={S.td}>{d.dc_number}</td><td style={S.td}>{d.dc_qty_total}</td><td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td></tr>;
+                  const totals = dcLineTotals[d.id] || { grnQty: 0, rtvQty: 0 };
+                  const shortVsPO = po && Number(d.dc_qty_total) < Number(po.po_qty || 0);
+                  return (
+                    <tr key={d.id}>
+                      <td style={S.td}>{po?.po_number}</td>
+                      <td style={S.td}>{po?.supplier || "— pending import"}</td>
+                      <td style={S.td}>{d.dc_number}</td>
+                      <td style={S.td}>{po?.po_qty || 0}</td>
+                      <td style={{ ...S.td, color: shortVsPO ? "#E5484D" : "#2B2620", fontWeight: shortVsPO ? 600 : 400 }}>{d.dc_qty_total}{shortVsPO && " ⚠"}</td>
+                      <td style={S.td}>{totals.grnQty}</td>
+                      <td style={{ ...S.td, color: totals.rtvQty > 0 ? "#E5484D" : "#2B2620" }}>{totals.rtvQty}</td>
+                      <td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td>
+                    </tr>
+                  );
                 })}
-                {!dcs.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi koi arrival nahi" /></td></tr>}
+                {!dcs.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Abhi koi arrival nahi" /></td></tr>}
               </tbody>
             </table>
           </div>
@@ -9788,6 +9822,7 @@ function StockingReceivingView({ token, profile, showToast }) {
               {grnLines.map(l => <tr key={l.id}><td style={S.td}>{l.product_name}</td><td style={S.td}>{l.demand_qty}</td><td style={S.td}>{l.ok_qty}</td><td style={S.td}>{l.dmg_qty}</td><td style={S.td}>{l.mnf_qty}</td><td style={S.td}>{l.wrong_qty}</td><td style={S.td}>{l.excess_qty}</td><td style={S.td}>{l.short_qty}</td></tr>)}
             </tbody>
           </table>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>GRN post karte hi yeh DC automatically <strong>Stocking Outbound</strong> tab k "Assignment" mein chali jayegi — Outbound Executive ko koi alag se forward nahi karna padta.</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <input style={{ ...S.input, flex: 1, minWidth: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo GRN reference (posted manually)" value={grnNumberInput} onChange={e => setGrnNumberInput(e.target.value)} />
             <button style={S.primaryBtnSm} onClick={postGrn} disabled={loading}>✓ Mark GRN Complete → Forward to Putaway</button>
@@ -9816,6 +9851,8 @@ function StockingRtvView({ token, profile, showToast }) {
   const [verifying, setVerifying] = useState(false);
   const [handingOver, setHandingOver] = useState(false);
   const [printing, setPrinting] = useState(false);
+  const [rtvSearch, setRtvSearch] = useState("");
+  const [exportingExcel, setExportingExcel] = useState(false);
 
   const load = async () => {
     if (!whId) return;
@@ -9842,7 +9879,13 @@ function StockingRtvView({ token, profile, showToast }) {
     if (rows.every(r => r.status === "verified" || r.status === "handed_over")) return "verified";
     return "pending";
   };
-  const dcGroups = [...new Set(rtvRows.map(r => r.dc_id))];
+  const dcGroups = [...new Set(rtvRows.map(r => r.dc_id))].filter(dcId => {
+    if (!rtvSearch.trim()) return true;
+    const q = rtvSearch.trim().toLowerCase();
+    const dc = dcById(dcId); const po = poById(dc?.po_id);
+    const rows = rowsForDc(dcId);
+    return (rows[0]?.supplier || "").toLowerCase().includes(q) || (po?.po_number || "").toLowerCase().includes(q) || (dc?.dc_number || "").toLowerCase().includes(q);
+  });
   const activeRows = activeDcId ? rowsForDc(activeDcId) : [];
   const activeDc = activeDcId ? dcById(activeDcId) : null;
   const activePo = activeDc ? poById(activeDc.po_id) : null;
@@ -9890,10 +9933,16 @@ function StockingRtvView({ token, profile, showToast }) {
         poQtyByProduct[key] = (poQtyByProduct[key] || 0) + Number(l.demand_qty || 0);
       }
       let rowsHtml = "";
+      let sumPoQty = 0, sumDcQty = 0, sumGrnQty = 0, sumMnf = 0, sumWrong = 0, sumDmg = 0, sumShort = 0, sumExcess = 0;
       for (const r of activeRows) {
         const key = r.product_barcode || r.product_name;
-        rowsHtml += `<tr><td>${r.product_name}</td><td style="text-align:right">${poQtyByProduct[key] ?? "—"}</td><td style="text-align:right">${r.demand_qty ?? "—"}</td><td style="text-align:right">${r.ok_qty ?? "—"}</td><td style="text-align:right">${r.mnf_qty}</td><td style="text-align:right">${r.wrong_qty}</td><td style="text-align:right">${r.short_qty}</td><td style="text-align:right">${r.excess_qty}</td><td>${r.comment || "—"}</td></tr>`;
+        const poQty = poQtyByProduct[key] ?? 0;
+        sumPoQty += poQty; sumDcQty += Number(r.demand_qty || 0); sumGrnQty += Number(r.ok_qty || 0);
+        sumMnf += Number(r.mnf_qty || 0); sumWrong += Number(r.wrong_qty || 0); sumDmg += Number(r.dmg_qty || 0); sumShort += Number(r.short_qty || 0); sumExcess += Number(r.excess_qty || 0);
+        const photoCell = r.photo_data_url ? `<img src="${r.photo_data_url}" style="width:44px;height:44px;object-fit:cover;border-radius:4px" />` : "—";
+        rowsHtml += `<tr><td>${r.product_name}</td><td style="text-align:right">${poQty}</td><td style="text-align:right">${r.demand_qty ?? "—"}</td><td style="text-align:right">${r.ok_qty ?? "—"}</td><td style="text-align:right">${r.mnf_qty}</td><td style="text-align:right">${r.wrong_qty}</td><td style="text-align:right">${r.dmg_qty}</td><td style="text-align:right">${r.short_qty}</td><td style="text-align:right">${r.excess_qty}</td><td>${photoCell}</td><td>${r.comment || "—"}</td></tr>`;
       }
+      const sumRtvQty = sumMnf + sumWrong + sumDmg + sumShort + sumExcess;
       const w = window.open("", "_blank");
       w.document.write(`<html><head><title>RTV Handover — ${activePo?.po_number || ""} / ${activeDc?.dc_number || ""}</title><style>
         body{font-family:Arial;padding:24px;color:#111}
@@ -9902,6 +9951,14 @@ function StockingRtvView({ token, profile, showToast }) {
         .gp-title{font-size:14px;color:#555;margin-top:4px}
         .meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;font-size:13px;margin-bottom:18px}
         .meta-grid span{color:#555}
+        .summary{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+        .summary .card{flex:1;min-width:110px;border:1px solid #ddd;border-radius:8px;padding:10px 14px;background:#FAFAFA}
+        .summary .card .label{font-size:10px;letter-spacing:.5px;color:#888;text-transform:uppercase}
+        .summary .card .value{font-size:22px;font-weight:800;color:#1A1206}
+        .summary .card.warn{background:#FFF3F3;border-color:#E5484D}
+        .summary .card.warn .value{color:#E5484D}
+        .breakdown{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;font-size:12px}
+        .breakdown span{background:#F0EAD8;border-radius:14px;padding:5px 12px}
         table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #999;padding:7px 9px;font-size:12px;text-align:left}
         th{background:#F5A623;color:#1A1206}
         .sign{margin-top:60px;display:flex;justify-content:space-between}
@@ -9915,12 +9972,67 @@ function StockingRtvView({ token, profile, showToast }) {
           <div><span>PO#:</span> ${activePo?.po_number || "—"}</div>
           <div><span>DC#:</span> ${activeDc?.dc_number || "—"}</div>
         </div>
-        <table><thead><tr><th>Product</th><th>PO Qty</th><th>DC Qty</th><th>Perfect (OK)</th><th>MNF</th><th>Wrong</th><th>Short</th><th>Excess</th><th>Comment</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+        <div class="summary">
+          <div class="card"><div class="label">PO Qty</div><div class="value">${sumPoQty}</div></div>
+          <div class="card"><div class="label">DC Qty</div><div class="value">${sumDcQty}</div></div>
+          <div class="card"><div class="label">GRN Qty</div><div class="value">${sumGrnQty}</div></div>
+          <div class="card warn"><div class="label">RTV Qty</div><div class="value">${sumRtvQty}</div></div>
+        </div>
+        <div class="breakdown">
+          <span>MNF: <strong>${sumMnf}</strong></span>
+          <span>Wrong: <strong>${sumWrong}</strong></span>
+          <span>Damage: <strong>${sumDmg}</strong></span>
+          <span>Short: <strong>${sumShort}</strong></span>
+          <span>Excess: <strong>${sumExcess}</strong></span>
+        </div>
+        <table><thead><tr><th>Product</th><th>PO Qty</th><th>DC Qty</th><th>Perfect (OK)</th><th>MNF</th><th>Wrong</th><th>Damage</th><th>Short</th><th>Excess</th><th>Photo</th><th>Comment</th></tr></thead><tbody>${rowsHtml}</tbody></table>
         <div class="sign"><div>RTV Officer</div><div>Supplier Representative</div><div>Warehouse Lead</div></div>
       </body></html>`);
       w.document.close(); w.print();
     } catch (e) { showToast("Print fail: " + e.message, "err"); }
     setPrinting(false);
+  };
+
+  const exportRtvExcel = async () => {
+    setExportingExcel(true);
+    try {
+      const siblingDcs = await sb(`/rest/v1/stk_dc_arrivals?po_id=eq.${activeDc.po_id}&select=id`, { token });
+      const dcIds = (siblingDcs || []).map(d => d.id);
+      const allLines = dcIds.length ? await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${dcIds.join(",")})&select=product_barcode,product_name,demand_qty`, { token }) : [];
+      const poQtyByProduct = {};
+      for (const l of allLines || []) {
+        const key = l.product_barcode || l.product_name;
+        poQtyByProduct[key] = (poQtyByProduct[key] || 0) + Number(l.demand_qty || 0);
+      }
+      let sumPoQty = 0, sumDcQty = 0, sumGrnQty = 0, sumMnf = 0, sumWrong = 0, sumDmg = 0, sumShort = 0, sumExcess = 0;
+      const detailRows = activeRows.map(r => {
+        const key = r.product_barcode || r.product_name;
+        const poQty = poQtyByProduct[key] ?? 0;
+        sumPoQty += poQty; sumDcQty += Number(r.demand_qty || 0); sumGrnQty += Number(r.ok_qty || 0);
+        sumMnf += Number(r.mnf_qty || 0); sumWrong += Number(r.wrong_qty || 0); sumDmg += Number(r.dmg_qty || 0); sumShort += Number(r.short_qty || 0); sumExcess += Number(r.excess_qty || 0);
+        return { "Product": r.product_name, "Barcode": r.product_barcode || "", "PO Qty": poQty, "DC Qty": r.demand_qty ?? 0, "GRN (OK) Qty": r.ok_qty ?? 0, "MNF": r.mnf_qty, "Wrong": r.wrong_qty, "Damage": r.dmg_qty, "Short": r.short_qty, "Excess": r.excess_qty, "Comment": r.comment || "", "Has Photo": r.photo_data_url ? "Yes" : "No" };
+      });
+      const summaryRows = [
+        { "Metric": "Supplier", "Value": activeRows[0]?.supplier || "—" },
+        { "Metric": "PO#", "Value": activePo?.po_number || "—" },
+        { "Metric": "DC#", "Value": activeDc?.dc_number || "—" },
+        { "Metric": "PO Qty", "Value": sumPoQty },
+        { "Metric": "DC Qty", "Value": sumDcQty },
+        { "Metric": "GRN Qty", "Value": sumGrnQty },
+        { "Metric": "RTV Qty (total)", "Value": sumMnf + sumWrong + sumDmg + sumShort + sumExcess },
+        { "Metric": "— MNF", "Value": sumMnf },
+        { "Metric": "— Wrong", "Value": sumWrong },
+        { "Metric": "— Damage", "Value": sumDmg },
+        { "Metric": "— Short", "Value": sumShort },
+        { "Metric": "— Excess", "Value": sumExcess }
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Summary");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows), "Detail");
+      XLSX.writeFile(wb, `RTV_${activePo?.po_number || "PO"}_${activeDc?.dc_number || "DC"}.xlsx`);
+      showToast("✓ Excel export ho gaya (photos sirf PDF/Print export mein milti hain)");
+    } catch (e) { showToast("Excel export fail: " + e.message, "err"); }
+    setExportingExcel(false);
   };
 
   if (loading) return <EmptyNote text="Loading..." />;
@@ -9933,6 +10045,7 @@ function StockingRtvView({ token, profile, showToast }) {
       {!activeDcId && (
         <div style={S.panel}>
           <div style={S.panelTitle}>RTV by DC</div>
+          <input style={{ ...S.input, maxWidth: 320, marginBottom: 14 }} placeholder="🔍 Search supplier, PO#, DC#…" value={rtvSearch} onChange={e => setRtvSearch(e.target.value)} />
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>PO#</th><th style={S.th}>DC#</th><th style={S.th}>Items</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
             <tbody>
@@ -9991,7 +10104,8 @@ function StockingRtvView({ token, profile, showToast }) {
           )}
           {activeStage === "verified" && canHandle && (
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button style={S.secondaryBtnSm} onClick={printHandoverDoc} disabled={printing}>{printing ? "Printing…" : "🖨 Print Handover Document"}</button>
+              <button style={S.secondaryBtnSm} onClick={printHandoverDoc} disabled={printing}>{printing ? "Printing…" : "🖨 Export PDF (with Photos)"}</button>
+              <button style={S.secondaryBtnSm} onClick={exportRtvExcel} disabled={exportingExcel}>{exportingExcel ? "Exporting…" : "📊 Export Excel"}</button>
               <button style={S.primaryBtnSm} onClick={markHandedOver} disabled={handingOver}>{handingOver ? "Update ho raha…" : "✓ Mark Handed Over (Sign-off Ho Gaya)"}</button>
             </div>
           )}
