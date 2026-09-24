@@ -6626,7 +6626,11 @@ function UsersView({ token, profile, showToast }) {
             newUserId = loginData.user?.id;
             if (!newUserId) throw signupErr;
           } catch (loginErr) {
-            throw new Error("Yeh email pehle se registered hai aur diya gaya password match nahi ho raha — is email ka pehle se koi alag account hai. Alag email try karein ya sahi password confirm karein.");
+            const lm = (loginErr.message || "").toLowerCase();
+            if (lm.includes("email not confirmed") || lm.includes("confirm")) {
+              throw new Error(`Auth account ban chuka hai lekin email confirmation pending hai (Supabase project mein "Confirm email" setting on hai). Supabase Dashboard → Authentication → Users mein is email ko dhoond kar manually "Confirm" karein, phir yahan dobara try karein. (${loginErr.message})`);
+            }
+            throw new Error(`Yeh email pehle se registered hai lekin diya gaya password se login nahi ho raha — asal wajah: "${loginErr.message}". Alag email try karein ya sahi password confirm karein.`);
           }
         } else {
           throw signupErr;
