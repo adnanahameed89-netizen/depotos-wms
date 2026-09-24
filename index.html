@@ -555,6 +555,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     inbound_executive: ["stkdashboard", "stkcatalogue", "stkreceiving", "stkrtv", "stkinventory", "stkreports"],
     outbound_executive: ["stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports"],
     physical_receiver: ["stkdashboard", "stkreceiving"],
+    inspection_officer: ["stkdashboard", "stkreceiving"],
     putaway_officer: ["stkdashboard", "stkoutbound", "stkrepair"],
     picker: ["stkdashboard", "stkpicking"],
     packer: ["stkdashboard", "stkpacking"],
@@ -6692,7 +6693,7 @@ function UsersView({ token, profile, showToast }) {
     } catch (e) { showToast("Delete failed", "err"); }
   };
 
-  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", inbound_executive: "Inbound Executive", outbound_executive: "Outbound Executive", physical_receiver: "Physical Receiver", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent", compliance_officer: "Compliance Officer" };
+  const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", inbound_executive: "Inbound Executive", inspection_officer: "Inspection Officer", outbound_executive: "Outbound Executive", physical_receiver: "Physical Receiver", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent", compliance_officer: "Compliance Officer" };
 
   return (
     <div>
@@ -6708,6 +6709,7 @@ function UsersView({ token, profile, showToast }) {
             <option value="packer">Packer</option>
             <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
             <option value="inbound_executive">Inbound Executive (Receiving/RTV — Full Access)</option>
+            <option value="inspection_officer">Inspection Officer (Article Inspection)</option>
             <option value="outbound_executive">Outbound Executive (Allocation/RTD — Full Access)</option>
             <option value="physical_receiver">Physical Receiver (Arrival Only)</option>
             <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
@@ -6749,6 +6751,7 @@ function UsersView({ token, profile, showToast }) {
                 <option value="packer">Packer</option>
                 <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
                 <option value="inbound_executive">Inbound Executive (Receiving/RTV — Full Access)</option>
+                <option value="inspection_officer">Inspection Officer (Article Inspection)</option>
                 <option value="outbound_executive">Outbound Executive (Allocation/RTD — Full Access)</option>
                 <option value="physical_receiver">Physical Receiver (Arrival Only)</option>
                 <option value="logistics_officer">Logistics Officer (Vehicle/Gatepass)</option>
