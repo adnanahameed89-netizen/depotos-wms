@@ -353,7 +353,7 @@ function App() {
           {view === "stkbins" && profile.role === "admin" && <BinsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "totemaster" && profile.role === "admin" && <ToteMasterView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "damage" && ["admin", "warehouse_lead"].includes(profile.role) && <DamageView token={session.token} profile={effectiveProfile} showToast={showToast} />}
-          {view === "complaints" && ["admin", "warehouse_lead", "compliance_officer"].includes(profile.role) && <ComplaintsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "complaints" && ["admin", "warehouse_lead", "compliance_officer", "dispatcher"].includes(profile.role) && <ComplaintsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "kpi" && <KPIView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreceiving" && <StockingReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkcatalogue" && <StockingCatalogueView token={session.token} profile={effectiveProfile} showToast={showToast} />}
@@ -566,6 +566,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : profile.role === "warehouse_lead" ? [items[0], ...(ecomExtras ? [{ id: "dashboardv2", label: "Dashboard V2", icon: "📈" }] : []), ...items.slice(1), ...(ecomExtras ? [{ id: "returns", label: "Returns", icon: "↩" }, { id: "damage", label: "Damage", icon: "💔" }, { id: "complaints", label: "Complaints", icon: "🗣" }, { id: "reports", label: "Reports", icon: "📊" }] : [{ id: "stkbins", label: "Bin Master", icon: "🗺" }]), { id: "users", label: "Users", icon: "👥" }]
     : ecomExtras && ["supervisor", "returns_agent"].includes(profile.role) ? [...items, { id: "returns", label: "Returns", icon: "↩" }, { id: "reports", label: "Reports", icon: "📊" }]
     : ecomExtras && profile.role === "putaway_officer" ? [...items, { id: "returns", label: "Returns", icon: "↩" }]
+    : ecomExtras && profile.role === "dispatcher" ? [...items, { id: "complaints", label: "Complaints", icon: "🗣" }]
     : ecomExtras && profile.role === "compliance_officer" ? [{ id: "dashboard", label: "Dashboard", icon: "🗂" }, { id: "complaints", label: "Complaints", icon: "🗣" }]
     : !ecomExtras && STOCKING_ROLE_TABS[profile.role] ? STOCKING_ITEMS.filter(it => STOCKING_ROLE_TABS[profile.role].includes(it.id))
     : items;
@@ -8182,7 +8183,7 @@ function ToteMasterView({ token, profile, showToast }) {
 // Inventory is only deducted at the "Mark Dispatch" step (not at creation), same principle used
 // elsewhere in the app: nothing leaves stock until it's actually confirmed gone.
 function ComplaintsView({ token, profile, showToast }) {
-  const canManage = ["admin", "warehouse_lead", "compliance_officer"].includes(profile.role);
+  const canManage = ["admin", "warehouse_lead", "compliance_officer", "dispatcher"].includes(profile.role);
   const [complaints, setComplaints] = useState([]);
   const [bins, setBins] = useState([]);
   const [staff, setStaff] = useState([]);
