@@ -5404,7 +5404,7 @@ function PickingView({ token, profile, showToast }) {
       showToast(`⚠ ${qty} pcs damaged mark ho gaye — Bin ${bins[group.bin_id]?.code || "?"}`);
       setShowDamageInput(false); setDamageQtyInput("");
       await reportNotFound(group);
-    } catch (e) { showToast("Damage marking failed", "err"); }
+    } catch (e) { showToast(`Damage marking failed: ${(e.message || "").slice(0, 150)}`, "err"); }
   };
 
   const reportNotFound = async (group) => {
@@ -5833,6 +5833,7 @@ function PackingView({ token, profile, showToast }) {
   const [showDamageInput, setShowDamageInput] = useState(false);
   const [damageQty, setDamageQty] = useState("");
   const [damageBinId, setDamageBinId] = useState("");
+  const [replacementOffer, setReplacementOffer] = useState(null); // { productId, product, qty, binId, binCode, orderId, restoredQty }
   const [staff, setStaff] = useState([]);
   const [viewOnly, setViewOnly] = useState(false);
   const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
@@ -5961,9 +5962,35 @@ function PackingView({ token, profile, showToast }) {
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openTask.order_id, user_id: profile.id, action: "damage_marked_packing", metadata: { product_id: lastScannedProduct.id, qty, bin_id: damageBinId } } });
       const newRequired = Math.max(scans[lastScannedProduct.id] || 0, line.qty - qty);
       setRequiredLines(prev => prev.map(l => l.product_id === lastScannedProduct.id ? { ...l, qty: newRequired } : l));
-      showToast(`⚠ ${qty} pcs damaged mark ho gaye — order ki required qty adjust ho gayi`);
       setShowDamageInput(false); setDamageQty(""); setDamageBinId("");
-    } catch (e) { showToast("Damage marking failed", "err"); }
+
+      // Damage-marking above already shrinks this order's requirement so it can still ship —
+      // but check if a replacement unit exists anywhere else in the warehouse first, so the
+      // packer can bring that instead and ship the order COMPLETE rather than short.
+      const replRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${lastScannedProduct.id}&on_hand=gt.0&select=*&order=on_hand.desc&limit=1`, { token });
+      const replRow = replRows && replRows[0] && replRows[0].bin_id !== damageBinId ? replRows[0] : null;
+      if (replRow) {
+        const replBinRows = await sb(`/rest/v1/bins?id=eq.${replRow.bin_id}&select=code`, { token });
+        setReplacementOffer({ productId: lastScannedProduct.id, product: lastScannedProduct, qty, binId: replRow.bin_id, binCode: replBinRows?.[0]?.code || "?", orderId: openTask.order_id, restoredQty: line.qty });
+        showToast(`⚠ ${qty} pcs damaged — replacement Bin ${replBinRows?.[0]?.code || "?"} mein available hai`);
+      } else {
+        showToast(`⚠ ${qty} pcs damaged mark ho gaye — order ki required qty adjust ho gayi (koi replacement stock available nahi)`);
+      }
+    } catch (e) { showToast(`Damage marking failed: ${(e.message || "").slice(0, 150)}`, "err"); }
+  };
+
+  const confirmReplacement = async () => {
+    if (!replacementOffer) return;
+    try {
+      await addOnHand(token, profile.warehouse_id, replacementOffer.productId, replacementOffer.binId, -replacementOffer.qty, { type: "damage_replacement", userId: profile.id });
+      await adjustReserved(token, profile.warehouse_id, replacementOffer.productId, replacementOffer.qty);
+      setRequiredLines(prev => prev.map(l => l.product_id === replacementOffer.productId ? { ...l, qty: replacementOffer.restoredQty } : l));
+      const shortRows = await sb(`/rest/v1/order_shortage_lines?order_id=eq.${replacementOffer.orderId}&product_id=eq.${replacementOffer.productId}&select=id`, { token });
+      for (const s of shortRows || []) await sb(`/rest/v1/order_shortage_lines?id=eq.${s.id}`, { method: "DELETE", token });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: replacementOffer.orderId, user_id: profile.id, action: "damage_replacement_used", metadata: { product_id: replacementOffer.productId, qty: replacementOffer.qty, bin_id: replacementOffer.binId } } });
+      showToast(`✓ Replacement le liya (Bin ${replacementOffer.binCode}) — order ab poora ship hoga`);
+      setReplacementOffer(null);
+    } catch (e) { showToast(`Replacement fail: ${(e.message || "").slice(0, 150)}`, "err"); }
   };
 
   const packBarcodeInputRef = useRef(null);
@@ -6060,6 +6087,16 @@ function PackingView({ token, profile, showToast }) {
                   {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
                 </select>
                 <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={markPackDamaged}>Confirm Damage</button>
+              </div>
+            )}
+            {replacementOffer && (
+              <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginTop: 12 }}>
+                <div style={{ fontWeight: 700, color: "#2B2620", marginBottom: 4 }}>♻ Replacement Available</div>
+                <div style={{ color: "#6B6355", fontSize: 12, marginBottom: 10 }}>{replacementOffer.product?.name} — Bin <strong>{replacementOffer.binCode}</strong> mein {replacementOffer.qty} unit available hai. Warehouse floor se le aayen taake yeh order poora (bina shortage) ship ho sake.</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button style={S.primaryBtnSm} onClick={confirmReplacement}>✓ Replacement Le Liya</button>
+                  <button style={S.secondaryBtnSm} onClick={() => setReplacementOffer(null)}>Skip — Shortage Rehne Dein</button>
+                </div>
               </div>
             )}
           </div>
