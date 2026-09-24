@@ -8093,6 +8093,7 @@ function BinsView({ token, profile, showToast }) {
 function ToteMasterView({ token, profile, showToast }) {
   const [totes, setTotes] = useState([]);
   const [profiles, setProfiles] = useState({});
+  const [pickers, setPickers] = useState([]);
   const [newCode, setNewCode] = useState("");
 
   const load = useCallback(async () => {
@@ -8102,6 +8103,7 @@ function ToteMasterView({ token, profile, showToast }) {
     ]);
     setTotes(tt || []);
     setProfiles(Object.fromEntries((pf || []).map(p => [p.id, p])));
+    setPickers((pf || []).filter(p => ["picker", "packer"].includes(p.role) && p.warehouse_id === profile.warehouse_id));
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
 
@@ -8115,6 +8117,30 @@ function ToteMasterView({ token, profile, showToast }) {
 
   const [releaseReasonId, setReleaseReasonId] = useState(null);
   const [releaseReason, setReleaseReason] = useState("");
+  const [reassignForm, setReassignForm] = useState({}); // { [toteId]: { packerId, status } }
+
+  // Actually hands the tote to a DIFFERENT packer/picker without touching its current status —
+  // this is the fix for the old "Reassign / Release" button, which force-reset status to "open"
+  // no matter what, silently dropping an already-picked tote out of Packing's "picked" list with
+  // no way to get it back to a packer. Also usable as a manual recovery tool: if a tote is stuck
+  // "open" after that old bug, pick the packer AND the correct status (usually "picked") here.
+  const reassignTote = async (tote) => {
+    const f = reassignForm[tote.id] || {};
+    if (!f.packerId) { showToast("Packer/Picker select karein", "err"); return; }
+    try {
+      const prevPacker = tote.assigned_to ? profiles[tote.assigned_to]?.full_name : "—";
+      const newStatus = f.status || tote.status;
+      await sb(`/rest/v1/totes?id=eq.${tote.id}`, {
+        method: "PATCH", token,
+        body: { assigned_to: f.packerId, status: newStatus, last_reassign_reason: f.reason || "Reassigned via Tote Master", last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() }
+      });
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, field_changed: "assigned_to", old_value: prevPacker, new_value: profiles[f.packerId]?.full_name || f.packerId, reason: f.reason || "Reassigned via Tote Master", changed_by: profile.id } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "reassigned", metadata: { previous: prevPacker, new: profiles[f.packerId]?.full_name, status: newStatus } } });
+      showToast(`✓ ${tote.tote_number} — ${profiles[f.packerId]?.full_name} ko reassign ho gaya (status: ${newStatus})`);
+      setReassignForm(rf => ({ ...rf, [tote.id]: {} }));
+      load();
+    } catch (e) { showToast("Reassign failed: " + e.message, "err"); }
+  };
 
   const forceRelease = async (tote) => {
     if (!releaseReason.trim()) { showToast("Reason likhna zaroori hai", "err"); return; }
@@ -8154,17 +8180,32 @@ function ToteMasterView({ token, profile, showToast }) {
             {t.last_reassign_reason && (
               <div style={{ color: "#8A8272", fontSize: 10, marginTop: 6 }}>Last reassign: "{t.last_reassign_reason}" — {profiles[t.last_reassigned_by]?.full_name || "—"}, {fmtTime(t.last_reassigned_at)}</div>
             )}
+
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #EFE8D8" }}>
+              <div style={{ fontSize: 10, color: "#8A8272", marginBottom: 4, fontFamily: "'IBM Plex Mono', monospace" }}>REASSIGN TO PACKER/PICKER</div>
+              <select style={{ ...S.input, fontSize: 12, marginBottom: 6, width: "100%" }} value={reassignForm[t.id]?.packerId || ""} onChange={e => setReassignForm(rf => ({ ...rf, [t.id]: { ...rf[t.id], packerId: e.target.value } }))}>
+                <option value="">Select packer/picker…</option>
+                {pickers.map(p => <option key={p.id} value={p.id}>{p.full_name} ({p.role})</option>)}
+              </select>
+              <select style={{ ...S.input, fontSize: 12, marginBottom: 6, width: "100%" }} value={reassignForm[t.id]?.status || t.status} onChange={e => setReassignForm(rf => ({ ...rf, [t.id]: { ...rf[t.id], status: e.target.value } }))}>
+                <option value="open">Status: Open</option>
+                <option value="assigned">Status: Assigned (picking in progress)</option>
+                <option value="picked">Status: Picked (ready for packing)</option>
+              </select>
+              <button style={{ ...S.secondaryBtnSm, width: "100%", justifyContent: "center", color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => reassignTote(t)}>↻ Reassign (keeps its progress)</button>
+            </div>
+
             {t.status !== "open" && (
               releaseReasonId === t.id ? (
                 <div style={{ marginTop: 10 }}>
-                  <input style={{ ...S.input, fontSize: 12 }} placeholder="Reason for reassign/release" value={releaseReason} onChange={e => setReleaseReason(e.target.value)} />
+                  <input style={{ ...S.input, fontSize: 12 }} placeholder="Reason for release" value={releaseReason} onChange={e => setReleaseReason(e.target.value)} />
                   <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                    <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center", color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => forceRelease(t)}>Confirm</button>
+                    <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => forceRelease(t)}>Confirm</button>
                     <button style={{ ...S.secondaryBtnSm, flex: 1, justifyContent: "center" }} onClick={() => { setReleaseReasonId(null); setReleaseReason(""); }}>Cancel</button>
                   </div>
                 </div>
               ) : (
-                <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center" }} onClick={() => setReleaseReasonId(t.id)}>🔓 Reassign / Release</button>
+                <button style={{ ...S.secondaryBtnSm, marginTop: 10, width: "100%", justifyContent: "center", color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setReleaseReasonId(t.id)}>🔓 Release (abandon — resets to Open)</button>
               )
             )}
           </div>
@@ -9450,6 +9491,7 @@ function StockingReceivingView({ token, profile, showToast }) {
 
   const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
   const [dcLineTotals, setDcLineTotals] = useState({}); // { [dc_id]: { grnQty, rtvQty } }
+  const [activePoDetail, setActivePoDetail] = useState(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -9460,8 +9502,8 @@ function StockingReceivingView({ token, profile, showToast }) {
       ]);
       setPos(poRows || []); setDcs(dcRows || []);
 
-      // GRN Qty / RTV Qty per DC for the Arrival table — chunked so a warehouse with many
-      // DCs never builds an in.(...) filter long enough to fail outright.
+      // GRN Qty / RTV Qty / true inspected DC Qty per DC for the Arrival table — chunked so a
+      // warehouse with many DCs never builds an in.(...) filter long enough to fail outright.
       const dcIds = (dcRows || []).map(d => d.id);
       const totals = {};
       const CHUNK = 100;
@@ -9469,9 +9511,15 @@ function StockingReceivingView({ token, profile, showToast }) {
         const chunk = dcIds.slice(i, i + CHUNK);
         const lineRows = await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${chunk.join(",")})&select=dc_id,ok_qty,dmg_qty,mnf_qty,wrong_qty,excess_qty,short_qty`, { token });
         for (const l of lineRows || []) {
-          if (!totals[l.dc_id]) totals[l.dc_id] = { grnQty: 0, rtvQty: 0 };
+          if (!totals[l.dc_id]) totals[l.dc_id] = { grnQty: 0, rtvQty: 0, trueDcQty: 0, hasInspection: false };
           totals[l.dc_id].grnQty += Number(l.ok_qty || 0);
           totals[l.dc_id].rtvQty += Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.excess_qty || 0) + Number(l.short_qty || 0);
+          // The paper DC is a manual document — the real, reconciled DC Qty is whatever
+          // Inspection actually counted: Perfect + DMG + MNF + Wrong + Short + Excess, summed
+          // at item level. Short/Excess already balance any gap or overage vs. what the paper
+          // (or Odoo's imported "Quantity") claimed, so this total is the trustworthy figure.
+          totals[l.dc_id].trueDcQty += Number(l.ok_qty || 0) + Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.short_qty || 0) + Number(l.excess_qty || 0);
+          if (l.ok_qty !== null && l.ok_qty !== undefined) totals[l.dc_id].hasInspection = true;
         }
       }
       setDcLineTotals(totals);
@@ -9503,17 +9551,23 @@ function StockingReceivingView({ token, profile, showToast }) {
     setLoading(true);
     try {
       const rows = await parseSheet(file);
-      const grouped = {}; let odooRef = ""; let supplierFromFile = "";
+      const grouped = {}; let odooRef = ""; let supplierFromFile = ""; let poTotalDemand = 0;
       for (const r of rows) {
         const productRaw = r["Stock move/Product"] || r["Product"] || "";
         if (!productRaw) continue;
         odooRef = odooRef || r["Reference"] || "";
         supplierFromFile = supplierFromFile || r["Contact"] || "";
         const barcode = String(r["Stock move/Product/Internal Barcode"] ?? "").trim();
-        const qty = Number(r["Stock move/Quantity"] ?? r["Quantity"] ?? 0) || 0;
+        // Same Odoo file carries BOTH figures: "Demand" is the full PO's ordered qty for this
+        // line (same across every DC/transfer for this PO), "Quantity" is what's actually in
+        // THIS specific DC. Using Quantity for both (as before) was the bug — Demand is what
+        // sets the true PO Qty, Quantity is what sets this DC's own line qty.
+        const dcQty = Number(r["Stock move/Quantity"] ?? r["Quantity"] ?? 0) || 0;
+        const demandQty = Number(r["Stock move/Demand"] ?? r["Demand"] ?? dcQty) || 0;
+        poTotalDemand += demandQty;
         const key = barcode || String(productRaw);
         if (!grouped[key]) grouped[key] = { product_barcode: barcode || null, product_name: String(productRaw), demand_qty: 0 };
-        grouped[key].demand_qty += qty;
+        grouped[key].demand_qty += dcQty;
       }
       const lines = Object.values(grouped);
       if (!lines.length) { showToast("File mai koi valid line nahi mili", "err"); setLoading(false); return; }
@@ -9528,18 +9582,20 @@ function StockingReceivingView({ token, profile, showToast }) {
         try { await sb(`/rest/v1/stk_products?on_conflict=internal_barcode`, { method: "POST", token, prefer: "resolution=ignore-duplicates,return=minimal", body: catalogueSeed }); } catch (e) { /* catalogue seed is best-effort */ }
       }
       await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "ready_for_inspection", odoo_reference: odooRef || null } });
-      // PO Qty auto-calculates as the running sum of every imported DC's demand — this is what
-      // lets the Arrival table flag "DC qty < PO qty" (a partial delivery) at a glance.
-      const importedTotal = lines.reduce((s, l) => s + l.demand_qty, 0);
-      const currentPo = pos.find(p => p.id === dc.po_id);
-      const newPoQty = (currentPo?.po_qty || 0) + importedTotal;
-      const poPatch = { po_qty: newPoQty, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) };
+      // PO Qty = this file's "Demand" total — same Odoo file used for every DC on this PO
+      // already carries the full PO's Demand, so this is set (overwritten) directly, not
+      // accumulated across DC imports. No separate template upload needed.
+      const poPatch = { po_qty: poTotalDemand, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) };
       await sb(`/rest/v1/stk_purchase_orders?id=eq.${dc.po_id}`, { method: "PATCH", token, body: poPatch });
       setPos(ps => ps.map(p => p.id === dc.po_id ? { ...p, ...poPatch } : p));
-      showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai`);
+      showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai (PO Qty: ${poTotalDemand})`);
       loadAll();
     } catch (e) { showToast("Import fail: " + e.message, "err"); }
     setLoading(false);
+  };
+
+  const openPoDetail = async (po) => {
+    setActivePoDetail({ po, dcRows: dcs.filter(d => d.po_id === po.id) });
   };
 
   const openDcForInspection = async (dc) => {
@@ -9654,10 +9710,10 @@ function StockingReceivingView({ token, profile, showToast }) {
     <div>
       <SectionTitle title="Stocking Warehouse — Receiving" />
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        {TABS.map(t => <button key={t.key} onClick={() => { setTab(t.key); setActiveDc(null); setGrnDc(null); }} style={stkPill(tab === t.key)}>{t.label}</button>)}
+        {TABS.map(t => <button key={t.key} onClick={() => { setTab(t.key); setActiveDc(null); setGrnDc(null); setActivePoDetail(null); }} style={stkPill(tab === t.key)}>{t.label}</button>)}
       </div>
 
-      {tab === "arrival" && (
+      {tab === "arrival" && !activePoDetail && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Physical Arrival — PO + DC Flag</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -9669,21 +9725,28 @@ function StockingReceivingView({ token, profile, showToast }) {
           </div>
           {poByPo(poNumber) && <div style={{ marginTop: 8, fontSize: 12, color: "#8A8272" }}>PO {poNumber} pehle se maujood hai — DC add karne se attach ho jayegi. Supplier/Source Odoo import se automatically aa jayega.</div>}
           <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>RECENT ARRIVALS</div>
+            <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 8, fontFamily: "'IBM Plex Mono', monospace" }}>RECENT ARRIVALS — PO# pe click kar k poori DC/GRN trail dekhein</div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th style={S.th}>PO#</th><th style={S.th}>Supplier</th><th style={S.th}>DC#</th><th style={S.th}>PO Qty</th><th style={S.th}>DC Qty</th><th style={S.th}>GRN Qty</th><th style={S.th}>RTV Qty</th><th style={S.th}>Status</th></tr></thead>
               <tbody>
                 {dcs.slice(0, 10).map(d => {
                   const po = pos.find(p => p.id === d.po_id);
-                  const totals = dcLineTotals[d.id] || { grnQty: 0, rtvQty: 0 };
-                  const shortVsPO = po && Number(d.dc_qty_total) < Number(po.po_qty || 0);
+                  const totals = dcLineTotals[d.id] || { grnQty: 0, rtvQty: 0, trueDcQty: 0, hasInspection: false };
+                  // Once Inspection has actually counted this DC, that reconciled total (Perfect
+                  // + DMG + MNF + Wrong + Short + Excess) IS the real DC Qty — the manually
+                  // typed figure at Arrival was only ever a rough paper-based estimate.
+                  const displayDcQty = totals.hasInspection ? totals.trueDcQty : d.dc_qty_total;
+                  const shortVsPO = po && Number(displayDcQty) < Number(po.po_qty || 0);
                   return (
                     <tr key={d.id}>
-                      <td style={S.td}>{po?.po_number}</td>
+                      <td style={S.td}>{po ? <button style={{ background: "none", border: "none", color: "#F5A623", textDecoration: "underline", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace", padding: 0 }} onClick={() => openPoDetail(po)}>{po.po_number}</button> : "—"}</td>
                       <td style={S.td}>{po?.supplier || "— pending import"}</td>
                       <td style={S.td}>{d.dc_number}</td>
                       <td style={S.td}>{po?.po_qty || 0}</td>
-                      <td style={{ ...S.td, color: shortVsPO ? "#E5484D" : "#2B2620", fontWeight: shortVsPO ? 600 : 400 }}>{d.dc_qty_total}{shortVsPO && " ⚠"}</td>
+                      <td style={{ ...S.td, color: shortVsPO ? "#E5484D" : "#2B2620", fontWeight: shortVsPO ? 600 : 400 }}>
+                        {displayDcQty}{shortVsPO && " ⚠"}
+                        {!totals.hasInspection && <span style={{ color: "#8A8272", fontSize: 10, marginLeft: 4 }}>(paper est.)</span>}
+                      </td>
                       <td style={S.td}>{totals.grnQty}</td>
                       <td style={{ ...S.td, color: totals.rtvQty > 0 ? "#E5484D" : "#2B2620" }}>{totals.rtvQty}</td>
                       <td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td>
@@ -9694,6 +9757,47 @@ function StockingReceivingView({ token, profile, showToast }) {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {tab === "arrival" && activePoDetail && (
+        <div style={S.panel}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={S.panelTitle}>PO {activePoDetail.po.po_number} — Complete Trail</div>
+            <button style={S.secondaryBtnSm} onClick={() => setActivePoDetail(null)}>← Back to Arrivals</button>
+          </div>
+          <div style={S.statGrid}>
+            {[["PO Qty (Total)", activePoDetail.po.po_qty || 0],
+              ["DCs Received", activePoDetail.dcRows.length],
+              ["Total DC Qty", activePoDetail.dcRows.reduce((s, d) => { const t = dcLineTotals[d.id]; return s + Number(t?.hasInspection ? t.trueDcQty : d.dc_qty_total || 0); }, 0)],
+              ["Status", activePoDetail.po.status === "completed" ? "Completed" : activePoDetail.po.status === "partial" ? "Partial" : "Open"]
+            ].map(([label, val]) => (
+              <div key={label} style={S.statCard}>
+                <div style={{ fontSize: 10, color: "#8A8272", letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{val}</div>
+              </div>
+            ))}
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr><th style={S.th}>DC#</th><th style={S.th}>DC Qty</th><th style={S.th}>GRN#</th><th style={S.th}>GRN Qty</th><th style={S.th}>RTV Qty</th><th style={S.th}>Status</th><th style={S.th}>Received At</th></tr></thead>
+            <tbody>
+              {activePoDetail.dcRows.map(d => {
+                const totals = dcLineTotals[d.id] || { grnQty: 0, rtvQty: 0, trueDcQty: 0, hasInspection: false };
+                return (
+                  <tr key={d.id}>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace" }}>{d.dc_number}</td>
+                    <td style={S.td}>{totals.hasInspection ? totals.trueDcQty : d.dc_qty_total}</td>
+                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{d.grn_number || "—"}</td>
+                    <td style={S.td}>{totals.grnQty}</td>
+                    <td style={{ ...S.td, color: totals.rtvQty > 0 ? "#E5484D" : "#2B2620" }}>{totals.rtvQty}</td>
+                    <td style={S.td}>{STK_DC_STATUS_LABEL[d.status]}</td>
+                    <td style={{ ...S.td, fontSize: 11 }}>{fmtTime(d.received_at)}</td>
+                  </tr>
+                );
+              })}
+              {!activePoDetail.dcRows.length && <tr><td colSpan={7}><EmptyNote text="Is PO ki koi DC nahi mili" /></td></tr>}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -9751,7 +9855,7 @@ function StockingReceivingView({ token, profile, showToast }) {
           </div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={S.th}>Product</th><th style={S.th}>Demand</th><th style={S.th}>OK</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short (auto)</th><th style={S.th}>Photo</th><th style={S.th}>Comment</th>
+              <th style={S.th}>Product</th><th style={S.th}>Demand</th><th style={S.th}>Perfect (OK)</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Excess</th><th style={S.th}>Short (auto)</th><th style={S.th}>Photo</th><th style={S.th}>Comment</th>
             </tr></thead>
             <tbody>
               {activeLines.map(l => (
@@ -12228,7 +12332,11 @@ function StockingDashboardView({ token, profile }) {
     const dc = dcs.find(d => d.id === l.dc_id); if (!dc) continue;
     const po = pos.find(p => p.id === dc.po_id); if (!po) continue;
     const v = vendorStats[po.supplier] || (vendorStats[po.supplier] = { supplier: po.supplier, received: 0, dmg: 0, mnf: 0, wrong: 0, excess: 0, short: 0 });
-    v.received += Number(l.ok_qty || 0) + Number(l.dmg_qty || 0) + Number(l.mnf_qty || 0) + Number(l.wrong_qty || 0) + Number(l.excess_qty || 0);
+    // "Received Qty" = what was actually SUPPOSED to arrive for this line (the DC's demand
+    // qty from the Odoo import) — NOT ok+dmg+mnf+wrong+excess. Those, plus short, should sum
+    // back up to demand_qty at the item level; excess sits outside that (it's extra, not part
+    // of what was ordered), which is why it isn't counted in the RTV ratio's numerator either.
+    v.received += Number(l.demand_qty || 0);
     v.dmg += Number(l.dmg_qty || 0); v.mnf += Number(l.mnf_qty || 0); v.wrong += Number(l.wrong_qty || 0); v.excess += Number(l.excess_qty || 0); v.short += Number(l.short_qty || 0);
   }
   const vendorRows = Object.values(vendorStats).map(v => ({ ...v, exception: v.dmg + v.mnf + v.wrong + v.short, ratio: v.received > 0 ? ((v.dmg + v.mnf + v.wrong + v.short) / v.received) * 100 : 0 })).sort((a, b) => b.ratio - a.ratio);
@@ -12269,7 +12377,7 @@ function StockingDashboardView({ token, profile }) {
       <div style={S.panel}>
         <div style={S.panelTitle}>Vendor-wise RTV Ratio</div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Received Qty</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Short</th><th style={S.th}>RTV Ratio %</th></tr></thead>
+          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Total Qty (DC Demand)</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Short</th><th style={S.th}>RTV Ratio %</th></tr></thead>
           <tbody>
             {vendorRows.map(v => (
               <tr key={v.supplier}>
