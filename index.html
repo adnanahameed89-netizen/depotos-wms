@@ -740,8 +740,13 @@ function DashboardView({ token, profile, setView, showToast }) {
         const allOrderIds = (orders || []).map(o => o.id);
         let avgBucketAllTime = 0;
         if (allOrderIds.length) {
-          const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${allOrderIds.join(",")})&select=order_id,qty`, { token });
-          const totalQtyAll = (allLines || []).reduce((s, l) => s + l.qty, 0);
+          let totalQtyAll = 0;
+          const ABCHUNK = 150;
+          for (let i = 0; i < allOrderIds.length; i += ABCHUNK) {
+            const chunk = allOrderIds.slice(i, i + ABCHUNK);
+            const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${chunk.join(",")})&select=order_id,qty`, { token });
+            totalQtyAll += (allLines || []).reduce((s, l) => s + l.qty, 0);
+          }
           avgBucketAllTime = Math.round((totalQtyAll / allOrderIds.length) * 10) / 10;
         }
         setFulfillmentKpis({
@@ -803,7 +808,13 @@ function DashboardView({ token, profile, setView, showToast }) {
         const orders = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&received_at=gte.${fromISO}&received_at=lt.${toISO}&select=*`, { token });
         if (!orders || orders.length === 0) { setSnapshot({ count: 0, avgBucket: 0, avgSaleValue: 0, avgLead: null }); return; }
         const orderIds = orders.map(o => o.id);
-        const lines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${orderIds.join(",")})&select=*`, { token });
+        const lines = [];
+        const SNCHUNK = 150;
+        for (let i = 0; i < orderIds.length; i += SNCHUNK) {
+          const chunk = orderIds.slice(i, i + SNCHUNK);
+          const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${chunk.join(",")})&select=*`, { token });
+          lines.push(...(rows || []));
+        }
         const productIds = [...new Set((lines || []).map(l => l.product_id))];
         const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
         let totalQty = 0, totalValue = 0;
@@ -4280,16 +4291,27 @@ function OrdersView({ token, profile, showToast, setView }) {
       setReturnedOrderIds(new Set((returnsRows || []).map(r => r.order_id).filter(Boolean)));
       const ids = (o || []).map(x => x.id);
       if (ids.length) {
-        const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${ids.join(",")})&select=order_id,qty`, { token });
+        // Chunk order IDs before building an in.(...) filter — with a large bulk upload this
+        // list can run into the hundreds, and a single query string that long gets rejected
+        // outright, which was silently zeroing out every order's Items/Qty and firing
+        // "Load failed" on every visit to this tab.
+        const CHUNK = 150;
         const stats = {};
-        for (const l of allLines || []) {
-          if (!stats[l.order_id]) stats[l.order_id] = { count: 0, qty: 0 };
-          stats[l.order_id].count += 1; stats[l.order_id].qty += l.qty;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const chunkIds = ids.slice(i, i + CHUNK);
+          const allLines = await sb(`/rest/v1/sales_order_lines?order_id=in.(${chunkIds.join(",")})&select=order_id,qty`, { token });
+          for (const l of allLines || []) {
+            if (!stats[l.order_id]) stats[l.order_id] = { count: 0, qty: 0 };
+            stats[l.order_id].count += 1; stats[l.order_id].qty += l.qty;
+          }
         }
         setLineStats(stats);
-        const pt = await sb(`/rest/v1/pick_tasks?order_id=in.(${ids.join(",")})&select=order_id,assigned_to,tote_id`, { token }) || [];
         const pickInfo = {};
-        for (const t of pt) pickInfo[t.order_id] = { assignedTo: t.assigned_to, toteId: t.tote_id };
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const chunkIds = ids.slice(i, i + CHUNK);
+          const pt = await sb(`/rest/v1/pick_tasks?order_id=in.(${chunkIds.join(",")})&select=order_id,assigned_to,tote_id`, { token }) || [];
+          for (const t of pt) pickInfo[t.order_id] = { assignedTo: t.assigned_to, toteId: t.tote_id };
+        }
         setPickTaskInfo(pickInfo);
       }
     } catch (e) { showToast("Load failed", "err"); }
