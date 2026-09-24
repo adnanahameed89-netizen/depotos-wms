@@ -3676,18 +3676,19 @@ function InventoryView({ token, profile, showToast }) {
   const [transferring, setTransferring] = useState(false);
 
   const confirmTransferFromPna = async () => {
-    if (!transferDestBin) { showToast("Destination bin select karein", "err"); return; }
+    const destBin = Object.values(bins).find(b => (b.code || "").toLowerCase() === transferDestBin.trim().toLowerCase());
+    if (!destBin) { showToast("Sahi destination bin code likhein (jo list mein maujood ho)", "err"); return; }
     const qty = Number(transferQty);
     if (!qty || qty <= 0 || qty > transferRow.maxQty) { showToast(`Qty 1 se ${transferRow.maxQty} ke beech honi chahiye`, "err"); return; }
     setTransferring(true);
     try {
       await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferRow.pnaBinId, -qty, { type: "pna_transfer", userId: profile.id });
 
-      await addOnHand(token, profile.warehouse_id, transferRow.product_id, transferDestBin, qty, { type: "pna_transfer", userId: profile.id });
+      await addOnHand(token, profile.warehouse_id, transferRow.product_id, destBin.id, qty, { type: "pna_transfer", userId: profile.id });
 
       const p = products[transferRow.product_id];
-      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: transferRow.product_id, field_changed: `PNA-HOLD se mila (${p?.barcode || transferRow.product_id})`, old_value: `PNA-HOLD: ${qty}`, new_value: `${bins[transferDestBin]?.code || "—"}: +${qty}`, changed_by: profile.id } });
-      showToast(`✅ ${qty} pcs PNA-HOLD se ${bins[transferDestBin]?.code || "bin"} mein transfer ho gayi`);
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "inventory", entity_id: transferRow.product_id, field_changed: `PNA-HOLD se mila (${p?.barcode || transferRow.product_id})`, old_value: `PNA-HOLD: ${qty}`, new_value: `${destBin.code}: +${qty}`, changed_by: profile.id } });
+      showToast(`✅ ${qty} pcs PNA-HOLD se ${destBin.code} mein transfer ho gayi`);
       setTransferRow(null); setTransferDestBin(""); setTransferQty("");
       await loadAll();
     } catch (e) { showToast("Transfer failed — dobara try karein", "err"); }
@@ -3782,10 +3783,10 @@ function InventoryView({ token, profile, showToast }) {
           {transferRow && (
             <div style={{ background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 12, marginBottom: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span style={{ fontSize: 12, color: "#2B2620", fontWeight: 600 }}>PNA-HOLD se mila — kahan rakhein?</span>
-              <select style={{ ...S.input, minWidth: 180 }} value={transferDestBin} onChange={e => setTransferDestBin(e.target.value)}>
-                <option value="">Destination bin select karein…</option>
-                {Object.values(bins).filter(b => b.code !== "PNA-HOLD").sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-              </select>
+              <input list="pnaTransferBinDatalist" style={{ ...S.input, minWidth: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Destination bin code" value={transferDestBin} onChange={e => setTransferDestBin(e.target.value)} />
+              <datalist id="pnaTransferBinDatalist">
+                {Object.values(bins).filter(b => b.code !== "PNA-HOLD").sort((a, b) => (a.code || "").localeCompare(b.code || "")).map(b => <option key={b.id} value={b.code} />)}
+              </datalist>
               <input type="number" min={1} max={transferRow.maxQty} placeholder={`Qty (max ${transferRow.maxQty})`} style={{ ...S.input, width: 140 }} value={transferQty} onChange={e => setTransferQty(e.target.value)} />
               <button style={S.primaryBtnSm} disabled={transferring} onClick={confirmTransferFromPna}>{transferring ? "Transfer ho raha…" : "✓ Confirm Transfer"}</button>
               <button style={S.secondaryBtnSm} onClick={() => { setTransferRow(null); setTransferDestBin(""); setTransferQty(""); }}>Cancel</button>
@@ -4034,8 +4035,9 @@ function InventoryView({ token, profile, showToast }) {
 
                       <div style={S.panel}>
                         <div style={S.panelTitle}>Progress — {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined).length} / {countLines.length} counted</div>
+                        <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 10 }}>Agar koi item bin mein physically nahi mila (scan karne ko kuch nahi hai), to "0 / Not Found" dabayein — is se line "counted" ho jayegi (qty 0 k sath) aur submit ho sakega.</div>
                         <table>
-                          <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th></tr></thead>
+                          <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
                           <tbody>
                             {countLines.map(l => {
                               const p = products[l.product_id];
@@ -4045,10 +4047,11 @@ function InventoryView({ token, profile, showToast }) {
                                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{p?.barcode || "—"}</td>
                                   <td style={S.td}>{p?.name || "—"}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
                                   <td style={{ ...S.td, color: done ? "#4CAF7D" : "#8A8272" }}>{done ? `✓ Counted — ${l.counted_qty}` : "Pending"}</td>
+                                  <td style={S.td}>{!done && <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => saveCountedQty(l.id, 0)}>0 / Not Found</button>}</td>
                                 </tr>
                               );
                             })}
-                            {countLines.length === 0 && <tr><td colSpan={3}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
+                            {countLines.length === 0 && <tr><td colSpan={4}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
                           </tbody>
                         </table>
                         {countLines.length > 0 && countLines.every(l => l.counted_qty !== null && l.counted_qty !== undefined) ? (
@@ -5947,7 +5950,8 @@ function PackingView({ token, profile, showToast }) {
     if (!lastScannedProduct) { showToast("Pehle product scan karein jise damaged mark karna hai", "err"); return; }
     const qty = Number(damageQty);
     if (!qty || qty <= 0) { showToast("Valid quantity enter karein", "err"); return; }
-    if (!damageBinId) { showToast("Damage bin location select karein", "err"); return; }
+    const dmgBin = bins.find(b => (b.code || "").toLowerCase() === damageBinId.trim().toLowerCase());
+    if (!dmgBin) { showToast("Sahi damage bin code likhein (jo list mein maujood ho)", "err"); return; }
     const line = requiredLines.find(l => l.product_id === lastScannedProduct.id);
     if (!line) { showToast("Yeh product is order mein nahi hai", "err"); return; }
     try {
@@ -5956,10 +5960,10 @@ function PackingView({ token, profile, showToast }) {
       if (invRow) {
         await sb(`/rest/v1/inventory?id=eq.${invRow.id}`, { method: "PATCH", token, body: { on_hand: Math.max(0, invRow.on_hand - qty), last_activity_type: "damage", last_activity_by: profile.id, last_activity_at: new Date().toISOString() } });
       }
-      await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: lastScannedProduct.id, bin_id: damageBinId, qty, found_at_stage: "packing", reported_by: profile.id, order_id: openTask.order_id } });
+      await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: lastScannedProduct.id, bin_id: dmgBin.id, qty, found_at_stage: "packing", reported_by: profile.id, order_id: openTask.order_id } });
       await adjustReserved(token, profile.warehouse_id, lastScannedProduct.id, -qty);
       await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: openTask.order_id, product_id: lastScannedProduct.id, qty_required: line.qty, qty_available: Math.max(0, line.qty - qty), not_available_qty: qty } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openTask.order_id, user_id: profile.id, action: "damage_marked_packing", metadata: { product_id: lastScannedProduct.id, qty, bin_id: damageBinId } } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: openTask.order_id, user_id: profile.id, action: "damage_marked_packing", metadata: { product_id: lastScannedProduct.id, qty, bin_id: dmgBin.id } } });
       const newRequired = Math.max(scans[lastScannedProduct.id] || 0, line.qty - qty);
       setRequiredLines(prev => prev.map(l => l.product_id === lastScannedProduct.id ? { ...l, qty: newRequired } : l));
       setShowDamageInput(false); setDamageQty(""); setDamageBinId("");
@@ -5967,12 +5971,17 @@ function PackingView({ token, profile, showToast }) {
       // Damage-marking above already shrinks this order's requirement so it can still ship —
       // but check if a replacement unit exists anywhere else in the warehouse first, so the
       // packer can bring that instead and ship the order COMPLETE rather than short.
-      const replRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${lastScannedProduct.id}&on_hand=gt.0&select=*&order=on_hand.desc&limit=1`, { token });
-      const replRow = replRows && replRows[0] && replRows[0].bin_id !== damageBinId ? replRows[0] : null;
+      const replRows = await sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${lastScannedProduct.id}&bin_id=not.is.null&on_hand=gt.0&select=*&order=on_hand.desc&limit=1`, { token });
+      const replRow = replRows && replRows[0] && replRows[0].bin_id !== dmgBin.id ? replRows[0] : null;
       if (replRow) {
         const replBinRows = await sb(`/rest/v1/bins?id=eq.${replRow.bin_id}&select=code`, { token });
-        setReplacementOffer({ productId: lastScannedProduct.id, product: lastScannedProduct, qty, binId: replRow.bin_id, binCode: replBinRows?.[0]?.code || "?", orderId: openTask.order_id, restoredQty: line.qty });
-        showToast(`⚠ ${qty} pcs damaged — replacement Bin ${replBinRows?.[0]?.code || "?"} mein available hai`);
+        const replCode = replBinRows?.[0]?.code;
+        if (replCode) {
+          setReplacementOffer({ productId: lastScannedProduct.id, product: lastScannedProduct, qty, binId: replRow.bin_id, binCode: replCode, orderId: openTask.order_id, restoredQty: line.qty });
+          showToast(`⚠ ${qty} pcs damaged — replacement Bin ${replCode} mein available hai`);
+        } else {
+          showToast(`⚠ ${qty} pcs damaged mark ho gaye — order ki required qty adjust ho gayi (koi replacement stock available nahi)`);
+        }
       } else {
         showToast(`⚠ ${qty} pcs damaged mark ho gaye — order ki required qty adjust ho gayi (koi replacement stock available nahi)`);
       }
@@ -6082,10 +6091,10 @@ function PackingView({ token, profile, showToast }) {
             {showDamageInput && (
               <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
                 <input type="number" min={1} style={{ ...S.input, width: 100 }} placeholder="Qty" value={damageQty} onChange={e => setDamageQty(e.target.value)} />
-                <select style={{ ...S.input, minWidth: 150 }} value={damageBinId} onChange={e => setDamageBinId(e.target.value)}>
-                  <option value="">Damage bin location</option>
-                  {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-                </select>
+                <input list="packDamageBinDatalist" style={{ ...S.input, minWidth: 150, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Damage bin code" value={damageBinId} onChange={e => setDamageBinId(e.target.value)} />
+                <datalist id="packDamageBinDatalist">
+                  {bins.map(b => <option key={b.id} value={b.code} />)}
+                </datalist>
                 <button style={{ ...S.secondaryBtnSm, color: "#B084F5", borderColor: "#B084F5" }} onClick={markPackDamaged}>Confirm Damage</button>
               </div>
             )}
@@ -7030,11 +7039,12 @@ function ReturnsView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : scanInput).trim();
     setScanInput("");
     if (!code) return;
-    if (lineCondition === "damaged" && !lineBin) { showToast("Damaged item ke liye pehle bin location select karein", "err"); return; }
+    const lineBinObj = lineCondition === "damaged" ? bins.find(b => (b.code || "").toLowerCase() === lineBin.trim().toLowerCase()) : null;
+    if (lineCondition === "damaged" && !lineBinObj) { showToast("Sahi damage bin code likhein (jo list mein maujood ho)", "err"); return; }
     const product = await lookupProductByCode(token, code);
     if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
     try {
-      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: product.id, qty: Number(lineQty) || 1, condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
+      await sb(`/rest/v1/return_lines`, { method: "POST", token, body: { return_id: openReturn.id, product_id: product.id, qty: Number(lineQty) || 1, condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBinObj.id : null } });
       setProducts(prev => ({ ...prev, [product.id]: product }));
       showToast(`✓ ${product.barcode} added (${lineCondition})`);
       setLineQty(1);
@@ -7052,22 +7062,23 @@ function ReturnsView({ token, profile, showToast }) {
     const code = (codeArg !== undefined ? codeArg : scanInput).trim();
     setScanInput("");
     if (!code) return;
-    if (lineCondition === "damaged" && !lineBin) { showToast("Damaged item ke liye pehle bin location select karein", "err"); return; }
+    const lineBinObj = lineCondition === "damaged" ? bins.find(b => (b.code || "").toLowerCase() === lineBin.trim().toLowerCase()) : null;
+    if (lineCondition === "damaged" && !lineBinObj) { showToast("Sahi damage bin code likhein (jo list mein maujood ho)", "err"); return; }
     const product = await lookupProductByCode(token, code);
     if (!product) { showToast("Barcode/SKU match nahi hua", "err"); return; }
     try {
       const qty = Number(lineQty) || 1;
-      const created = await sb(`/rest/v1/return_lines`, { method: "POST", token, prefer: "return=representation", body: { return_id: openReturn.id, product_id: product.id, qty, condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBin : null } });
+      const created = await sb(`/rest/v1/return_lines`, { method: "POST", token, prefer: "return=representation", body: { return_id: openReturn.id, product_id: product.id, qty, condition: lineCondition, bin_id: lineCondition === "damaged" ? lineBinObj.id : null } });
       const newLine = created[0];
       if (lineCondition === "good") {
         await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { product_id: product.id, qty, return_line_id: newLine.id, status: "pending" } });
         await sb(`/rest/v1/return_lines?id=eq.${newLine.id}`, { method: "PATCH", token, body: { processed_via_putaway: true } });
       } else {
-        const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&bin_id=eq.${lineBin}&select=*`, { token });
+        const existing = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&bin_id=eq.${lineBinObj.id}&select=*`, { token });
         if (existing && existing.length > 0) {
-          await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&bin_id=eq.${lineBin}`, { method: "PATCH", token, body: { qty: existing[0].qty + qty } });
+          await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${product.id}&bin_id=eq.${lineBinObj.id}`, { method: "PATCH", token, body: { qty: existing[0].qty + qty } });
         } else {
-          await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: product.id, bin_id: lineBin, qty } });
+          await sb(`/rest/v1/damage_inventory`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, product_id: product.id, bin_id: lineBinObj.id, qty } });
         }
       }
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: openReturn.id, user_id: profile.id, action: "line_added_after_submit", metadata: { product_id: product.id, qty, condition: lineCondition } } });
@@ -7233,10 +7244,12 @@ function ReturnsView({ token, profile, showToast }) {
               ))}
             </div>
             {lineCondition === "damaged" && (
-              <select style={{ ...S.input, minWidth: 160 }} value={lineBin} onChange={e => setLineBin(e.target.value)}>
-                <option value="">Damage bin location</option>
-                {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-              </select>
+              <>
+                <input list="returnDamageBinDatalist" style={{ ...S.input, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Damage bin code" value={lineBin} onChange={e => setLineBin(e.target.value)} />
+                <datalist id="returnDamageBinDatalist">
+                  {bins.map(b => <option key={b.id} value={b.code} />)}
+                </datalist>
+              </>
             )}
             <button style={S.primaryBtnSm} onClick={() => scanReturnItem()}>Scan</button>
           </div>
@@ -7286,10 +7299,12 @@ function ReturnsView({ token, profile, showToast }) {
                     ))}
                   </div>
                   {lineCondition === "damaged" && (
-                    <select style={{ ...S.input, minWidth: 160 }} value={lineBin} onChange={e => setLineBin(e.target.value)}>
-                      <option value="">Damage bin location</option>
-                      {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-                    </select>
+                    <>
+                      <input list="returnDamageBinDatalist2" style={{ ...S.input, minWidth: 160, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Damage bin code" value={lineBin} onChange={e => setLineBin(e.target.value)} />
+                      <datalist id="returnDamageBinDatalist2">
+                        {bins.map(b => <option key={b.id} value={b.code} />)}
+                      </datalist>
+                    </>
                   )}
                   <button style={S.primaryBtnSm} onClick={() => addLineAfterSubmit()}>Scan & Add</button>
                 </div>
@@ -10137,11 +10152,12 @@ function StockingOutboundView({ token, profile, showToast }) {
   };
 
   const completePutaway = async (q) => {
-    const binId = binChoice[q.id];
-    if (!binId) { showToast("Bin select karein", "err"); return; }
+    const code = (binChoice[q.id] || "").trim();
+    const bin = bins.find(b => (b.code || "").toLowerCase() === code.toLowerCase());
+    if (!bin) { showToast("Sahi bin code likhein (jo list mein maujood ho)", "err"); return; }
     setLoading(true);
     try {
-      await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: binId, completed_by: profile.id, completed_at: new Date().toISOString() } });
+      await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { status: "completed", bin_id: bin.id, completed_by: profile.id, completed_at: new Date().toISOString() } });
       showToast(`${q.product_name} — putaway complete, bin assign ho gaya`);
       load();
     } catch (e) { showToast("Putaway fail: " + e.message, "err"); }
@@ -10225,10 +10241,10 @@ function StockingOutboundView({ token, profile, showToast }) {
                   <td style={S.td}>{q.product_name}</td>
                   <td style={S.td}>{q.qty}</td>
                   <td style={S.td}>
-                    <select style={{ ...S.input, width: 140 }} value={binChoice[q.id] || ""} onChange={e => setBinChoice(bc => ({ ...bc, [q.id]: e.target.value }))}>
-                      <option value="">Select bin</option>
-                      {bins.map(b => <option key={b.id} value={b.id}>{b.code}</option>)}
-                    </select>
+                    <input list="stkOutboundBinDatalist" style={{ ...S.input, width: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Bin code" value={binChoice[q.id] || ""} onChange={e => setBinChoice(bc => ({ ...bc, [q.id]: e.target.value }))} />
+                    <datalist id="stkOutboundBinDatalist">
+                      {bins.map(b => <option key={b.id} value={b.code} />)}
+                    </datalist>
                   </td>
                   <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completePutaway(q)} disabled={loading}>✓ Putaway Complete</button></td>
                 </tr>
@@ -11047,11 +11063,13 @@ function StockingPickingView({ token, profile, showToast }) {
 
   const confirmPick = async (str) => {
     const f = pickForm[str.id] || {};
-    const binId = f.binId;
+    const availableBins = binsForProduct(str.product_barcode, str.product_name);
+    const typedCode = (f.binCode || "").trim();
+    const match = availableBins.find(b => (binCode(b.binId) || "").toLowerCase() === typedCode.toLowerCase());
+    if (!match) { showToast("Sahi bin code likhein (jismein yeh product available ho)", "err"); return; }
+    const binId = match.binId;
     const qty = f.qty !== undefined ? Number(f.qty) : str.qty;
-    if (!binId) { showToast("Bin select karein", "err"); return; }
-    const avail = binsForProduct(str.product_barcode, str.product_name).find(b => b.binId === binId)?.avail || 0;
-    if (!qty || qty <= 0 || qty > avail) { showToast(`Valid qty enter karein (max ${avail} is bin mein)`, "err"); return; }
+    if (!qty || qty <= 0 || qty > match.avail) { showToast(`Valid qty enter karein (max ${match.avail} is bin mein)`, "err"); return; }
     try {
       await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: str.product_barcode, product_name: str.product_name, bin_id: binId, qty_delta: -qty, reason: `Picked for STR ${str.str_number || ""}`, source: "manual", created_by: profile.id } });
       await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { picked_by: profile.id, picked_at: new Date().toISOString(), picked_bin_id: binId, qty } });
@@ -11118,10 +11136,10 @@ function StockingPickingView({ token, profile, showToast }) {
                     <td style={S.td}>{s.product_name}</td>
                     <td style={S.td}>{s.qty}</td>
                     <td style={S.td}>
-                      <select style={{ ...S.input, width: 140 }} value={pickForm[s.id]?.binId || ""} onChange={e => setPickForm(pf => ({ ...pf, [s.id]: { ...pf[s.id], binId: e.target.value } }))}>
-                        <option value="">Select bin…</option>
-                        {availableBins.map(b => <option key={b.binId} value={b.binId}>{binCode(b.binId)} ({b.avail} avail)</option>)}
-                      </select>
+                      <input list={`stkPickBinDatalist-${s.id}`} style={{ ...S.input, width: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Bin code" value={pickForm[s.id]?.binCode || ""} onChange={e => setPickForm(pf => ({ ...pf, [s.id]: { ...pf[s.id], binCode: e.target.value } }))} />
+                      <datalist id={`stkPickBinDatalist-${s.id}`}>
+                        {availableBins.map(b => <option key={b.binId} value={binCode(b.binId)} label={`${b.avail} avail`} />)}
+                      </datalist>
                     </td>
                     <td style={S.td}><input type="number" style={{ ...S.input, width: 80 }} placeholder={s.qty} value={pickForm[s.id]?.qty ?? ""} onChange={e => setPickForm(pf => ({ ...pf, [s.id]: { ...pf[s.id], qty: e.target.value } }))} /></td>
                     <td style={S.td}><button style={S.primaryBtnSm} onClick={() => confirmPick(s)}>✓ Confirm Pick</button></td>
@@ -11825,8 +11843,9 @@ function StockingInventoryView({ token, profile, showToast }) {
               </div>
               <div style={S.panel}>
                 <div style={S.panelTitle}>Progress — {countLines.filter(l => l.counted_qty !== null && l.counted_qty !== undefined).length} / {countLines.length} counted</div>
+                <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 10 }}>Agar koi item bin mein physically nahi mila, to "0 / Not Found" dabayein — is se line "counted" ho jayegi (qty 0 k sath) aur submit ho sakega.</div>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th></tr></thead>
+                  <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Status</th><th style={S.th}></th></tr></thead>
                   <tbody>
                     {countLines.map(l => {
                       const done = l.counted_qty !== null && l.counted_qty !== undefined;
@@ -11835,10 +11854,11 @@ function StockingInventoryView({ token, profile, showToast }) {
                           <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{l.product_barcode || "—"}</td>
                           <td style={S.td}>{nameFor(l.product_barcode, l.product_name)}{l.is_excess && <span style={{ ...S.badgeSm, color: "#E5484D", borderColor: "#E5484D", marginLeft: 6 }}>EXCESS</span>}</td>
                           <td style={{ ...S.td, color: done ? "#4CAF7D" : "#8A8272" }}>{done ? `✓ Counted — ${l.counted_qty}` : "Pending"}</td>
+                          <td style={S.td}>{!done && <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => saveCountedQty(l.id, 0)}>0 / Not Found</button>}</td>
                         </tr>
                       );
                     })}
-                    {!countLines.length && <tr><td colSpan={3}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
+                    {!countLines.length && <tr><td colSpan={4}><EmptyNote text="Is bin mein koi lines nahi" /></td></tr>}
                   </tbody>
                 </table>
                 {countLines.length > 0 && countLines.every(l => l.counted_qty !== null && l.counted_qty !== undefined) ? (
