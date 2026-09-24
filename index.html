@@ -6695,6 +6695,7 @@ function UsersView({ token, profile, showToast }) {
 
   const ROLE_LABEL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Putaway Officer", inbound_executive: "Inbound Executive", inspection_officer: "Inspection Officer", outbound_executive: "Outbound Executive", physical_receiver: "Physical Receiver", logistics_officer: "Logistics Officer", rtv_officer: "RTV Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent", compliance_officer: "Compliance Officer" };
 
+
   return (
     <div>
       <SectionTitle title="Users & roles" />
@@ -6707,7 +6708,7 @@ function UsersView({ token, profile, showToast }) {
           <select style={{ ...S.input, minWidth: 140 }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
             <option value="picker">Picker</option>
             <option value="packer">Packer</option>
-            <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
+            <option value="putaway_officer">Putaway Officer (Putaway Only)</option>
             <option value="inbound_executive">Inbound Executive (Receiving/RTV — Full Access)</option>
             <option value="inspection_officer">Inspection Officer (Article Inspection)</option>
             <option value="outbound_executive">Outbound Executive (Allocation/RTD — Full Access)</option>
@@ -6749,7 +6750,7 @@ function UsersView({ token, profile, showToast }) {
               <select style={{ ...S.input, fontSize: 12 }} value={u.role} onChange={e => changeRole(u, e.target.value)}>
                 <option value="picker">Picker</option>
                 <option value="packer">Packer</option>
-                <option value="putaway_officer">Inbound Officer (Receiving/Putaway/Returns)</option>
+                <option value="putaway_officer">Putaway Officer (Putaway Only)</option>
                 <option value="inbound_executive">Inbound Executive (Receiving/RTV — Full Access)</option>
                 <option value="inspection_officer">Inspection Officer (Article Inspection)</option>
                 <option value="outbound_executive">Outbound Executive (Allocation/RTD — Full Access)</option>
