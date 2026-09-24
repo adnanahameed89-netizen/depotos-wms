@@ -8095,6 +8095,7 @@ function ToteMasterView({ token, profile, showToast }) {
   const [profiles, setProfiles] = useState({});
   const [pickers, setPickers] = useState([]);
   const [newCode, setNewCode] = useState("");
+  const [pickedCountByTote, setPickedCountByTote] = useState({});
 
   const load = useCallback(async () => {
     const [tt, pf] = await Promise.all([
@@ -8104,6 +8105,23 @@ function ToteMasterView({ token, profile, showToast }) {
     setTotes(tt || []);
     setProfiles(Object.fromEntries((pf || []).map(p => [p.id, p])));
     setPickers((pf || []).filter(p => ["picker", "packer"].includes(p.role) && p.warehouse_id === profile.warehouse_id));
+
+    // Flags "orphaned" totes: pick_tasks that are already fully "picked" (complete) but whose
+    // tote now shows a status like "open" — exactly what a force-release leaves behind, since
+    // that only ever resets the TOTE record and never touches its pick_tasks. Without this, a
+    // released tote with real picked orders still sitting in it is impossible to tell apart
+    // from a genuinely empty one.
+    const toteIds = (tt || []).map(t => t.id);
+    const counts = {};
+    if (toteIds.length) {
+      const CHUNK = 100;
+      for (let i = 0; i < toteIds.length; i += CHUNK) {
+        const chunk = toteIds.slice(i, i + CHUNK);
+        const pts = await sb(`/rest/v1/pick_tasks?tote_id=in.(${chunk.join(",")})&status=eq.picked&select=tote_id`, { token });
+        for (const p of pts || []) counts[p.tote_id] = (counts[p.tote_id] || 0) + 1;
+      }
+    }
+    setPickedCountByTote(counts);
   }, [token, profile.warehouse_id]);
   useEffect(() => { load(); }, [load]);
 
@@ -8168,12 +8186,20 @@ function ToteMasterView({ token, profile, showToast }) {
         </div>
       </div>
       <div style={S.cardGrid}>
-        {totes.map(t => (
-          <div key={t.id} style={S.card}>
+        {[...totes].sort((a, b) => (pickedCountByTote[b.id] || 0) - (pickedCountByTote[a.id] || 0)).map(t => {
+          const orphanedCount = pickedCountByTote[t.id] || 0;
+          const isOrphaned = t.status === "open" && orphanedCount > 0;
+          return (
+          <div key={t.id} style={{ ...S.card, ...(isOrphaned ? { border: "2px solid #E5484D" } : {}) }}>
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623", fontSize: 15 }}>{t.tote_number}</span>
               <span style={{ ...S.badgeSm, color: t.status === "open" ? "#4CAF7D" : "#5B9EE8", borderColor: t.status === "open" ? "#4CAF7D" : "#5B9EE8" }}>{t.status}</span>
             </div>
+            {isOrphaned && (
+              <div style={{ background: "#FFF3F3", border: "1px solid #E5484D", borderRadius: 6, padding: "6px 8px", marginTop: 8, fontSize: 11, color: "#B0362E" }}>
+                ⚠ {orphanedCount} order(s) yahan "Picked" status mein atke hain lekin tote "Open" hai — yeh releasing ki wajah se orphan ho gayi thi. Neeche se packer reassign karein.
+              </div>
+            )}
             <div style={{ color: "#6B6355", fontSize: 12, marginTop: 8 }}>
               {t.assigned_to ? `With: ${profiles[t.assigned_to]?.full_name || "—"}` : "Unassigned"}
             </div>
@@ -8209,7 +8235,8 @@ function ToteMasterView({ token, profile, showToast }) {
               )
             )}
           </div>
-        ))}
+          );
+        })}
         {totes.length === 0 && <EmptyNote text="No totes — add one above." />}
       </div>
     </div>
