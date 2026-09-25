@@ -2835,9 +2835,10 @@ function PutawayView({ token, profile, showToast }) {
   const [grns, setGrns] = useState({});
   const [returnLines, setReturnLines] = useState({});
   const [returnsMap, setReturnsMap] = useState({});
+  const [sourceStrs, setSourceStrs] = useState({});
   const [teamTasks, setTeamTasks] = useState([]);
   const [binChoice, setBinChoice] = useState({});
-  const canAssign = ["admin", "warehouse_lead", "supervisor"].includes(profile.role);
+  const canAssign = ["admin", "warehouse_lead", "supervisor", "putaway_officer", "returns_agent"].includes(profile.role);
 
   const load = useCallback(async () => {
     try {
@@ -2878,6 +2879,11 @@ function PutawayView({ token, profile, showToast }) {
           setReturnsMap(Object.fromEntries((rs || []).map(x => [x.id, { ...x, orderRef: sOrderMap[x.order_id]?.external_order_id }])));
         }
       }
+      const strIds = [...new Set(allTasks.map(x => x.source_str_id).filter(Boolean))];
+      if (strIds.length) {
+        const strRows = await sb(`/rest/v1/stk_str?id=in.(${strIds.join(",")})&select=*`, { token });
+        setSourceStrs(Object.fromEntries((strRows || []).map(x => [x.id, x])));
+      }
     } catch (e) { showToast("Load failed", "err"); }
   }, [token, profile.warehouse_id, profile.id, profile.role]);
   useEffect(() => { load(); }, [load]);
@@ -2887,6 +2893,10 @@ function PutawayView({ token, profile, showToast }) {
   }, [load]);
 
   const grnNumberFor = (task) => {
+    if (task.source_str_id) {
+      const str = sourceStrs[task.source_str_id];
+      return str ? `STR-${str.str_number}` : "STR-?";
+    }
     if (task.return_line_id) {
       const rl = returnLines[task.return_line_id];
       const ret = rl ? returnsMap[rl.return_id] : null;
@@ -2936,6 +2946,14 @@ function PutawayView({ token, profile, showToast }) {
       }
       await sb(`/rest/v1/putaway_tasks?id=eq.${task.id}`, { method: "PATCH", token, body });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: task.id, user_id: profile.id, action: done ? "completed" : "partial_putaway", metadata: { bin_id: binId, qty, mode: putawayMode } } });
+      // Closes the loop back to Stocking Warehouse: once THIS side's putaway for an
+      // STR-forwarded task is fully done, that STR flips to "received" over there too — no
+      // separate manual status update needed on the Stocking side.
+      if (done && task.source_str_id) {
+        try {
+          await sb(`/rest/v1/stk_str?id=eq.${task.source_str_id}`, { method: "PATCH", token, body: { status: "received", received_by: profile.id, received_at: new Date().toISOString() } });
+        } catch (e) { /* best-effort — local putaway already succeeded either way */ }
+      }
       return { done, newCompleted };
     } catch (e) { showToast("Putaway failed", "err"); return null; }
   };
@@ -7790,6 +7808,17 @@ async function searchProducts(token, query, limit = 25) {
   return (await sb(`/rest/v1/products?or=(barcode.ilike.*${enc}*,name.ilike.*${enc}*)&select=*&limit=${limit}`, { token })) || [];
 }
 // Exact lookup for a single scanned barcode/SKU.
+// Every STR gets a system-generated reference the MOMENT inventory is set aside for it
+// (before any human number exists) — so inventory traceability starts immediately. Outbound
+// Executive's later "Create STR" step then REPLACES this with the real Odoo-generated STR#
+// (the actual company document number), never leaving the record without a reference and
+// preserving the full trail either way.
+async function nextSysStrRef(token) {
+  const rows = await sb(`/rest/v1/stk_str?str_number=like.SYS-STR-*&select=str_number&order=str_number.desc&limit=1`, { token });
+  let n = 0;
+  if (rows && rows[0]?.str_number) { const m = String(rows[0].str_number).match(/(\d+)$/); if (m) n = parseInt(m[1], 10); }
+  return `SYS-STR-${String(n + 1).padStart(6, "0")}`;
+}
 async function lookupProductByCode(token, code) {
   const c = cleanCode(code);
   if (!c) return null;
@@ -9463,6 +9492,7 @@ const STK_DC_STATUS_LABEL = { pending_import: "Pending Import", ready_for_inspec
 // stored value, so it can never drift out of sync with the actual workflow state.
 const STK_STR_STAGES = ["Total Creation", "In Process", "Packing Process", "RTD", "Shipped"];
 function stkStrStage(str) {
+  if (str.status === "received") return "Received";
   if (str.status === "dispatched") return "Shipped";
   if (str.status === "draft") return "Total Creation";
   if (str.packed_at) return "RTD";
@@ -9470,7 +9500,7 @@ function stkStrStage(str) {
   return "In Process";
 }
 function stkStrStageColor(stage) {
-  return { "Total Creation": "#B084F5", "In Process": "#5B9EE8", "Packing Process": "#F5A623", "RTD": "#4CAF7D", "Shipped": "#6B6355" }[stage] || "#8A8272";
+  return { "Total Creation": "#B084F5", "In Process": "#5B9EE8", "Packing Process": "#F5A623", "RTD": "#4CAF7D", "Shipped": "#6B6355", "Received": "#4CAF7D" }[stage] || "#8A8272";
 }
 function stkPill(active, color = "#F5A623") { return { display: "inline-flex", alignItems: "center", gap: 5, background: active ? color : "transparent", color: active ? "#1A1206" : "#2B2620", border: `1px solid ${active ? color : "#E0D8C5"}`, borderRadius: 20, padding: "7px 14px", fontSize: 12.5, cursor: "pointer", fontFamily: "'Space Grotesk', sans-serif", fontWeight: active ? 600 : 400 }; }
 function stkBizDaysExclSunday(startISO, endISO) {
@@ -10386,11 +10416,13 @@ function StockingOutboundView({ token, profile, showToast }) {
     setLoading(true);
     try {
       const alloc = await sb(`/rest/v1/stk_grn_allocations`, { method: "POST", token, prefer: "return=representation", body: { dc_line_id: q.dc_line_id, dc_id: q.dc_id, po_id: q.po_id, warehouse_id: whId, product_name: q.product_name, product_barcode: q.product_barcode, qty, destination: f.destination.trim(), status: "pending_str", created_by: profile.id } });
-      // No Odoo STR# yet — Outbound Executive enters it and confirms from the STR tab.
-      await sb(`/rest/v1/stk_str`, { method: "POST", token, body: { warehouse_id: whId, source: "grn_distribution", grn_allocation_id: alloc[0].id, destination: f.destination.trim(), product_barcode: q.product_barcode, product_name: q.product_name, qty, status: "draft", created_by: profile.id } });
+      // System reference now, so this is traceable the instant inventory is set aside —
+      // Outbound Executive's Odoo STR# later REPLACES this same field, never leaving it blank.
+      const sysRef = await nextSysStrRef(token);
+      await sb(`/rest/v1/stk_str`, { method: "POST", token, body: { warehouse_id: whId, source: "grn_distribution", grn_allocation_id: alloc[0].id, destination: f.destination.trim(), product_barcode: q.product_barcode, product_name: q.product_name, qty, status: "draft", str_number: sysRef, created_by: profile.id } });
       const remaining = Number(q.qty) - qty;
       await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: remaining } });
-      showToast(`${qty} units — ${f.destination} k liye STR tab mein draft ban gaya (Outbound Executive Odoo STR# add karega)`);
+      showToast(`${qty} units — ${f.destination} k liye STR ${sysRef} ban gaya (Outbound Executive isay Odoo STR# se replace karega)`);
       setAllocForm(af => ({ ...af, [q.id]: {} }));
       load();
     } catch (e) { showToast("Allocate fail: " + e.message, "err"); }
@@ -10491,6 +10523,7 @@ function StockingOutboundView({ token, profile, showToast }) {
                     <datalist id="stkOutboundBinDatalist">
                       {bins.map(b => <option key={b.id} value={b.code} />)}
                     </datalist>
+                    <CameraScanButton onScan={(text) => setBinChoice(bc => ({ ...bc, [q.id]: text }))} />
                   </td>
                   <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completePutaway(q)} disabled={loading}>✓ Putaway Complete</button></td>
                 </tr>
@@ -10543,6 +10576,8 @@ function StockingStrView({ token, profile, showToast }) {
   const whId = useStkWarehouseId(token, profile);
   const [tab, setTab] = useState("draft");
   const [strs, setStrs] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [warehouseName, setWarehouseName] = useState("Stocking Warehouse");
   const [loading, setLoading] = useState(true);
   const [editForm, setEditForm] = useState({}); // { [strId]: { strNumber, qty } }
   const [uploading, setUploading] = useState(false);
@@ -10551,18 +10586,79 @@ function StockingStrView({ token, profile, showToast }) {
     if (!whId) return;
     setLoading(true);
     try {
-      const s = await sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token });
-      setStrs(s || []);
+      const [s, staffRows, whRows] = await Promise.all([
+        sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&select=id,full_name`, { token }),
+        sb(`/rest/v1/warehouses?id=eq.${whId}&select=name`, { token })
+      ]);
+      setStrs(s || []); setStaff(staffRows || []);
+      if (whRows?.[0]?.name) setWarehouseName(whRows[0].name);
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [whId]);
 
+  const staffName = (id) => staff.find(s => s.id === id)?.full_name || "—";
+
   const draftStrs = strs.filter(s => s.status === "draft");
   const reservedStrs = strs.filter(s => s.status === "reserved");
-  const dispatchedStrs = strs.filter(s => s.status === "dispatched");
+  const dispatchedStrs = strs.filter(s => s.status === "dispatched" || s.status === "received");
 
   const sourceLabel = (s) => s === "grn_distribution" ? "GRN Distribution" : s === "customer_order" ? "Customer Order" : "Weekly Demand";
+
+  // Same real Odoo STR# often covers several products — group by str_number so printing gives
+  // ONE document with every line item, matching the actual company STR format (not one product
+  // per printout).
+  const printStrDoc = (strNumber) => {
+    const group = strs.filter(s => s.str_number === strNumber);
+    if (!group.length) return;
+    const first = group[0];
+    let rowsHtml = "";
+    let totalQty = 0;
+    group.forEach((r, i) => {
+      totalQty += Number(r.qty || 0);
+      rowsHtml += `<tr><td>${i + 1}</td><td>${r.product_barcode || "—"}</td><td>${r.product_name}</td><td style="text-align:right">${r.qty}</td></tr>`;
+    });
+    const statusLabel = { draft: "Draft — Pending Odoo STR#", reserved: "Reserved — Awaiting Vehicle", dispatched: "Shipped" }[first.status] || first.status;
+    const w = window.open("", "_blank");
+    w.document.write(`<html><head><title>STR ${strNumber}</title><style>
+      body{font-family:Arial;padding:24px;color:#111;font-size:13px}
+      h2{margin:0 0 2px;font-size:18px} .subtitle{text-align:center;font-weight:700;letter-spacing:1px;margin-bottom:14px}
+      .top{display:flex;justify-content:space-between;border-bottom:2px solid #1A1206;padding-bottom:10px;margin-bottom:10px}
+      .meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;font-size:12.5px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
+      .meta-grid b{color:#555;font-weight:600}
+      table{width:100%;border-collapse:collapse;margin-bottom:16px} th,td{border:1px solid #999;padding:6px 9px;font-size:12px;text-align:left}
+      th{background:#F5A623;color:#1A1206} td:nth-child(1),th:nth-child(1){text-align:center;width:36px}
+      tfoot td{font-weight:700;background:#FAFAFA}
+      .sign{margin-top:70px;display:flex;justify-content:space-between}
+      .sign div{border-top:1px solid #333;width:150px;text-align:center;padding-top:6px;font-size:11px}
+    </style></head><body>
+      <div class="top"><div><b>From:</b> HABITT H/W</div><div class="subtitle">STOCK TRANSFER REPORT (STR)</div><div><b>To:</b> ${first.destination}</div></div>
+      <div class="meta-grid">
+        <div><b>STR#:</b> ${strNumber}</div>
+        <div><b>Source:</b> ${sourceLabel(first.source)}${first.customer_order_ref ? " — " + first.customer_order_ref : ""}</div>
+        <div><b>Created By:</b> ${staffName(first.created_by)}</div>
+        <div><b>STR Date:</b> ${first.created_at ? new Date(first.created_at).toLocaleDateString() : "—"}</div>
+        <div><b>Picker:</b> ${first.picked_by ? staffName(first.picked_by) : "—"}</div>
+        <div><b>Picked Date:</b> ${first.picked_at ? new Date(first.picked_at).toLocaleString() : "—"}</div>
+        <div><b>STR Status:</b> ${statusLabel}</div>
+        <div><b>Packer:</b> ${first.packed_by ? staffName(first.packed_by) : "—"}</div>
+        <div><b>Packed Date:</b> ${first.packed_at ? new Date(first.packed_at).toLocaleString() : "—"}</div>
+        <div></div>
+        <div><b>Shipped By:</b> ${first.dispatched_by ? staffName(first.dispatched_by) : "—"}</div>
+        <div><b>Shipped Date:</b> ${first.dispatched_at ? new Date(first.dispatched_at).toLocaleString() : "—"}</div>
+      </div>
+      <table>
+        <thead><tr><th>Sr</th><th>Barcode</th><th>Product</th><th>STR / Dispatch Qty</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot><tr><td colspan="3" style="text-align:right">Total</td><td style="text-align:right">${totalQty}</td></tr></tfoot>
+      </table>
+      <div class="sign">
+        <div>Prepared By</div><div>Checked By</div><div>Approved By</div><div>Dispatched By</div><div>Received By</div>
+      </div>
+    </body></html>`);
+    w.document.close(); w.print();
+  };
 
   const confirmStr = async (row) => {
     const f = editForm[row.id] || {};
@@ -10583,6 +10679,50 @@ function StockingStrView({ token, profile, showToast }) {
     setLoading(false);
   };
 
+  // Confirms a WHOLE consolidated group (every draft row sharing one str_number) at once —
+  // one Odoo STR# entry covers every product line in it, matching the real-world document
+  // where a single STR# always carries multiple products to the same destination.
+  const confirmGroup = async (groupRows, strNumber) => {
+    const trimmed = strNumber.trim();
+    if (!trimmed) { showToast("Odoo STR# enter karein", "err"); return; }
+    setLoading(true);
+    try {
+      for (const row of groupRows) {
+        await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: trimmed, status: "reserved", confirmed_by: profile.id, confirmed_at: new Date().toISOString() } });
+        if (row.grn_allocation_id) {
+          await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "rtd" } });
+        }
+      }
+      showToast(`✓ STR ${trimmed} confirm ho gaya — ${groupRows.length} product line(s) is STR mein`);
+      setEditForm(f2 => ({ ...f2, [groupRows[0].str_number]: {} }));
+      load();
+    } catch (e) { showToast("Confirm fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
+  const [mergeSelected, setMergeSelected] = useState({}); // { [rowId]: true }
+  // Merges several separately-created drafts (each got its own system reference) into ONE
+  // STR — required whenever one destination is actually getting multiple products on the same
+  // real-world STR document, instead of the Odoo STR# having to be typed in one row at a time.
+  const mergeIntoOne = async () => {
+    const ids = Object.keys(mergeSelected).filter(k => mergeSelected[k]);
+    if (ids.length < 2) { showToast("Kam se kam 2 lines select karein jo consolidate karni hain", "err"); return; }
+    const rows = draftStrs.filter(s => ids.includes(s.id));
+    const destinations = new Set(rows.map(r => r.destination));
+    if (destinations.size > 1) { showToast("Sirf ek hi destination ki lines consolidate ho sakti hain", "err"); return; }
+    setLoading(true);
+    try {
+      const targetRef = rows[0].str_number;
+      for (const row of rows.slice(1)) {
+        await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: targetRef } });
+      }
+      showToast(`✓ ${rows.length} lines ek STR (${targetRef}) mein consolidate ho gayin`);
+      setMergeSelected({});
+      load();
+    } catch (e) { showToast("Merge fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
   const uploadStrFile = async (file) => {
     setUploading(true);
     try {
@@ -10599,10 +10739,15 @@ function StockingStrView({ token, profile, showToast }) {
         created_by: profile.id
       })).filter(r => r.destination && r.product_name && r.qty > 0);
       if (!mapped.length) { showToast("File mein koi valid row nahi mili (Destination, Product Name, Qty columns check karein)", "err"); setUploading(false); return; }
+      // Each row gets its own system reference immediately (traceable from the moment it's
+      // created) — Outbound Executive's Odoo STR# later replaces it row by row.
+      const firstRef = await nextSysStrRef(token);
+      const startN = parseInt(firstRef.match(/(\d+)$/)[1], 10);
+      mapped.forEach((r, i) => { r.str_number = `SYS-STR-${String(startN + i).padStart(6, "0")}`; });
       for (let i = 0; i < mapped.length; i += 200) {
         await sb(`/rest/v1/stk_str`, { method: "POST", token, body: mapped.slice(i, i + 200) });
       }
-      showToast(`✓ ${mapped.length} STR draft(s) upload ho gaye. NOTE: "Destination" column exact naam se match karega jaisa Logistics tab k destination master mein hai.`);
+      showToast(`✓ ${mapped.length} STR draft(s) upload ho gaye (system refs SYS-STR-... assign ho gaye). NOTE: "Destination" column exact naam se match karega jaisa Logistics tab k destination master mein hai.`);
       load();
     } catch (e) { showToast("Upload fail: " + e.message, "err"); }
     setUploading(false);
@@ -10641,23 +10786,56 @@ function StockingStrView({ token, profile, showToast }) {
       {tab === "draft" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Odoo STR# Add Karein & Confirm Karein</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Odoo STR# daal kar qty verify karein aur Create karein. GRN Distribution seedha Logistics k liye ready ho jati hai; baki (existing bin stock se) "Stocking Picking" tab se picker assign hoga.</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Destination</th><th style={S.th}>Qty</th><th style={S.th}>Odoo STR#</th><th style={S.th}></th></tr></thead>
-            <tbody>
-              {draftStrs.map(s => (
-                <tr key={s.id}>
-                  <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
-                  <td style={S.td}>{s.product_name}</td>
-                  <td style={S.td}>{s.destination}</td>
-                  <td style={S.td}><input type="number" style={{ ...S.input, width: 80 }} defaultValue={s.qty} onChange={e => setEditForm(f => ({ ...f, [s.id]: { ...f[s.id], qty: e.target.value } }))} /></td>
-                  <td style={S.td}><input style={{ ...S.input, width: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR#" defaultValue={s.str_number || ""} onChange={e => setEditForm(f => ({ ...f, [s.id]: { ...f[s.id], strNumber: e.target.value } }))} /></td>
-                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => confirmStr(s)} disabled={loading}>✓ Create STR</button></td>
-                </tr>
-              ))}
-              {!draftStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi draft STR pending nahi" /></td></tr>}
-            </tbody>
-          </table>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Ek destination ki multiple products wali lines ko neeche checkbox se select kar k <strong>"Consolidate"</strong> karein — phir ek hi Odoo STR# se poora group confirm ho jayega (bilkul real-world STR document ki tarah, jahan ek STR# k neeche kaafi products hote hain).</div>
+          {(() => {
+            const selectedIds = Object.keys(mergeSelected).filter(k => mergeSelected[k]);
+            return selectedIds.length > 0 && (
+              <div style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
+                <span style={{ fontSize: 12, color: "#6B6355" }}>{selectedIds.length} line(s) selected</span>
+                <button style={S.primaryBtnSm} onClick={mergeIntoOne} disabled={loading || selectedIds.length < 2}>🔗 Consolidate Selected Into One STR</button>
+                <button style={S.secondaryBtnSm} onClick={() => setMergeSelected({})}>Clear Selection</button>
+              </div>
+            );
+          })()}
+          {(() => {
+            const groups = {};
+            for (const s of draftStrs) { if (!groups[s.str_number]) groups[s.str_number] = []; groups[s.str_number].push(s); }
+            const groupEntries = Object.entries(groups);
+            if (!groupEntries.length) return <EmptyNote text="Koi draft STR pending nahi" />;
+            return groupEntries.map(([strNum, rows]) => {
+              const isSysRef = strNum.startsWith("SYS-STR-");
+              const groupTotalQty = rows.reduce((s, r) => s + Number(r.qty || 0), 0);
+              return (
+                <div key={strNum} style={{ background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                    <div>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: isSysRef ? "#8A8272" : "#F5A623", fontWeight: 600 }}>{strNum}</span>
+                      {rows.length > 1 && <span style={{ ...S.badgeSm, marginLeft: 8, color: "#4CAF7D", borderColor: "#4CAF7D" }}>{rows.length} products consolidated</span>}
+                      <div style={{ fontSize: 12, color: "#6B6355", marginTop: 2 }}>Destination: <strong>{rows[0].destination}</strong> · Total Qty: {groupTotalQty}</div>
+                    </div>
+                  </div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
+                    <thead><tr><th style={S.th}></th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
+                    <tbody>
+                      {rows.map(s => (
+                        <tr key={s.id}>
+                          <td style={S.td}><input type="checkbox" checked={!!mergeSelected[s.id]} onChange={e => setMergeSelected(ms => ({ ...ms, [s.id]: e.target.checked }))} /></td>
+                          <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
+                          <td style={S.td}>{s.product_name}</td>
+                          <td style={S.td}>{s.qty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <input style={{ ...S.input, width: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR#" defaultValue={isSysRef ? "" : strNum} onChange={e => setEditForm(f => ({ ...f, [strNum]: { strNumber: e.target.value } }))} />
+                    <button style={S.primaryBtnSm} onClick={() => confirmGroup(rows, editForm[strNum]?.strNumber ?? (isSysRef ? "" : strNum))} disabled={loading}>✓ Create STR ({rows.length} line{rows.length > 1 ? "s" : ""})</button>
+                    <button style={S.secondaryBtnSm} onClick={() => printStrDoc(strNum)}>🖨</button>
+                  </div>
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
 
@@ -10666,7 +10844,7 @@ function StockingStrView({ token, profile, showToast }) {
           <div style={S.panelTitle}>Reserved — Vehicle Load & Gatepass ab Logistics Tab Se</div>
           <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yeh sirf trail hai. Vehicle assign, load confirm, ship, aur Gatepass generate karne k liye <strong>Stocking Logistics</strong> tab par jayein.</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th></tr></thead>
+            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}></th></tr></thead>
             <tbody>
               {reservedStrs.map(s => (
                 <tr key={s.id}>
@@ -10675,9 +10853,10 @@ function StockingStrView({ token, profile, showToast }) {
                   <td style={S.td}>{s.product_name}</td>
                   <td style={S.td}>{s.qty}</td>
                   <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => printStrDoc(s.str_number)}>🖨 Print STR</button></td>
                 </tr>
               ))}
-              {!reservedStrs.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Koi reserved STR nahi mila" /></td></tr>}
+              {!reservedStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi reserved STR nahi mila" /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -10687,7 +10866,7 @@ function StockingStrView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Dispatched — Gatepass History</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Dispatched At</th></tr></thead>
+            <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Status</th><th style={S.th}>Dispatched At</th><th style={S.th}></th></tr></thead>
             <tbody>
               {dispatchedStrs.map(s => (
                 <tr key={s.id}>
@@ -10696,10 +10875,12 @@ function StockingStrView({ token, profile, showToast }) {
                   <td style={S.td}>{s.product_name}</td>
                   <td style={S.td}>{s.qty}</td>
                   <td style={S.td}>{s.destination}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: stkStrStageColor(stkStrStage(s)), borderColor: stkStrStageColor(stkStrStage(s)) }}>{stkStrStage(s)}</span></td>
                   <td style={S.td}>{fmtTime(s.dispatched_at)}</td>
+                  <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => printStrDoc(s.str_number)}>🖨 Print STR</button></td>
                 </tr>
               ))}
-              {!dispatchedStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Abhi tak koi dispatch nahi hua" /></td></tr>}
+              {!dispatchedStrs.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Abhi tak koi dispatch nahi hua" /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -10937,6 +11118,7 @@ function StockingLogisticsView({ token, profile, showToast }) {
   const [newDestName, setNewDestName] = useState("");
   const [cartonLookupInput, setCartonLookupInput] = useState("");
   const [cartonLookupResult, setCartonLookupResult] = useState(null);
+  const [warehouseName, setWarehouseName] = useState("Stocking Warehouse");
   const [cartonLookupError, setCartonLookupError] = useState("");
 
   const load = async () => {
@@ -10950,6 +11132,7 @@ function StockingLogisticsView({ token, profile, showToast }) {
         sb(`/rest/v1/stk_destinations?warehouse_id=eq.${whId}&select=*&order=name.asc`, { token })
       ]);
       setStrs(s || []); setTrips(t || []); setCartons(c || []); setDestinations(d || []);
+      try { const whRows = await sb(`/rest/v1/warehouses?id=eq.${whId}&select=name`, { token }); if (whRows?.[0]?.name) setWarehouseName(whRows[0].name); } catch (e) { /* non-critical */ }
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
@@ -10971,6 +11154,21 @@ function StockingLogisticsView({ token, profile, showToast }) {
       await sb(`/rest/v1/stk_destinations`, { method: "POST", token, body: { warehouse_id: whId, name: newDestName.trim() } });
       setNewDestName(""); load();
     } catch (e) { showToast("Add fail: " + e.message, "err"); }
+  };
+
+  // Only ONE destination should represent the E-commerce Warehouse (H/W) link at a time —
+  // clicking a destination toggles it on and clears the flag from every other one.
+  const toggleEcommerceDestination = async (dest) => {
+    try {
+      const turningOn = !dest.is_ecommerce_destination;
+      if (turningOn) {
+        const others = destinations.filter(d => d.is_ecommerce_destination && d.id !== dest.id);
+        for (const o of others) await sb(`/rest/v1/stk_destinations?id=eq.${o.id}`, { method: "PATCH", token, body: { is_ecommerce_destination: false } });
+      }
+      await sb(`/rest/v1/stk_destinations?id=eq.${dest.id}`, { method: "PATCH", token, body: { is_ecommerce_destination: turningOn } });
+      showToast(turningOn ? `⭐ ${dest.name} ab E-commerce Warehouse (H/W) se link ho gaya` : `${dest.name} unlink ho gaya`);
+      load();
+    } catch (e) { showToast("Update fail: " + e.message, "err"); }
   };
 
   // Scan/type a carton's QR token to see exactly what's inside it — the same lookup a shop
@@ -11047,6 +11245,7 @@ function StockingLogisticsView({ token, profile, showToast }) {
         await sb(`/rest/v1/stk_str_cartons?id=eq.${c.id}`, { method: "PATCH", token, body: { status: "shipped" } });
       }
       const touchedStrIds = [...new Set(loadedCartons.map(c => c.str_id))];
+      let ecomForwardedCount = 0;
       for (const strId of touchedStrIds) {
         const str = strById(strId);
         const allCartons = cartonsForStr(strId);
@@ -11056,47 +11255,75 @@ function StockingLogisticsView({ token, profile, showToast }) {
           if (str?.grn_allocation_id) {
             await sb(`/rest/v1/stk_grn_allocations?id=eq.${str.grn_allocation_id}`, { method: "PATCH", token, body: { status: "dispatched" } });
           }
+          // If this STR's destination IS the E-commerce Warehouse (flagged in Destination
+          // Master), forward it directly into E-commerce's own Putaway queue — no manual
+          // GRN/upload needed there. Only "other" (real shop) destinations still need that.
+          const destFlag = destinations.find(d => d.name === str?.destination);
+          if (destFlag?.is_ecommerce_destination && str) {
+            try {
+              const whs = await sb(`/rest/v1/warehouses?select=id,name`, { token });
+              const ecomWh = (whs || []).find(w => w.id !== whId);
+              let matched = await lookupProductByCode(token, str.product_barcode || "");
+              if (!matched && str.product_barcode) {
+                // Not in E-commerce's catalogue yet — auto-create it from what Stocking
+                // already knows (barcode + name), same "seed, never overwrite" pattern used
+                // for stk_products, so this STR's forwarding is never blocked on a missing
+                // catalogue entry.
+                try {
+                  const created = await sb(`/rest/v1/products?on_conflict=barcode`, { method: "POST", token, prefer: "resolution=ignore-duplicates,return=representation", body: { barcode: str.product_barcode, sku: str.product_barcode, name: str.product_name } });
+                  matched = created?.[0] || await lookupProductByCode(token, str.product_barcode);
+                } catch (e) { /* auto-create failed — fall through to the warning below */ }
+              }
+              if (ecomWh && matched) {
+                await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { product_id: matched.id, qty: str.qty, status: "pending", source_str_id: str.id } });
+                ecomForwardedCount++;
+              } else if (!matched) {
+                showToast(`⚠ STR ${str.str_number} — "${str.product_name}" E-commerce catalogue mein auto-add bhi nahi ho saka, Putaway task nahi bana. Manually add karein.`, "err");
+              }
+            } catch (e) { /* forwarding is best-effort — STR itself is still marked dispatched */ }
+          }
         }
       }
 
       // Group by STR for the printed summary — carton numbers only (labels were already
       // printed with QR codes at packing time), plus how many of each STR's total made it.
-      let rowsHtml = "";
+      let rowsHtml = ""; let sr = 0; let destinationForDoc = "";
       for (const strId of touchedStrIds) {
         const str = strById(strId);
+        if (!destinationForDoc && str?.destination) destinationForDoc = str.destination;
+        sr++;
         const shippedHere = loadedCartons.filter(c => c.str_id === strId);
         const totalCartons = cartonsForStr(strId).length;
-        rowsHtml += `<tr><td>${str?.str_number || "—"}</td><td>${str ? fmtTime(str.created_at) : "—"}</td><td>${str?.product_name || "—"}</td><td style="text-align:right">${str?.qty ?? "—"}</td><td style="text-align:right">${shippedHere.length} / ${totalCartons}</td><td>${shippedHere.map(c => c.carton_number).join(", ")}</td></tr>`;
+        rowsHtml += `<tr><td>${sr}</td><td>${str?.str_number || "—"}</td><td>${str ? fmtTime(str.created_at) : "—"}</td><td>${str?.product_name || "—"}</td><td style="text-align:right">${str?.qty ?? "—"}</td><td style="text-align:right">${shippedHere.length} / ${totalCartons}</td><td>${shippedHere.map(c => c.carton_number).join(", ")}</td></tr>`;
       }
 
       const w = window.open("", "_blank");
       w.document.write(`<html><head><title>Gatepass ${gatepassNumber}</title><style>
-        body{font-family:Arial;padding:24px;color:#111}
-        .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1A1206;padding-bottom:14px;margin-bottom:14px}
-        .brand{font-size:20px;font-weight:800;letter-spacing:1px}
-        .gp-title{font-size:14px;color:#555;margin-top:4px}
-        .gp-number{font-size:20px;font-weight:800;text-align:right}
-        .meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;font-size:13px;margin-bottom:18px}
-        .meta-grid span{color:#555}
-        table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #999;padding:8px 10px;font-size:13px;text-align:left}
-        th{background:#F5A623;color:#1A1206}
+        body{font-family:Arial;padding:24px;color:#111;font-size:13px}
+        .top{display:flex;justify-content:space-between;border-bottom:2px solid #1A1206;padding-bottom:10px;margin-bottom:10px}
+        .subtitle{text-align:center;font-weight:700;letter-spacing:1px;font-size:16px}
+        .gp-number{font-size:18px;font-weight:800}
+        .meta-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 24px;font-size:12.5px;margin-bottom:16px;border-bottom:1px solid #ccc;padding-bottom:12px}
+        .meta-grid b{color:#555;font-weight:600}
+        table{width:100%;border-collapse:collapse;margin-top:6px} th,td{border:1px solid #999;padding:7px 9px;font-size:12px;text-align:left}
+        th{background:#F5A623;color:#1A1206} td:nth-child(1),th:nth-child(1){text-align:center;width:32px}
         .sign{margin-top:60px;display:flex;justify-content:space-between}
-        .sign div{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:12px}
+        .sign div{border-top:1px solid #333;width:150px;text-align:center;padding-top:6px;font-size:11px}
       </style></head><body>
-        <div class="header">
-          <div><div class="brand">MUGHAL FULFILLMENT WAREHOUSE</div><div class="gp-title">Gatepass — Stock Transfer Dispatch</div></div>
-          <div class="gp-number">${gatepassNumber}</div>
-        </div>
+        <div class="top"><div><b>From:</b> HABITT H/W</div><div class="subtitle">GATEPASS</div><div><b>To:</b> ${destinationForDoc || "—"}</div></div>
         <div class="meta-grid">
-          <div><span>Vehicle #:</span> ${vehicleNumber}</div>
-          <div><span>Driver:</span> ${driverName}</div>
-          <div><span>Shipped Date:</span> ${new Date().toLocaleString()}</div>
+          <div><b>Gatepass#:</b> ${gatepassNumber}</div>
+          <div><b>Vehicle #:</b> ${vehicleNumber}</div>
+          <div><b>Driver:</b> ${driverName}</div>
+          <div><b>Shipped By:</b> ${profile.full_name || "—"}</div>
+          <div><b>Shipped Date:</b> ${new Date().toLocaleString()}</div>
+          <div><b>Total STRs:</b> ${touchedStrIds.length}</div>
         </div>
-        <table><thead><tr><th>STR#</th><th>Created Date</th><th>Product</th><th>STR Qty</th><th>Cartons Shipped</th><th>Carton #s</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+        <table><thead><tr><th>Sr</th><th>STR#</th><th>Created Date</th><th>Product</th><th>STR Qty</th><th>Cartons Shipped</th><th>Carton #s</th></tr></thead><tbody>${rowsHtml}</tbody></table>
         <div class="sign"><div>Logistics Officer</div><div>Security / Gate</div><div>Driver</div></div>
       </body></html>`);
       w.document.close(); w.print();
-      showToast(`✅ Gatepass ${gatepassNumber} generate ho gaya — ${loadedCartons.length} carton(s) shipped`);
+      showToast(`✅ Gatepass ${gatepassNumber} generate ho gaya — ${loadedCartons.length} carton(s) shipped${ecomForwardedCount ? ` — ${ecomForwardedCount} STR(s) E-commerce Putaway mein forward ho gayi` : ""}`);
       setActiveTripId(null); setVehicleNumber(""); setDriverName("");
       load();
     } catch (e) { showToast("Ship fail: " + e.message, "err"); }
@@ -11136,13 +11363,17 @@ function StockingLogisticsView({ token, profile, showToast }) {
       {isAdmin && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Destination Master</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Odoo-based exact location names yahan add karein (jaise Ecom, Shaheen, BC, DHA LHR) — STR creation isi list se lock hoti hai.</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Odoo-based exact location names yahan add karein (jaise Ecom, Shaheen, BC, DHA LHR) — STR creation isi list se lock hoti hai. Jo destination E-commerce Warehouse (H/W) ko represent karti hai usay ⭐ mark karein — us destination ki STRs dispatch hote hi E-commerce k Putaway tab mein automatically forward ho jayengi, koi manual GRN/upload nahi lagega.</div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <input style={{ ...S.input, maxWidth: 220 }} placeholder="Naya destination naam" value={newDestName} onChange={e => setNewDestName(e.target.value)} />
             <button style={S.secondaryBtnSm} onClick={addDestination}>+ Add</button>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {destinations.map(d => <span key={d.id} style={S.badgeSm}>{d.name}</span>)}
+            {destinations.map(d => (
+              <span key={d.id} style={{ ...S.badgeSm, cursor: "pointer", ...(d.is_ecommerce_destination ? { color: "#F5A623", borderColor: "#F5A623", fontWeight: 600 } : {}) }} onClick={() => toggleEcommerceDestination(d)} title="Click kar k E-commerce Warehouse link toggle karein">
+                {d.is_ecommerce_destination && "⭐ "}{d.name}
+              </span>
+            ))}
             {!destinations.length && <EmptyNote text="Koi destination abhi tak add nahi hui" />}
           </div>
         </div>
