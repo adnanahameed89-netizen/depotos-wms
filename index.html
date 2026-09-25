@@ -10578,25 +10578,33 @@ function StockingStrView({ token, profile, showToast }) {
   const [strs, setStrs] = useState([]);
   const [staff, setStaff] = useState([]);
   const [warehouseName, setWarehouseName] = useState("Stocking Warehouse");
+  const [priceByBarcode, setPriceByBarcode] = useState({});
   const [loading, setLoading] = useState(true);
   const [editForm, setEditForm] = useState({}); // { [strId]: { strNumber, qty } }
   const [uploading, setUploading] = useState(false);
+  const [focusedDestination, setFocusedDestination] = useState(null);
+  const [generateStrInput, setGenerateStrInput] = useState("");
 
   const load = async () => {
     if (!whId) return;
     setLoading(true);
     try {
-      const [s, staffRows, whRows] = await Promise.all([
+      const [s, staffRows, whRows, priceRows] = await Promise.all([
         sb(`/rest/v1/stk_str?warehouse_id=eq.${whId}&select=*&order=created_at.desc`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${whId}&select=id,full_name`, { token }),
-        sb(`/rest/v1/warehouses?id=eq.${whId}&select=name`, { token })
+        sb(`/rest/v1/warehouses?id=eq.${whId}&select=name`, { token }),
+        sb(`/rest/v1/stk_products?select=internal_barcode,sales_price`, { token })
       ]);
       setStrs(s || []); setStaff(staffRows || []);
       if (whRows?.[0]?.name) setWarehouseName(whRows[0].name);
+      setPriceByBarcode(Object.fromEntries((priceRows || []).map(p => [p.internal_barcode, p.sales_price || 0])));
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
   };
   useEffect(() => { load(); }, [whId]);
+
+  const valueOf = (row) => Number(row.qty || 0) * (priceByBarcode[row.product_barcode] || 0);
+  const fmtCurrency = (n) => "Rs. " + Math.round(n).toLocaleString();
 
   const staffName = (id) => staff.find(s => s.id === id)?.full_name || "—";
 
@@ -10614,12 +10622,14 @@ function StockingStrView({ token, profile, showToast }) {
     if (!group.length) return;
     const first = group[0];
     let rowsHtml = "";
-    let totalQty = 0;
+    let totalQty = 0; let totalValue = 0;
     group.forEach((r, i) => {
       totalQty += Number(r.qty || 0);
-      rowsHtml += `<tr><td>${i + 1}</td><td>${r.product_barcode || "—"}</td><td>${r.product_name}</td><td style="text-align:right">${r.qty}</td></tr>`;
+      const val = valueOf(r);
+      totalValue += val;
+      rowsHtml += `<tr><td>${i + 1}</td><td>${r.product_barcode || "—"}</td><td>${r.product_name}</td><td style="text-align:right">${r.qty}</td><td style="text-align:right">${fmtCurrency(val)}</td></tr>`;
     });
-    const statusLabel = { draft: "Draft — Pending Odoo STR#", reserved: "Reserved — Awaiting Vehicle", dispatched: "Shipped" }[first.status] || first.status;
+    const statusLabel = { draft: "Draft — Pending Odoo STR#", reserved: "Reserved — Awaiting Vehicle", dispatched: "Shipped", received: "Received" }[first.status] || first.status;
     const w = window.open("", "_blank");
     w.document.write(`<html><head><title>STR ${strNumber}</title><style>
       body{font-family:Arial;padding:24px;color:#111;font-size:13px}
@@ -10649,9 +10659,9 @@ function StockingStrView({ token, profile, showToast }) {
         <div><b>Shipped Date:</b> ${first.dispatched_at ? new Date(first.dispatched_at).toLocaleString() : "—"}</div>
       </div>
       <table>
-        <thead><tr><th>Sr</th><th>Barcode</th><th>Product</th><th>STR / Dispatch Qty</th></tr></thead>
+        <thead><tr><th>Sr</th><th>Barcode</th><th>Product</th><th>STR / Dispatch Qty</th><th>Value</th></tr></thead>
         <tbody>${rowsHtml}</tbody>
-        <tfoot><tr><td colspan="3" style="text-align:right">Total</td><td style="text-align:right">${totalQty}</td></tr></tfoot>
+        <tfoot><tr><td colspan="3" style="text-align:right">Total</td><td style="text-align:right">${totalQty}</td><td style="text-align:right">${fmtCurrency(totalValue)}</td></tr></tfoot>
       </table>
       <div class="sign">
         <div>Prepared By</div><div>Checked By</div><div>Approved By</div><div>Dispatched By</div><div>Received By</div>
@@ -10682,46 +10692,26 @@ function StockingStrView({ token, profile, showToast }) {
   // Confirms a WHOLE consolidated group (every draft row sharing one str_number) at once —
   // one Odoo STR# entry covers every product line in it, matching the real-world document
   // where a single STR# always carries multiple products to the same destination.
-  const confirmGroup = async (groupRows, strNumber) => {
+  const [mergeSelected, setMergeSelected] = useState({}); // { [rowId]: true } — selection within the focused destination view
+  // Single action for the whole focused-destination workflow: select any subset of that
+  // destination's still-open lines, type the Odoo STR# once, generate. Whatever's left
+  // unselected stays in the list for another round (a second STR for the same destination).
+  const generateStrFromSelection = async (rows, strNumber) => {
     const trimmed = strNumber.trim();
     if (!trimmed) { showToast("Odoo STR# enter karein", "err"); return; }
+    if (!rows.length) { showToast("Kam se kam ek line select karein", "err"); return; }
     setLoading(true);
     try {
-      for (const row of groupRows) {
+      for (const row of rows) {
         await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: trimmed, status: "reserved", confirmed_by: profile.id, confirmed_at: new Date().toISOString() } });
         if (row.grn_allocation_id) {
           await sb(`/rest/v1/stk_grn_allocations?id=eq.${row.grn_allocation_id}`, { method: "PATCH", token, body: { status: "rtd" } });
         }
       }
-      showToast(`✓ STR ${trimmed} confirm ho gaya — ${groupRows.length} product line(s) is STR mein`);
-      setEditForm(f2 => ({ ...f2, [groupRows[0].str_number]: {} }));
+      showToast(`✓ STR ${trimmed} generate ho gaya — ${rows.length} line(s)`);
+      setMergeSelected({}); setGenerateStrInput("");
       load();
-    } catch (e) { showToast("Confirm fail: " + e.message, "err"); }
-    setLoading(false);
-  };
-
-  const [mergeSelected, setMergeSelected] = useState({}); // { [rowId]: true }
-  // Merges several separately-created drafts (each got its own system reference) into ONE
-  // STR — required whenever one destination is actually getting multiple products on the same
-  // real-world STR document, instead of the Odoo STR# having to be typed in one row at a time.
-  const mergeIntoOne = async () => {
-    const ids = Object.keys(mergeSelected).filter(k => mergeSelected[k]);
-    if (ids.length < 2) { showToast("Kam se kam 2 lines select karein jo consolidate karni hain", "err"); return; }
-    const rows = draftStrs.filter(s => ids.includes(s.id));
-    const destinations = new Set(rows.map(r => r.destination));
-    if (destinations.size > 1) { showToast("Sirf ek hi destination ki lines consolidate ho sakti hain", "err"); return; }
-    setLoading(true);
-    try {
-      // If the "target" row happens to be a legacy record with no reference at all (real null,
-      // not even a system one), generate a fresh system reference instead of merging into null.
-      const targetRef = rows[0].str_number || await nextSysStrRef(token);
-      for (const row of rows) {
-        if (row.str_number !== targetRef) await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: targetRef } });
-      }
-      showToast(`✓ ${rows.length} lines ek STR (${targetRef}) mein consolidate ho gayin`);
-      setMergeSelected({});
-      load();
-    } catch (e) { showToast("Merge fail: " + e.message, "err"); }
+    } catch (e) { showToast("Generate fail: " + e.message, "err"); }
     setLoading(false);
   };
 
@@ -10785,102 +10775,95 @@ function StockingStrView({ token, profile, showToast }) {
         </label>
       </div>
 
-      {tab === "draft" && (
+      {tab === "draft" && !focusedDestination && (
         <div style={S.panel}>
-          <div style={S.panelTitle}>Odoo STR# Add Karein & Confirm Karein</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Kisi destination pe click karein — uski saari lines khud check ho jayengi — phir <strong>"Consolidate"</strong> karein. Ek hi Odoo STR# se poora group tabhi confirm hoga jab woh Odoo STR# type kar chuke hon (bilkul real-world STR document ki tarah, jahan ek STR# k neeche kaafi products hote hain).</div>
+          <div style={S.panelTitle}>Destinations — STR Generate Karne K Liye Select Karein</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain, destination-wise. Kisi destination pe click karein — sirf uski segregated lines khulengi, baki destinations hide ho jayengi.</div>
           {(() => {
-            const destSet = [...new Set(draftStrs.map(s => s.destination))].sort();
-            if (!destSet.length) return null;
+            const destAgg = {};
+            for (const s of draftStrs) {
+              if (!destAgg[s.destination]) destAgg[s.destination] = { lines: 0, qty: 0, value: 0 };
+              destAgg[s.destination].lines += 1;
+              destAgg[s.destination].qty += Number(s.qty || 0);
+              destAgg[s.destination].value += valueOf(s);
+            }
+            const entries = Object.entries(destAgg).sort((a, b) => a[0].localeCompare(b[0]));
+            if (!entries.length) return <EmptyNote text="Koi draft STR pending nahi" />;
             return (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-                <span style={{ fontSize: 11, color: "#8A8272", alignSelf: "center" }}>Quick-select:</span>
-                {destSet.map(dest => (
-                  <button key={dest} style={S.secondaryBtnSm} onClick={() => {
-                    const rowsForDest = draftStrs.filter(s => s.destination === dest);
-                    setMergeSelected(ms => {
-                      const next = { ...ms };
-                      rowsForDest.forEach(r => { next[r.id] = true; });
-                      return next;
-                    });
-                  }}>{dest} ({draftStrs.filter(s => s.destination === dest).length})</button>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+                {entries.map(([dest, agg]) => (
+                  <div key={dest} onClick={() => { setFocusedDestination(dest); setMergeSelected({}); setGenerateStrInput(""); }} style={{ background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 10, padding: 16, cursor: "pointer", transition: "border-color 0.15s" }} onMouseEnter={e => e.currentTarget.style.borderColor = "#F5A623"} onMouseLeave={e => e.currentTarget.style.borderColor = "#EFE8D8"}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#2B2620", marginBottom: 10 }}>{dest}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8A8272", marginBottom: 2 }}><span>SKU Lines</span><span style={{ color: "#2B2620", fontWeight: 600 }}>{agg.lines}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8A8272", marginBottom: 2 }}><span>Total Qty</span><span style={{ color: "#2B2620", fontWeight: 600 }}>{agg.qty}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8A8272" }}><span>Total Value</span><span style={{ color: "#F5A623", fontWeight: 700 }}>{fmtCurrency(agg.value)}</span></div>
+                  </div>
                 ))}
               </div>
             );
           })()}
-          {(() => {
-            const selectedIds = Object.keys(mergeSelected).filter(k => mergeSelected[k]);
-            return selectedIds.length > 0 && (
-              <div style={{ marginBottom: 14, display: "flex", gap: 10, alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: "#6B6355" }}>{selectedIds.length} line(s) selected</span>
-                <button style={S.primaryBtnSm} onClick={mergeIntoOne} disabled={loading || selectedIds.length < 2}>🔗 Consolidate Selected Into One STR</button>
-                <button style={S.secondaryBtnSm} onClick={() => setMergeSelected({})}>Clear Selection</button>
-              </div>
-            );
-          })()}
-          {(() => {
-            const groups = {};
-            for (const s of draftStrs) {
-              // Legacy rows saved before system references existed have a real null str_number
-              // — grouping those together under the literal string "null" mixed unrelated
-              // destinations into one fake group. Each such row now gets its own key (its id)
-              // so it shows alone, with its OWN destination, until deliberately consolidated.
-              const key = s.str_number || `_ungrouped_${s.id}`;
-              if (!groups[key]) groups[key] = [];
-              groups[key].push(s);
-            }
-            const groupEntries = Object.entries(groups);
-            if (!groupEntries.length) return <EmptyNote text="Koi draft STR pending nahi" />;
-            return groupEntries.map(([groupKey, rows]) => {
-              const strNum = rows[0].str_number || "";
-              const isSysRef = strNum.startsWith("SYS-STR-");
-              const hasRealRef = strNum && !isSysRef;
-              const groupTotalQty = rows.reduce((s, r) => s + Number(r.qty || 0), 0);
-              const destinations = [...new Set(rows.map(r => r.destination))];
-              return (
-                <div key={groupKey} style={{ background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 14, marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: hasRealRef ? "#F5A623" : "#8A8272", fontWeight: 600 }}>{strNum || "(koi reference nahi — Odoo STR# neeche add karein)"}</span>
-                      {rows.length > 1 && <span style={{ ...S.badgeSm, marginLeft: 8, color: "#4CAF7D", borderColor: "#4CAF7D" }}>{rows.length} products consolidated</span>}
-                      <div style={{ fontSize: 12, color: "#6B6355", marginTop: 2 }}>Destination: <strong>{destinations.join(", ")}</strong> · Total Qty: {groupTotalQty}</div>
-                    </div>
-                  </div>
-                  <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
-                    <thead><tr><th style={S.th}></th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Destination</th><th style={S.th}>Qty</th></tr></thead>
-                    <tbody>
-                      {rows.map(s => (
-                        <tr key={s.id}>
-                          <td style={S.td}><input type="checkbox" checked={!!mergeSelected[s.id]} onChange={e => setMergeSelected(ms => ({ ...ms, [s.id]: e.target.checked }))} /></td>
-                          <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
-                          <td style={S.td}>{s.product_name}</td>
-                          <td style={S.td}>{s.destination}</td>
-                          <td style={S.td}>{s.qty}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <input style={{ ...S.input, width: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR# (zaroori)" defaultValue={hasRealRef ? strNum : ""} onChange={e => setEditForm(f => ({ ...f, [groupKey]: { strNumber: e.target.value } }))} />
-                    {(() => {
-                      const typedValue = (editForm[groupKey]?.strNumber ?? (hasRealRef ? strNum : "")).trim();
-                      return <button style={S.primaryBtnSm} onClick={() => confirmGroup(rows, typedValue)} disabled={loading || !typedValue}>✓ Create STR ({rows.length} line{rows.length > 1 ? "s" : ""})</button>;
-                    })()}
-                    {hasRealRef && <button style={S.secondaryBtnSm} onClick={() => printStrDoc(strNum)}>🖨</button>}
-                  </div>
-                </div>
-              );
-            });
-          })()}
         </div>
       )}
+
+      {tab === "draft" && focusedDestination && (() => {
+        const rows = draftStrs.filter(s => s.destination === focusedDestination);
+        const selectedIds = Object.keys(mergeSelected).filter(k => mergeSelected[k] && rows.some(r => r.id === k));
+        const selectedRows = rows.filter(r => selectedIds.includes(r.id));
+        const allChecked = rows.length > 0 && selectedIds.length === rows.length;
+        const totalQty = rows.reduce((s, r) => s + Number(r.qty || 0), 0);
+        const totalValue = rows.reduce((s, r) => s + valueOf(r), 0);
+        return (
+          <div style={S.panel}>
+            <button style={{ ...S.secondaryBtnSm, marginBottom: 12 }} onClick={() => { setFocusedDestination(null); setMergeSelected({}); }}>← Back to Destinations</button>
+            <div style={S.panelTitle}>{focusedDestination} — {rows.length} line(s) pending</div>
+            <div style={{ display: "flex", gap: 20, fontSize: 12, color: "#6B6355", marginBottom: 14 }}>
+              <span>Total Qty: <strong style={{ color: "#2B2620" }}>{totalQty}</strong></span>
+              <span>Total Value: <strong style={{ color: "#F5A623" }}>{fmtCurrency(totalValue)}</strong></span>
+            </div>
+            {!rows.length ? (
+              <EmptyNote text="Is destination ki saari lines process ho chuki hain." />
+            ) : (
+              <>
+                <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
+                  <thead><tr>
+                    <th style={S.th}><input type="checkbox" checked={allChecked} onChange={e => {
+                      const checked = e.target.checked;
+                      setMergeSelected(ms => { const next = { ...ms }; rows.forEach(r => { next[r.id] = checked; }); return next; });
+                    }} /></th>
+                    <th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Value</th>
+                  </tr></thead>
+                  <tbody>
+                    {rows.map(s => (
+                      <tr key={s.id}>
+                        <td style={S.td}><input type="checkbox" checked={!!mergeSelected[s.id]} onChange={e => setMergeSelected(ms => ({ ...ms, [s.id]: e.target.checked }))} /></td>
+                        <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
+                        <td style={S.td}>{s.product_name}</td>
+                        <td style={S.td}>{s.qty}</td>
+                        <td style={S.td}>{fmtCurrency(valueOf(s))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 12 }}>
+                  <span style={{ fontSize: 12, color: "#6B6355" }}>{selectedIds.length} line(s) selected</span>
+                  <input style={{ ...S.input, width: 200, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR# (zaroori)" value={generateStrInput} onChange={e => setGenerateStrInput(e.target.value)} />
+                  <button style={S.primaryBtnSm} onClick={() => generateStrFromSelection(selectedRows, generateStrInput)} disabled={loading || !selectedIds.length || !generateStrInput.trim()}>✓ Generate STR ({selectedIds.length} line{selectedIds.length !== 1 ? "s" : ""})</button>
+                </div>
+                <div style={{ fontSize: 11, color: "#8A8272", marginTop: 8 }}>Jitni lines select karein, sab ek hi Odoo STR# mein generate hongi. Baki bachi hui lines yahin rahengi — unke liye alag STR# se dobara generate kar sakte hain.</div>
+              </>
+            )}
+          </div>
+        );
+      })()}
+
+      {tab === "draft" && !draftStrs.length && !focusedDestination && null}
 
       {tab === "reserved" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Reserved — Vehicle Load & Gatepass ab Logistics Tab Se</div>
           <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yeh sirf trail hai. Vehicle assign, load confirm, ship, aur Gatepass generate karne k liye <strong>Stocking Logistics</strong> tab par jayein.</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>STR#</th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Value</th><th style={S.th}>Destination</th><th style={S.th}></th></tr></thead>
             <tbody>
               {reservedStrs.map(s => (
                 <tr key={s.id}>
@@ -10888,11 +10871,12 @@ function StockingStrView({ token, profile, showToast }) {
                   <td style={S.td}>{sourceLabel(s.source)}</td>
                   <td style={S.td}>{s.product_name}</td>
                   <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{fmtCurrency(valueOf(s))}</td>
                   <td style={S.td}>{s.destination}</td>
                   <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => printStrDoc(s.str_number)}>🖨 Print STR</button></td>
                 </tr>
               ))}
-              {!reservedStrs.length && <tr><td style={S.td} colSpan={6}><EmptyNote text="Koi reserved STR nahi mila" /></td></tr>}
+              {!reservedStrs.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Koi reserved STR nahi mila" /></td></tr>}
             </tbody>
           </table>
         </div>
@@ -10902,7 +10886,7 @@ function StockingStrView({ token, profile, showToast }) {
         <div style={S.panel}>
           <div style={S.panelTitle}>Dispatched — Gatepass History</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Destination</th><th style={S.th}>Status</th><th style={S.th}>Dispatched At</th><th style={S.th}></th></tr></thead>
+            <thead><tr><th style={S.th}>Gatepass#</th><th style={S.th}>STR#</th><th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Value</th><th style={S.th}>Destination</th><th style={S.th}>Status</th><th style={S.th}>Dispatched At</th><th style={S.th}></th></tr></thead>
             <tbody>
               {dispatchedStrs.map(s => (
                 <tr key={s.id}>
@@ -10910,13 +10894,14 @@ function StockingStrView({ token, profile, showToast }) {
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{s.str_number}</td>
                   <td style={S.td}>{s.product_name}</td>
                   <td style={S.td}>{s.qty}</td>
+                  <td style={S.td}>{fmtCurrency(valueOf(s))}</td>
                   <td style={S.td}>{s.destination}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: stkStrStageColor(stkStrStage(s)), borderColor: stkStrStageColor(stkStrStage(s)) }}>{stkStrStage(s)}</span></td>
                   <td style={S.td}>{fmtTime(s.dispatched_at)}</td>
                   <td style={S.td}><button style={S.secondaryBtnSm} onClick={() => printStrDoc(s.str_number)}>🖨 Print STR</button></td>
                 </tr>
               ))}
-              {!dispatchedStrs.length && <tr><td style={S.td} colSpan={8}><EmptyNote text="Abhi tak koi dispatch nahi hua" /></td></tr>}
+              {!dispatchedStrs.length && <tr><td style={S.td} colSpan={9}><EmptyNote text="Abhi tak koi dispatch nahi hua" /></td></tr>}
             </tbody>
           </table>
         </div>
