@@ -283,6 +283,50 @@ function App() {
 
   const changeView = (v) => { setView(v); setSidebarOpen(false); };
 
+  // Task notifications: polls this user's unseen notifications every 20s and, on a new one,
+  // beeps + vibrates the device and shows a toast — so a picker/packer whose phone is idle
+  // gets actively alerted the moment a task lands on them, instead of having to keep checking.
+  const notifBeep = useCallback(() => {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        const ctx = new AC();
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = "sine"; o.frequency.value = 880;
+        g.gain.setValueAtTime(0.25, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        o.start(); o.stop(ctx.currentTime + 0.5);
+      }
+    } catch (e) { /* audio not available — vibration/toast still fire */ }
+    try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (e) { /* not supported */ }
+  }, []);
+
+  const seenNotifIds = React.useRef(new Set());
+  const notifPrimed = React.useRef(false);
+  useEffect(() => {
+    if (!session || !profile) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const rows = await sb(`/rest/v1/notifications?user_id=eq.${profile.id}&seen=eq.false&select=*&order=created_at.desc&limit=10`, { token: session.token });
+        if (cancelled || !rows) return;
+        // First poll after login only records what already exists (no beep for old ones);
+        // subsequent polls beep for anything genuinely new.
+        const fresh = rows.filter(r => !seenNotifIds.current.has(r.id));
+        for (const r of rows) seenNotifIds.current.add(r.id);
+        if (notifPrimed.current && fresh.length) {
+          notifBeep();
+          showToast(`🔔 ${fresh[0].message}${fresh.length > 1 ? ` (+${fresh.length - 1} aur)` : ""}`);
+        }
+        notifPrimed.current = true;
+      } catch (e) { /* notifications table may not exist yet — silently ignore */ }
+    };
+    poll();
+    const interval = setInterval(poll, 20000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [session, profile, notifBeep]);
+
   const showToast = (msg, kind = "ok") => {
     setToast({ msg, kind, id: uid() });
     setTimeout(() => setToast(null), 2800);
@@ -3377,8 +3421,21 @@ function InventoryView({ token, profile, showToast }) {
         if (!newAssignee) { showToast("Kisi staff member ko assign karein", "err"); setStartingCount(false); return; }
         let resolvedScopeValue = newScopeValue;
         if (newScopeType === "bin") {
-          const match = Object.values(bins).find(b => (b.code || "").toLowerCase() === newScopeValue.trim().toLowerCase());
-          if (!match) { showToast(`Bin "${newScopeValue}" nahi mila — sahi code type karein`, "err"); setStartingCount(false); return; }
+          // Flexible bin match: normalise away spaces, dashes and case on BOTH sides so
+          // "A-2-5", "a 2 5", "A25" all resolve to the same stored bin — the strict exact-code
+          // match was the reason a genuinely-existing bin like A-2-5 was being rejected.
+          const norm = (s) => (s || "").toLowerCase().replace(/[\s\-_]/g, "");
+          const typed = norm(newScopeValue);
+          let match = Object.values(bins).find(b => norm(b.code) === typed);
+          if (!match) {
+            // fall back to a "starts with / contains" hint so the user sees close matches
+            const near = Object.values(bins).filter(b => norm(b.code).includes(typed) || typed.includes(norm(b.code))).slice(0, 5);
+            if (near.length === 1) { match = near[0]; }
+            else {
+              showToast(near.length ? `Bin "${newScopeValue}" exact match nahi hua. Shayad: ${near.map(b => b.code).join(", ")}` : `Bin "${newScopeValue}" nahi mila — sahi code type karein`, "err");
+              setStartingCount(false); return;
+            }
+          }
           resolvedScopeValue = match.id;
         } else if (newScopeType === "aisle") {
           if (!allAisles.includes(newScopeValue.trim().toUpperCase())) { showToast(`Aisle "${newScopeValue}" nahi mila`, "err"); setStartingCount(false); return; }
@@ -4484,6 +4541,7 @@ function OrdersView({ token, profile, showToast, setView }) {
         await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "reserved_and_assigned_to_tote" } });
       }
       const toteNumber = totes.find(t => t.id === bulkToteId)?.tote_number || "";
+      await notifyUser(token, bulkPickerId, `Nayi picking assign hui — ${toteNumber} (${okOrders.length} orders)`, { tote_id: bulkToteId });
       setLastAssignedTote({ toteId: bulkToteId, toteNumber, orders: assignedSummary });
       showToast(`${okOrders.length} orders assigned${shortOrders.length ? `, ${shortOrders.length} 'Incomplete' tab mein chale gaye (stock short)` : ""}`);
       setSelectedOrders({}); setBulkToteId(""); setBulkPickerId("");
@@ -5392,6 +5450,7 @@ function PickingView({ token, profile, showToast }) {
       }
       const toteNumber = totes.find(t => t.id === selectedToteId)?.tote_number;
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: selectedToteId, user_id: profile.id, action: "assigned", metadata: { orders: ids.length, assigned_to: toteAssignPicker } } });
+      await notifyUser(token, toteAssignPicker, `Nayi picking assign hui — ${toteNumber} (${ids.length} orders)`, { tote_id: selectedToteId });
       setLastAssignedTote({ toteId: selectedToteId, toteNumber, orders: assignedSummary });
       showToast(`${toteNumber} assigned with ${ids.length} orders`);
       setSelectedForTote({}); setToteAssignPicker(""); setSelectedToteId(""); load();
@@ -5414,7 +5473,16 @@ function PickingView({ token, profile, showToast }) {
       }
     }
     for (const g of Object.values(groups)) g.refs.sort((a, b) => (a.toteBin || 99) - (b.toteBin || 99));
-    const list = Object.values(groups).sort((a, b) => (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz"));
+    // Pick-path intelligence: visit the bin holding the MOST units for this run first, so the
+    // picker grabs the biggest quantity in one stop and minimises back-and-forth walking. Bins
+    // with equal remaining qty fall back to bin-code order (which follows the physical aisle
+    // layout), keeping the walk orderly within each qty tier.
+    const list = Object.values(groups).sort((a, b) => {
+      const remA = a.required - a.scanned;
+      const remB = b.required - b.scanned;
+      if (remB !== remA) return remB - remA;
+      return (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz");
+    });
     setConsolidated(list);
     setLastScannedProduct(null);
     setLastScanInfo(null);
@@ -5762,9 +5830,37 @@ function PickingView({ token, profile, showToast }) {
               </div>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{activeGroup.scanned} / {activeGroup.required}</div>
             </div>
+            {/* Per-order split at THIS bin: the picker grabs the full bin quantity in one stop,
+                then this table tells them exactly how many pcs go into each order's tote-bin —
+                the core of smart batch picking (one walk, distribute across orders). */}
+            <div style={{ marginTop: 14, background: "#FFFDF8", border: "1px solid #EFE8D8", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ padding: "8px 12px", background: "#F5EEDD", fontSize: 11, letterSpacing: 0.5, color: "#6B6355", fontWeight: 600 }}>IS BIN SE — KIS ORDER KO KITNE PCS RAKHNE HAIN</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>
+                  <th style={{ ...S.th, fontSize: 10 }}>Order</th>
+                  <th style={{ ...S.th, fontSize: 10 }}>Tote Bin</th>
+                  <th style={{ ...S.th, fontSize: 10, textAlign: "right" }}>Pcs Rakhein</th>
+                  <th style={{ ...S.th, fontSize: 10, textAlign: "right" }}>Done</th>
+                </tr></thead>
+                <tbody>
+                  {activeGroup.refs.map((r, i) => {
+                    const done = r.allocated >= r.qty_required;
+                    const isNext = nextRef && r.line_id === nextRef.line_id;
+                    return (
+                      <tr key={r.line_id} style={{ background: isNext ? "#FFF7E8" : "transparent" }}>
+                        <td style={{ ...S.td, fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }}>{isNext && "→ "}{orders[r.order_id]?.external_order_id || "—"}</td>
+                        <td style={{ ...S.td }}><span style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 18, fontWeight: 700, color: isNext ? "#A6472F" : "#6B6355" }}>#{r.toteBin || "?"}</span></td>
+                        <td style={{ ...S.td, textAlign: "right", fontSize: 16, fontWeight: 700, color: "#2B2620" }}>{r.qty_required}</td>
+                        <td style={{ ...S.td, textAlign: "right", fontSize: 13, color: done ? "#4CAF7D" : "#8A8272" }}>{done ? "✓" : `${r.allocated}/${r.qty_required}`}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
             {nextRef && (
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, padding: "10px 14px", background: "#FFF7E8", borderRadius: 8, border: "1px dashed #F5A623" }}>
-                <span style={{ color: "#6B6355", fontSize: 12 }}>Scan karte hi rakhna hai → Order {nextOrder?.external_order_id}</span>
+                <span style={{ color: "#6B6355", fontSize: 12 }}>Agla scan → Order {nextOrder?.external_order_id} k liye {nextRef.qty_required - nextRef.allocated} pcs</span>
                 <div style={{ textAlign: "right" }}>
                   <div style={{ color: "#8A8272", fontSize: 9, letterSpacing: 1 }}>TOTE BIN</div>
                   <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#A6472F" }}>#{nextRef.toteBin || "?"}</div>
@@ -8060,6 +8156,14 @@ async function nextSysStrRef(token) {
   if (rows && rows[0]?.str_number) { const m = String(rows[0].str_number).match(/(\d+)$/); if (m) n = parseInt(m[1], 10); }
   return `SYS-STR-${String(n + 1).padStart(6, "0")}`;
 }
+// Fire-and-forget task notification: inserts one row per recipient. The App-level poller each
+// user runs turns these into a beep + vibration + toast. Best-effort — never blocks the caller.
+async function notifyUser(token, userId, message, meta) {
+  if (!userId) return;
+  try {
+    await sb(`/rest/v1/notifications`, { method: "POST", token, body: { user_id: userId, message, metadata: meta || null } });
+  } catch (e) { /* notifications table optional — ignore if absent */ }
+}
 async function lookupProductByCode(token, code) {
   const c = cleanCode(code);
   if (!c) return null;
@@ -8438,6 +8542,7 @@ function ToteMasterView({ token, profile, showToast }) {
       });
       await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, field_changed: "assigned_to", old_value: prevPacker, new_value: profiles[f.packerId]?.full_name || f.packerId, reason: f.reason || "Reassigned via Tote Master", changed_by: profile.id } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "reassigned", metadata: { previous: prevPacker, new: profiles[f.packerId]?.full_name, status: newStatus } } });
+      await notifyUser(token, f.packerId, `Tote ${tote.tote_number} aap ko reassign hui hai`, { tote_id: tote.id });
       showToast(`✓ ${tote.tote_number} — ${profiles[f.packerId]?.full_name} ko reassign ho gaya (status: ${newStatus})`);
       setReassignForm(rf => ({ ...rf, [tote.id]: {} }));
       load();
@@ -12480,8 +12585,16 @@ function StockingInventoryView({ token, profile, showToast }) {
         openCycleCount(parent[0]);
       } else {
         if (!newBinCode.trim() || !newAssignee) { showToast("Bin code aur staff select karein", "err"); setStartingCount(false); return; }
-        const bin = bins.find(b => (b.code || "").toLowerCase() === newBinCode.trim().toLowerCase());
-        if (!bin) { showToast(`Bin "${newBinCode}" nahi mila — list se select karein`, "err"); setStartingCount(false); return; }
+        // Flexible bin match — normalise spaces/dashes/case so "A-2-5", "a 2 5", "A25" all
+        // resolve to the same stored bin instead of failing an over-strict exact match.
+        const norm = (s) => (s || "").toLowerCase().replace(/[\s\-_]/g, "");
+        const typed = norm(newBinCode);
+        let bin = bins.find(b => norm(b.code) === typed);
+        if (!bin) {
+          const near = bins.filter(b => norm(b.code).includes(typed) || typed.includes(norm(b.code))).slice(0, 5);
+          if (near.length === 1) { bin = near[0]; }
+          else { showToast(near.length ? `Bin "${newBinCode}" exact match nahi hua. Shayad: ${near.map(b => b.code).join(", ")}` : `Bin "${newBinCode}" nahi mila — list se select karein`, "err"); setStartingCount(false); return; }
+        }
         const cc = await createBinCountWithLines(bin.id, newAssignee, null);
         if (!cc) { showToast("Is bin mein koi stock nahi hai", "err"); setStartingCount(false); return; }
         showToast(`✅ Cycle count assign ho gayi ${staff.find(s => s.id === newAssignee)?.full_name || ""} ko`);
