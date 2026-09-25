@@ -8385,10 +8385,24 @@ function ToteMasterView({ token, profile, showToast }) {
     const counts = {};
     if (toteIds.length) {
       const CHUNK = 100;
+      // Only count as "orphaned/stuck" the tasks whose ORDER is genuinely still mid-flow —
+      // a pick_task stays "picked" even after dispatch, so we must cross-check the order's
+      // real status, otherwise already-shipped orders would show as stuck.
+      const RESETTABLE = ["picking", "incomplete", "queued"];
       for (let i = 0; i < toteIds.length; i += CHUNK) {
         const chunk = toteIds.slice(i, i + CHUNK);
-        const pts = await sb(`/rest/v1/pick_tasks?tote_id=in.(${chunk.join(",")})&status=eq.picked&select=tote_id`, { token });
-        for (const p of pts || []) counts[p.tote_id] = (counts[p.tote_id] || 0) + 1;
+        const pts = await sb(`/rest/v1/pick_tasks?tote_id=in.(${chunk.join(",")})&status=eq.picked&select=tote_id,order_id`, { token });
+        const orderIds = [...new Set((pts || []).map(p => p.order_id))];
+        const statusById = {};
+        for (let j = 0; j < orderIds.length; j += CHUNK) {
+          const oc = orderIds.slice(j, j + CHUNK);
+          if (!oc.length) continue;
+          const ords = await sb(`/rest/v1/sales_orders?id=in.(${oc.join(",")})&select=id,status`, { token });
+          for (const o of ords || []) statusById[o.id] = o.status;
+        }
+        for (const p of pts || []) {
+          if (RESETTABLE.includes(statusById[p.order_id])) counts[p.tote_id] = (counts[p.tote_id] || 0) + 1;
+        }
       }
     }
     setPickedCountByTote(counts);
@@ -8452,40 +8466,60 @@ function ToteMasterView({ token, profile, showToast }) {
   // "received" so it can be picked fresh. Only ever run this once you've confirmed those orders
   // aren't genuinely mid-flow elsewhere — it assumes the caller has already verified that.
   const resetOrphanedTote = async (tote) => {
-    const count = pickedCountByTote[tote.id] || 0;
-    if (!window.confirm(`${tote.tote_number} — ${count} stuck order(s) ko COMPLETELY reset kar diya jayega: reserved inventory reverse hogi, purane pick tasks delete honge, aur woh orders "Received" status par wapas chale jayenge (dobara pick karne k liye). Yeh action undo nahi ho sakta. Confirm karein?`)) return;
     setResetting(tote.id);
     try {
       const pts = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&status=eq.picked&select=*`, { token });
-      const taskIds = (pts || []).map(t => t.id);
-      const orderIds = [...new Set((pts || []).map(t => t.order_id))];
-      if (taskIds.length) {
-        const CHUNK = 100;
-        for (let i = 0; i < taskIds.length; i += CHUNK) {
-          const chunk = taskIds.slice(i, i + CHUNK);
-          const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})&select=*`, { token });
-          for (const l of lines || []) {
-            if (Number(l.qty_picked || 0) > 0) {
-              try { await adjustReserved(token, profile.warehouse_id, l.product_id, -Number(l.qty_picked)); } catch (e) { /* best-effort — proceed with cleanup regardless */ }
-            }
+      const candidateOrderIds = [...new Set((pts || []).map(t => t.order_id))];
+      if (!candidateOrderIds.length) { showToast("Is tote par koi stuck task nahi mila", "err"); setResetting(null); return; }
+
+      // CRITICAL GUARD: a pick_task's status stays "picked" forever, even after the order ships
+      // — so filtering on that alone would sweep in ALREADY-DISPATCHED orders and wrongly send
+      // them back to "received" (duplicate processing + fake inventory). Reset ONLY orders that
+      // are genuinely still stuck mid-flow; anything that has moved on (rtd/scanned/dispatched/
+      // handed_over/split) is deliberately left completely untouched.
+      const RESETTABLE = ["picking", "incomplete", "queued"];
+      const orderRows = [];
+      const CHUNK = 100;
+      for (let i = 0; i < candidateOrderIds.length; i += CHUNK) {
+        const chunk = candidateOrderIds.slice(i, i + CHUNK);
+        const rows = await sb(`/rest/v1/sales_orders?id=in.(${chunk.join(",")})&select=id,status,external_order_id`, { token });
+        orderRows.push(...(rows || []));
+      }
+      const resettableOrderIds = orderRows.filter(o => RESETTABLE.includes(o.status)).map(o => o.id);
+      const skipped = orderRows.filter(o => !RESETTABLE.includes(o.status));
+
+      if (!resettableOrderIds.length) {
+        showToast(`Is tote k saare orders aage barh chuke hain (dispatched/RTD waghera) — koi reset nahi hua. Tote ko sirf free kiya ja raha hai.`, "err");
+        await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, last_reassign_reason: "Cleared — all orders already progressed, nothing to reset", last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
+        load(); setResetting(null); return;
+      }
+
+      const skipMsg = skipped.length ? ` ${skipped.length} order(s) (jo already dispatched/RTD the) ko SAFELY chhod diya jayega.` : "";
+      if (!window.confirm(`${tote.tote_number} — sirf ${resettableOrderIds.length} genuinely-stuck order(s) reset honge (Received par wapas).${skipMsg} Reserved inventory reverse hogi aur purane pick tasks delete honge. Undo nahi ho sakta. Confirm karein?`)) { setResetting(null); return; }
+
+      // Only touch pick_tasks whose order is in the resettable set.
+      const resettableTaskIds = (pts || []).filter(t => resettableOrderIds.includes(t.order_id)).map(t => t.id);
+      for (let i = 0; i < resettableTaskIds.length; i += CHUNK) {
+        const chunk = resettableTaskIds.slice(i, i + CHUNK);
+        const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})&select=*`, { token });
+        for (const l of lines || []) {
+          if (Number(l.qty_picked || 0) > 0) {
+            try { await adjustReserved(token, profile.warehouse_id, l.product_id, -Number(l.qty_picked)); } catch (e) { /* best-effort — proceed with cleanup regardless */ }
           }
-          await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-          await sb(`/rest/v1/pick_tasks?id=in.(${chunk.join(",")})`, { method: "DELETE", token });
         }
+        await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
+        await sb(`/rest/v1/pick_tasks?id=in.(${chunk.join(",")})`, { method: "DELETE", token });
       }
-      if (orderIds.length) {
-        const CHUNK = 100;
-        for (let i = 0; i < orderIds.length; i += CHUNK) {
-          const chunk = orderIds.slice(i, i + CHUNK);
-          await sb(`/rest/v1/pack_tasks?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-          await sb(`/rest/v1/order_shortage_lines?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-          await sb(`/rest/v1/incomplete_holds?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token }).catch(() => {});
-          await sb(`/rest/v1/sales_orders?id=in.(${chunk.join(",")})`, { method: "PATCH", token, body: { status: "received" } });
-        }
+      for (let i = 0; i < resettableOrderIds.length; i += CHUNK) {
+        const chunk = resettableOrderIds.slice(i, i + CHUNK);
+        await sb(`/rest/v1/pack_tasks?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
+        await sb(`/rest/v1/order_shortage_lines?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
+        await sb(`/rest/v1/incomplete_holds?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token }).catch(() => {});
+        await sb(`/rest/v1/sales_orders?id=in.(${chunk.join(",")})`, { method: "PATCH", token, body: { status: "received" } });
       }
-      await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, last_reassign_reason: `Full reset — ${orderIds.length} stuck order(s) cleared`, last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "full_reset", metadata: { order_count: orderIds.length, order_ids: orderIds } } });
-      showToast(`✅ ${tote.tote_number} — ${orderIds.length} order(s) poori tarah reset ho gaye, tote clean hai`);
+      await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, last_reassign_reason: `Full reset — ${resettableOrderIds.length} stuck order(s) cleared, ${skipped.length} progressed order(s) skipped`, last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "full_reset", metadata: { reset_order_ids: resettableOrderIds, skipped_order_ids: skipped.map(o => o.id) } } });
+      showToast(`✅ ${tote.tote_number} — ${resettableOrderIds.length} stuck order(s) reset ho gaye${skipped.length ? `, ${skipped.length} already-dispatched order(s) safely chhode gaye` : ""}`);
       load();
     } catch (e) { showToast("Reset failed: " + e.message, "err"); }
     setResetting(null);
