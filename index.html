@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Mughal Fulfillment Warehouse</title>
+<title>Habitt Warehouse</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
@@ -1100,7 +1100,7 @@ function DashboardView({ token, profile, setView, showToast }) {
     <div>
       <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>MUGHAL FULFILLMENT WAREHOUSE</div>
+          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>HABITT WAREHOUSE</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -2968,6 +2968,8 @@ function PutawayView({ token, profile, showToast }) {
   const [matchedBinId, setMatchedBinId] = useState("");
   const [shortageOpen, setShortageOpen] = useState(false);
   const [shortageQty, setShortageQty] = useState("");
+  const [rpoType, setRpoType] = useState("short");
+  const [rpoNote, setRpoNote] = useState("");
   const putawayMode = profile.putaway_mode || "bulk";
   const isPieceMode = putawayMode === "piece";
 
@@ -3069,7 +3071,9 @@ function PutawayView({ token, profile, showToast }) {
   const reportShortage = async () => {
     const qty = Number(shortageQty);
     if (!matchedTask) return;
-    if (!qty || qty <= 0 || qty > matchedRemaining) { showToast(`Valid short qty (1 se ${matchedRemaining} tak) enter karein`, "err"); return; }
+    if (!qty || qty <= 0 || qty > matchedRemaining) { showToast(`Valid qty (1 se ${matchedRemaining} tak) enter karein`, "err"); return; }
+    const reasonMap = { short: "Physically not received", dmg: "Damaged", mnf: "Manufacturing fault", wrong: "Wrong item" };
+    const reason = (reasonMap[rpoType] || "Exception") + (rpoNote.trim() ? ` — ${rpoNote.trim()}` : "");
     try {
       const existingRpos = await sb(`/rest/v1/rtv_returns?rpo_number=not.is.null&select=rpo_number`, { token });
       let maxSerial = 0;
@@ -3078,7 +3082,7 @@ function PutawayView({ token, profile, showToast }) {
         if (m) maxSerial = Math.max(maxSerial, parseInt(m[1], 10));
       }
       const rpoNumber = `RPO-${String(maxSerial + 1).padStart(5, "0")}`;
-      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, reason: "Physically not received", created_by: profile.id, rpo_number: rpoNumber, status: "pending", grn_adjusted: true } });
+      await sb(`/rest/v1/rtv_returns`, { method: "POST", token, body: { grn_line_id: matchedTask.grn_line_id, product_id: matchedTask.product_id, expected_qty: matchedTask.qty, short_qty: qty, exception_type: rpoType, reason, created_by: profile.id, rpo_number: rpoNumber, status: "pending", grn_adjusted: true } });
       const newRequired = matchedTask.qty - qty;
       const done = (matchedTask.qty_completed || 0) >= newRequired;
       await sb(`/rest/v1/putaway_tasks?id=eq.${matchedTask.id}`, {
@@ -3095,11 +3099,11 @@ function PutawayView({ token, profile, showToast }) {
           await sb(`/rest/v1/grn_lines?id=eq.${matchedTask.grn_line_id}`, { method: "PATCH", token, body: { qty_expected: newExpected, qty_received: Math.min(gl.qty_received, newExpected) } });
         }
       }
-      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rtv_reported", metadata: { short_qty: qty, rpo_number: rpoNumber } } });
-      showToast(`${rpoNumber} created — ${qty} pcs recorded`);
-      setMatchedTaskId(null); setShortageOpen(false); setShortageQty("");
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "putaway_task", entity_id: matchedTask.id, user_id: profile.id, action: "rpo_reported", metadata: { qty, type: rpoType, rpo_number: rpoNumber } } });
+      showToast(`${rpoNumber} created — ${qty} pcs ${(rpoType || "").toUpperCase()} RPO pe transfer ho gaye (Admin/Lead return karega)`);
+      setMatchedTaskId(null); setShortageOpen(false); setShortageQty(""); setRpoNote(""); setRpoType("short");
       load();
-    } catch (e) { showToast("RTV report failed", "err"); }
+    } catch (e) { showToast("RPO transfer failed: " + (e.message || "").slice(0, 80), "err"); }
   };
 
   const UnassignedCard = ({ t }) => {
@@ -3187,13 +3191,20 @@ function PutawayView({ token, profile, showToast }) {
 
           <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
             {!isPieceMode && <button style={S.primaryBtnSm} onClick={confirmPutaway}>✓ Confirm put away</button>}
-            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Physical item nahi mila (RTV)</button>
+            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setShortageOpen(!shortageOpen)}>⚠ Damage / Short → RPO</button>
             <button style={S.secondaryBtnSm} onClick={() => { setMatchedTaskId(null); setMatchedBinId(""); setShortageOpen(false); }}>Cancel</button>
           </div>
           {shortageOpen && (
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, width: 140 }} placeholder={`Short qty (max ${matchedRemaining})`} value={shortageQty} onChange={e => setShortageQty(e.target.value)} />
-              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={reportShortage}>Report RTV</button>
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center", background: "#FFF9EE", border: "1px solid #F5A623", borderRadius: 8, padding: 10 }}>
+              <select style={{ ...S.input, width: 150 }} value={rpoType} onChange={e => setRpoType(e.target.value)}>
+                <option value="short">Short (physical)</option>
+                <option value="dmg">Damage</option>
+                <option value="mnf">MNF</option>
+                <option value="wrong">Wrong Item</option>
+              </select>
+              <input type="number" min={1} max={matchedRemaining} style={{ ...S.input, width: 130 }} placeholder={`Qty (max ${matchedRemaining})`} value={shortageQty} onChange={e => setShortageQty(e.target.value)} />
+              <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Note / reason (optional)" value={rpoNote} onChange={e => setRpoNote(e.target.value)} />
+              <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={reportShortage}>→ Transfer to RPO</button>
             </div>
           )}
         </div>
@@ -5473,16 +5484,14 @@ function PickingView({ token, profile, showToast }) {
       }
     }
     for (const g of Object.values(groups)) g.refs.sort((a, b) => (a.toteBin || 99) - (b.toteBin || 99));
-    // Pick-path intelligence: visit the bin holding the MOST units for this run first, so the
-    // picker grabs the biggest quantity in one stop and minimises back-and-forth walking. Bins
-    // with equal remaining qty fall back to bin-code order (which follows the physical aisle
-    // layout), keeping the walk orderly within each qty tier.
-    const list = Object.values(groups).sort((a, b) => {
-      const remA = a.required - a.scanned;
-      const remB = b.required - b.scanned;
-      if (remB !== remA) return remB - remA;
-      return (bins[a.bin_id]?.code || "zzz").localeCompare(bins[b.bin_id]?.code || "zzz");
-    });
+    // Pick-path = physical aisle walk order: strictly follow bin-code sequence (A-aisle fully,
+    // then B, then C … out to the last pallet), so the picker moves in ONE continuous direction
+    // across the floor instead of jumping between aisles. Bin codes are compared alphanumerically
+    // (numeric-aware) so A-2-5 sorts before A-10-1, matching how bins are physically numbered.
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    const list = Object.values(groups).sort((a, b) =>
+      collator.compare(bins[a.bin_id]?.code || "zzz", bins[b.bin_id]?.code || "zzz")
+    );
     setConsolidated(list);
     setLastScannedProduct(null);
     setLastScanInfo(null);
@@ -7219,6 +7228,7 @@ function ReturnsView({ token, profile, showToast }) {
   const [products, setProducts] = useState({});
   const [orders, setOrders] = useState([]);
   const [orderScanInput, setOrderScanInput] = useState("");
+  const [returnOrderIdInput, setReturnOrderIdInput] = useState("");
   const [openReturn, setOpenReturn] = useState(null);
   const [openLines, setOpenLines] = useState([]);
   const [matchedOrder, setMatchedOrder] = useState(null);
@@ -7314,8 +7324,10 @@ function ReturnsView({ token, profile, showToast }) {
 
   const scanOrderTracking = async (codeArg) => {
     const code = (codeArg !== undefined ? codeArg : orderScanInput).trim();
-    setOrderScanInput("");
+    const orderIdEntered = returnOrderIdInput.trim();
     if (!code) return;
+    if (!orderIdEntered) { showToast("Order ID daalna zaroori hai — iske bina return start nahi hoga", "err"); return; }
+    setOrderScanInput("");
 
     // Lock: one tracking number can only ever have one return record
     const existingReturn = returns.find(r => r.tracking_number === code);
@@ -7325,7 +7337,8 @@ function ReturnsView({ token, profile, showToast }) {
       return;
     }
 
-    const order = orders.find(o => o.external_order_id === code);
+    // Match on the Order ID the officer typed (mandatory), falling back to tracking match.
+    const order = orders.find(o => o.external_order_id === orderIdEntered) || orders.find(o => o.external_order_id === code);
     let courierGuess = order?.courier || "Other";
     let courierInfo = null;
 
@@ -7362,7 +7375,7 @@ function ReturnsView({ token, profile, showToast }) {
     try {
       const created = await sb(`/rest/v1/returns`, {
         method: "POST", token, prefer: "return=representation",
-        body: { order_id: order ? order.id : null, courier: courierGuess, status: "pending", tracking_number: code, received_by: profile.id, origin_city: order?.delivery_city || courierInfo?.cityName || null }
+        body: { order_id: order ? order.id : null, order_id_entered: orderIdEntered, courier: courierGuess, status: "pending", tracking_number: code, received_by: profile.id, origin_city: order?.delivery_city || courierInfo?.cityName || null }
       });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "return", entity_id: created[0].id, user_id: profile.id, action: "created", metadata: { tracking: code, courier_info: courierInfo } } });
       if (order) {
@@ -7373,6 +7386,7 @@ function ReturnsView({ token, profile, showToast }) {
         showToast("Order database mein nahi mila, courier se bhi detail nahi mili — phir bhi return record ban gaya, items scan karein");
       }
       load();
+      setReturnOrderIdInput("");
       setMatchedOrder(order || null);
       loadOriginalOrderLines(order?.id);
       setOpenLines([]);
@@ -7728,10 +7742,13 @@ function ReturnsView({ token, profile, showToast }) {
       )}
       <div style={S.panel}>
         <div style={S.panelTitle}>Scan order tracking number — return received from courier</div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type tracking number, then Enter"
+        <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 10 }}>Order ID daalna zaroori hai — iske bina return line generate nahi hogi. Agar yeh tracking isi app se dispatch hui thi, to us order ki item-wise detail neeche khud aa jayegi (uske against return qty add karein).</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <input autoFocus style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace", minWidth: 200 }} placeholder="Scan or type tracking number"
             value={orderScanInput} onChange={e => setOrderScanInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanOrderTracking()} />
-          <CameraScanButton onScan={(text) => scanOrderTracking(text)} />
+          <input style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace", minWidth: 180 }} placeholder="Order ID (zaroori)"
+            value={returnOrderIdInput} onChange={e => setReturnOrderIdInput(e.target.value)} onKeyDown={e => e.key === "Enter" && scanOrderTracking()} />
+          <CameraScanButton onScan={(text) => setOrderScanInput(text)} />
           <button style={S.primaryBtnSm} onClick={() => scanOrderTracking()}>Start Return</button>
         </div>
       </div>
@@ -10710,7 +10727,7 @@ function StockingRtvView({ token, profile, showToast }) {
         .sign div{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:12px}
       </style></head><body>
         <div class="header">
-          <div><div class="brand">MUGHAL FULFILLMENT WAREHOUSE</div><div class="gp-title">RTV Handover — Sign-off Sheet</div></div>
+          <div><div class="brand">HABITT WAREHOUSE</div><div class="gp-title">RTV Handover — Sign-off Sheet</div></div>
         </div>
         <div class="meta-grid">
           <div><span>Supplier:</span> ${activeRows[0]?.supplier || "—"}</div>
@@ -10949,8 +10966,36 @@ function StockingOutboundView({ token, profile, showToast }) {
   const [loading, setLoading] = useState(false);
   const [allocForm, setAllocForm] = useState({}); // { [queueId]: { qty, destination, strRef } }
   const [binChoice, setBinChoice] = useState({}); // { [queueId]: binId }
+  const [rpoForm, setRpoForm] = useState({}); // { [queueId]: { show, type, qty, note } }
   const [assignChoice, setAssignChoice] = useState({}); // { [dcId]: userId }
   const [destinations, setDestinations] = useState([]);
+
+  // Putaway officer found some of the remaining qty damaged/short — move exactly that qty into
+  // the RTV (return-to-vendor) queue instead of putting it on the shelf. It stays "pending"
+  // there (so this DC/line shows Partial) until Admin/Warehouse Lead actually returns it, at
+  // which point it leaves inventory for good; it never becomes sellable stock in the meantime.
+  const transferToRpo = async (q) => {
+    const f = rpoForm[q.id] || {};
+    const qty = Number(f.qty || 0);
+    const type = f.type || "dmg";
+    if (!qty || qty <= 0 || qty > Number(q.qty)) { showToast(`Valid qty daalein (max ${q.qty})`, "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_rtv_queue`, { method: "POST", token, body: { warehouse_id: whId, dc_id: q.dc_id, po_id: q.po_id, product_barcode: q.product_barcode, product_name: q.product_name, qty, exception_type: type, note: (f.note || "").trim() || null, status: "pending", source_stage: "putaway", reported_by: profile.id } });
+      const remaining = Number(q.qty) - qty;
+      if (remaining > 0) {
+        await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: remaining } });
+      } else {
+        await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: 0, status: "rtv_transferred" } });
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "stk_putaway_queue", entity_id: q.id, user_id: profile.id, action: "putaway_rtv_transfer", metadata: { qty, type } } });
+      showToast(`${qty} pcs — ${type.toUpperCase()} RTV queue mein transfer ho gaye (Admin/Lead return karega)`);
+      setRpoForm(rf => ({ ...rf, [q.id]: {} }));
+      load();
+    } catch (e) { showToast("RTV transfer fail: " + e.message, "err"); }
+    setLoading(false);
+  };
+
 
   const load = async () => {
     if (!whId) return;
@@ -11098,7 +11143,8 @@ function StockingOutboundView({ token, profile, showToast }) {
             <thead><tr>{profile.role !== "putaway_officer" && <th style={S.th}>Assigned To</th>}<th style={S.th}>Product</th><th style={S.th}>Qty</th><th style={S.th}>Bin</th><th style={S.th}></th></tr></thead>
             <tbody>
               {myWorkQueue.map(q => (
-                <tr key={q.id}>
+                <React.Fragment key={q.id}>
+                <tr>
                   {profile.role !== "putaway_officer" && <td style={S.td}>{officerName(q.assigned_to)}</td>}
                   <td style={S.td}>{q.product_name}</td>
                   <td style={S.td}>{q.qty}</td>
@@ -11109,8 +11155,29 @@ function StockingOutboundView({ token, profile, showToast }) {
                     </datalist>
                     <CameraScanButton onScan={(text) => setBinChoice(bc => ({ ...bc, [q.id]: text }))} />
                   </td>
-                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => completePutaway(q)} disabled={loading}>✓ Putaway Complete</button></td>
+                  <td style={S.td}>
+                    <button style={S.primaryBtnSm} onClick={() => completePutaway(q)} disabled={loading}>✓ Putaway Complete</button>
+                    <button style={{ ...S.secondaryBtnSm, marginLeft: 6, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => setRpoForm(rf => ({ ...rf, [q.id]: { ...(rf[q.id] || {}), show: !(rf[q.id]?.show) } }))}>⚠ Damage/Short → RTV</button>
+                  </td>
                 </tr>
+                {rpoForm[q.id]?.show && (
+                  <tr>
+                    <td style={{ ...S.td, background: "#FFF9EE" }} colSpan={profile.role !== "putaway_officer" ? 5 : 4}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <select style={{ ...S.input, width: 130 }} value={rpoForm[q.id]?.type || "dmg"} onChange={e => setRpoForm(rf => ({ ...rf, [q.id]: { ...rf[q.id], type: e.target.value } }))}>
+                          <option value="dmg">Damage</option>
+                          <option value="short">Short (physical)</option>
+                          <option value="mnf">MNF</option>
+                          <option value="wrong">Wrong Item</option>
+                        </select>
+                        <input type="number" min={1} max={q.qty} style={{ ...S.input, width: 90 }} placeholder={`Qty (max ${q.qty})`} value={rpoForm[q.id]?.qty || ""} onChange={e => setRpoForm(rf => ({ ...rf, [q.id]: { ...rf[q.id], qty: e.target.value } }))} />
+                        <input style={{ ...S.input, flex: 1, minWidth: 160 }} placeholder="Note / reason (optional)" value={rpoForm[q.id]?.note || ""} onChange={e => setRpoForm(rf => ({ ...rf, [q.id]: { ...rf[q.id], note: e.target.value } }))} />
+                        <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={() => transferToRpo(q)} disabled={loading}>Transfer to RTV</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
               {!myWorkQueue.length && <tr><td style={S.td} colSpan={profile.role !== "putaway_officer" ? 5 : 4}><EmptyNote text="Koi qty putaway k liye pending nahi" /></td></tr>}
             </tbody>
