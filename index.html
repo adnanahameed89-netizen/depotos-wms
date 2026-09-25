@@ -3273,11 +3273,36 @@ function InventoryView({ token, profile, showToast }) {
   // Full transaction trail for a product — where its PNA-HOLD/cycle-count movements came from
   // and went to, who did it, and when. Pulled from audit_trail, same pattern used for the
   // Sales Order detail timeline.
+  const [trailReservedOrders, setTrailReservedOrders] = useState([]);
   const openTrail = async (productId) => {
-    setTrailProductId(productId); setTrailLoading(true); setTrailData([]);
+    setTrailProductId(productId); setTrailLoading(true); setTrailData([]); setTrailReservedOrders([]);
     try {
       const rows = await sb(`/rest/v1/audit_trail?entity_type=eq.inventory&entity_id=eq.${productId}&select=*&order=changed_at.desc`, { token });
       setTrailData(rows || []);
+
+      // Reconciliation view: every pick_task_line reserving this product right now, traced
+      // back to the order that's holding it — this is what "reserved (product-wide)" couldn't
+      // show before: WHICH orders, and how much each.
+      const ptLines = await sb(`/rest/v1/pick_task_lines?product_id=eq.${productId}&select=*`, { token });
+      const taskIds = [...new Set((ptLines || []).map(l => l.pick_task_id))];
+      if (taskIds.length) {
+        const tasks = await sb(`/rest/v1/pick_tasks?id=in.(${taskIds.join(",")})&status=not.in.(completed,cancelled)&select=*`, { token });
+        const activeTaskIds = new Set((tasks || []).map(t => t.id));
+        const orderIds = [...new Set((tasks || []).map(t => t.order_id))];
+        const ordersRows = orderIds.length ? await sb(`/rest/v1/sales_orders?id=in.(${orderIds.join(",")})&select=id,external_order_id,status`, { token }) : [];
+        const orderMap = Object.fromEntries((ordersRows || []).map(o => [o.id, o]));
+        const taskToOrder = Object.fromEntries((tasks || []).map(t => [t.id, t.order_id]));
+        const byOrder = {};
+        for (const l of ptLines || []) {
+          if (!activeTaskIds.has(l.pick_task_id)) continue;
+          const orderId = taskToOrder[l.pick_task_id];
+          const order = orderMap[orderId];
+          if (!order) continue;
+          if (!byOrder[orderId]) byOrder[orderId] = { order, qty: 0 };
+          byOrder[orderId].qty += Number(l.qty_required || 0);
+        }
+        setTrailReservedOrders(Object.values(byOrder));
+      }
     } catch (e) { showToast("Trail load fail: " + e.message, "err"); }
     setTrailLoading(false);
   };
@@ -3864,6 +3889,25 @@ function InventoryView({ token, profile, showToast }) {
                 <div style={{ fontWeight: 600, fontSize: 13 }}>🔍 Transaction Trail — {products[trailProductId]?.barcode} ({products[trailProductId]?.name})</div>
                 <button style={S.secondaryBtnSm} onClick={() => setTrailProductId(null)}>✕ Close</button>
               </div>
+              {!trailLoading && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 6 }}>Reserved By — {trailReservedOrders.length} order(s)</div>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr><th style={S.th}>Order #</th><th style={S.th}>Status</th><th style={S.th}>Qty Reserved</th></tr></thead>
+                    <tbody>
+                      {trailReservedOrders.map(({ order, qty }) => (
+                        <tr key={order.id}>
+                          <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{order.external_order_id}</td>
+                          <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[order.status] || "#5B9EE8", borderColor: STATUS_COLORS[order.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[order.status] || order.status}</span></td>
+                          <td style={S.td}>{qty}</td>
+                        </tr>
+                      ))}
+                      {!trailReservedOrders.length && <tr><td colSpan={3}><EmptyNote text="Is product par abhi koi order active reservation nahi rakhta." /></td></tr>}
+                    </tbody>
+                  </table>
+                  <div style={{ fontSize: 11, color: "#8A8272", marginTop: 6 }}>Reserved qty ka total: {trailReservedOrders.reduce((s, r) => s + r.qty, 0)} — is se product-wide "reserved" figure reconcile ki ja sakti hai.</div>
+                </div>
+              )}
               {trailLoading ? <EmptyNote text="Loading..." /> : (
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead><tr><th style={S.th}>When</th><th style={S.th}>Event</th><th style={S.th}>From → To</th><th style={S.th}>By</th></tr></thead>
@@ -4595,6 +4639,50 @@ function OrdersView({ token, profile, showToast, setView }) {
     } catch (e) { showToast("Reserve failed", "err"); }
   };
 
+  // The gap this closes: an order that went "Incomplete" for a shortage never gets re-checked
+  // automatically once Putaway replenishes that stock — it just sits there until someone
+  // manually edits its quantities. This re-runs the same availability check reserveAndQueue
+  // does, and only actually reserves + queues it for picking if stock now genuinely covers it.
+  const retryReservation = async (order) => {
+    try {
+      const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token });
+      const summaries = [];
+      let anyShort = false;
+      for (const l of lines) {
+        const summary = await getStockSummary(token, profile.warehouse_id, l.product_id);
+        summaries.push({ line: l, summary });
+        if (summary.available < l.qty) anyShort = true;
+      }
+      await sb(`/rest/v1/order_shortage_lines?order_id=eq.${order.id}`, { method: "DELETE", token });
+      if (anyShort) {
+        for (const { line, summary } of summaries) {
+          const notAvail = Math.max(0, line.qty - summary.available);
+          if (notAvail > 0) {
+            await sb(`/rest/v1/order_shortage_lines`, { method: "POST", token, body: { order_id: order.id, product_id: line.product_id, qty_required: line.qty, qty_available: summary.available, not_available_qty: notAvail } });
+          }
+        }
+        showToast("Abhi bhi stock kam hai — order Incomplete hi rahega", "err");
+        load();
+        return;
+      }
+      const lineAllocations = {};
+      for (const { line, summary } of summaries) {
+        lineAllocations[line.product_id] = allocateAcrossBins(summary.rows, line.qty);
+        await adjustReserved(token, profile.warehouse_id, line.product_id, line.qty);
+      }
+      const pt = await sb(`/rest/v1/pick_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: order.id, status: "queued" } });
+      for (const { line } of summaries) {
+        for (const alloc of lineAllocations[line.product_id]) {
+          await sb(`/rest/v1/pick_task_lines`, { method: "POST", token, body: { pick_task_id: pt[0].id, product_id: line.product_id, qty_required: alloc.qty, bin_id: alloc.bin_id } });
+        }
+      }
+      await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "queued" } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, user_id: profile.id, action: "retried_and_queued" } });
+      showToast(`✅ ${order.external_order_id} — stock ab poora hai, order Queued for Pick mein wapas aa gaya`);
+      load();
+    } catch (e) { showToast("Retry failed: " + e.message, "err"); }
+  };
+
   const openOrderDetail = async (order) => {
     const [lines, events, shortages, pickTasks, packTasks, loadSheets, audits] = await Promise.all([
       sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}&select=*`, { token }),
@@ -5119,6 +5207,9 @@ function OrdersView({ token, profile, showToast, setView }) {
                   <td style={S.td}>
                     {o.status === "received" && (
                       <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve only</button>
+                    )}
+                    {o.status === "incomplete" && (
+                      <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={(e) => { e.stopPropagation(); retryReservation(o); }}>🔄 Retry Reservation</button>
                     )}
                   </td>
                 </tr>
