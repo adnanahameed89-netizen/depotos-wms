@@ -10712,9 +10712,11 @@ function StockingStrView({ token, profile, showToast }) {
     if (destinations.size > 1) { showToast("Sirf ek hi destination ki lines consolidate ho sakti hain", "err"); return; }
     setLoading(true);
     try {
-      const targetRef = rows[0].str_number;
-      for (const row of rows.slice(1)) {
-        await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: targetRef } });
+      // If the "target" row happens to be a legacy record with no reference at all (real null,
+      // not even a system one), generate a fresh system reference instead of merging into null.
+      const targetRef = rows[0].str_number || await nextSysStrRef(token);
+      for (const row of rows) {
+        if (row.str_number !== targetRef) await sb(`/rest/v1/stk_str?id=eq.${row.id}`, { method: "PATCH", token, body: { str_number: targetRef } });
       }
       showToast(`✓ ${rows.length} lines ek STR (${targetRef}) mein consolidate ho gayin`);
       setMergeSelected({});
@@ -10786,7 +10788,26 @@ function StockingStrView({ token, profile, showToast }) {
       {tab === "draft" && (
         <div style={S.panel}>
           <div style={S.panelTitle}>Odoo STR# Add Karein & Confirm Karein</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Ek destination ki multiple products wali lines ko neeche checkbox se select kar k <strong>"Consolidate"</strong> karein — phir ek hi Odoo STR# se poora group confirm ho jayega (bilkul real-world STR document ki tarah, jahan ek STR# k neeche kaafi products hote hain).</div>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Yahan GRN-distribution se aayi drafts aur bulk-uploaded Customer Order/Weekly Demand dono milte hain. Kisi destination pe click karein — uski saari lines khud check ho jayengi — phir <strong>"Consolidate"</strong> karein. Ek hi Odoo STR# se poora group tabhi confirm hoga jab woh Odoo STR# type kar chuke hon (bilkul real-world STR document ki tarah, jahan ek STR# k neeche kaafi products hote hain).</div>
+          {(() => {
+            const destSet = [...new Set(draftStrs.map(s => s.destination))].sort();
+            if (!destSet.length) return null;
+            return (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                <span style={{ fontSize: 11, color: "#8A8272", alignSelf: "center" }}>Quick-select:</span>
+                {destSet.map(dest => (
+                  <button key={dest} style={S.secondaryBtnSm} onClick={() => {
+                    const rowsForDest = draftStrs.filter(s => s.destination === dest);
+                    setMergeSelected(ms => {
+                      const next = { ...ms };
+                      rowsForDest.forEach(r => { next[r.id] = true; });
+                      return next;
+                    });
+                  }}>{dest} ({draftStrs.filter(s => s.destination === dest).length})</button>
+                ))}
+              </div>
+            );
+          })()}
           {(() => {
             const selectedIds = Object.keys(mergeSelected).filter(k => mergeSelected[k]);
             return selectedIds.length > 0 && (
@@ -10799,38 +10820,53 @@ function StockingStrView({ token, profile, showToast }) {
           })()}
           {(() => {
             const groups = {};
-            for (const s of draftStrs) { if (!groups[s.str_number]) groups[s.str_number] = []; groups[s.str_number].push(s); }
+            for (const s of draftStrs) {
+              // Legacy rows saved before system references existed have a real null str_number
+              // — grouping those together under the literal string "null" mixed unrelated
+              // destinations into one fake group. Each such row now gets its own key (its id)
+              // so it shows alone, with its OWN destination, until deliberately consolidated.
+              const key = s.str_number || `_ungrouped_${s.id}`;
+              if (!groups[key]) groups[key] = [];
+              groups[key].push(s);
+            }
             const groupEntries = Object.entries(groups);
             if (!groupEntries.length) return <EmptyNote text="Koi draft STR pending nahi" />;
-            return groupEntries.map(([strNum, rows]) => {
+            return groupEntries.map(([groupKey, rows]) => {
+              const strNum = rows[0].str_number || "";
               const isSysRef = strNum.startsWith("SYS-STR-");
+              const hasRealRef = strNum && !isSysRef;
               const groupTotalQty = rows.reduce((s, r) => s + Number(r.qty || 0), 0);
+              const destinations = [...new Set(rows.map(r => r.destination))];
               return (
-                <div key={strNum} style={{ background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                <div key={groupKey} style={{ background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 14, marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
                     <div>
-                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: isSysRef ? "#8A8272" : "#F5A623", fontWeight: 600 }}>{strNum}</span>
+                      <span style={{ fontFamily: "'IBM Plex Mono', monospace", color: hasRealRef ? "#F5A623" : "#8A8272", fontWeight: 600 }}>{strNum || "(koi reference nahi — Odoo STR# neeche add karein)"}</span>
                       {rows.length > 1 && <span style={{ ...S.badgeSm, marginLeft: 8, color: "#4CAF7D", borderColor: "#4CAF7D" }}>{rows.length} products consolidated</span>}
-                      <div style={{ fontSize: 12, color: "#6B6355", marginTop: 2 }}>Destination: <strong>{rows[0].destination}</strong> · Total Qty: {groupTotalQty}</div>
+                      <div style={{ fontSize: 12, color: "#6B6355", marginTop: 2 }}>Destination: <strong>{destinations.join(", ")}</strong> · Total Qty: {groupTotalQty}</div>
                     </div>
                   </div>
                   <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 10 }}>
-                    <thead><tr><th style={S.th}></th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Qty</th></tr></thead>
+                    <thead><tr><th style={S.th}></th><th style={S.th}>Source</th><th style={S.th}>Product</th><th style={S.th}>Destination</th><th style={S.th}>Qty</th></tr></thead>
                     <tbody>
                       {rows.map(s => (
                         <tr key={s.id}>
                           <td style={S.td}><input type="checkbox" checked={!!mergeSelected[s.id]} onChange={e => setMergeSelected(ms => ({ ...ms, [s.id]: e.target.checked }))} /></td>
                           <td style={S.td}><span style={{ ...S.badgeSm, color: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8", borderColor: s.source === "grn_distribution" ? "#F5A623" : "#5B9EE8" }}>{sourceLabel(s.source)}</span>{s.customer_order_ref && <div style={{ fontSize: 10, color: "#8A8272", marginTop: 2 }}>{s.customer_order_ref}</div>}</td>
                           <td style={S.td}>{s.product_name}</td>
+                          <td style={S.td}>{s.destination}</td>
                           <td style={S.td}>{s.qty}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <input style={{ ...S.input, width: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR#" defaultValue={isSysRef ? "" : strNum} onChange={e => setEditForm(f => ({ ...f, [strNum]: { strNumber: e.target.value } }))} />
-                    <button style={S.primaryBtnSm} onClick={() => confirmGroup(rows, editForm[strNum]?.strNumber ?? (isSysRef ? "" : strNum))} disabled={loading}>✓ Create STR ({rows.length} line{rows.length > 1 ? "s" : ""})</button>
-                    <button style={S.secondaryBtnSm} onClick={() => printStrDoc(strNum)}>🖨</button>
+                    <input style={{ ...S.input, width: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Odoo STR# (zaroori)" defaultValue={hasRealRef ? strNum : ""} onChange={e => setEditForm(f => ({ ...f, [groupKey]: { strNumber: e.target.value } }))} />
+                    {(() => {
+                      const typedValue = (editForm[groupKey]?.strNumber ?? (hasRealRef ? strNum : "")).trim();
+                      return <button style={S.primaryBtnSm} onClick={() => confirmGroup(rows, typedValue)} disabled={loading || !typedValue}>✓ Create STR ({rows.length} line{rows.length > 1 ? "s" : ""})</button>;
+                    })()}
+                    {hasRealRef && <button style={S.secondaryBtnSm} onClick={() => printStrDoc(strNum)}>🖨</button>}
                   </div>
                 </div>
               );
