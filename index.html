@@ -235,9 +235,9 @@ function isMnp(courierText) {
 }
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
-const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D" };
+const STATUS_COLORS = { received: "#6B6355", queued: "#5B9EE8", picking: "#5B9EE8", picked: "#5B9EE8", packing: "#F5A623", packed: "#F5A623", rtd: "#B084F5", dispatched: "#4CAF7D", open: "#6B6355", completed: "#4CAF7D", incomplete: "#E5484D", split_hold: "#B084F5", split: "#8A8272" };
 const ROLE_LABEL_GLOBAL = { admin: "Admin", warehouse_lead: "Warehouse Lead", supervisor: "Supervisor", picker: "Picker", packer: "Packer", putaway_officer: "Inbound Officer", dispatcher: "Dispatcher", returns_agent: "Returns Agent" };
-const ORDER_STATUS_LABEL = { received: "New", queued: "Queued", picking: "Picked", packed: "Packed", rtd: "RTD (Packed)", scanned: "Scanned", dispatched: "Dispatched", handed_over: "Handed Over", incomplete: "Incomplete" };
+const ORDER_STATUS_LABEL = { received: "New", queued: "Queued", picking: "Picked", packed: "Packed", rtd: "RTD (Packed)", scanned: "Scanned", dispatched: "Dispatched", handed_over: "Handed Over", incomplete: "Incomplete", split_hold: "Split Hold", split: "Split (closed)" };
 const isBulkTote = (tote) => !!(tote && tote.tote_number && tote.tote_number.toLowerCase().includes("bulk"));
 const NORMAL_TOTE_MAX = 15;
 const fmtTime = (iso) => iso ? new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -3044,6 +3044,7 @@ function PutawayView({ token, profile, showToast }) {
   }, [load]);
 
   const grnNumberFor = (task) => {
+    if (task.source_order_id) return `RESTOCK${task.return_reason ? ` (${task.return_reason})` : ""}`;
     if (task.source_str_id) {
       const str = sourceStrs[task.source_str_id];
       return str ? `STR-${str.str_number}` : "STR-?";
@@ -3086,7 +3087,21 @@ function PutawayView({ token, profile, showToast }) {
 
   const commitPutaway = async (task, binId, qty) => {
     try {
-      await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty, { type: "putaway", userId: profile.id });
+      // Return-to-Stock task (from a reset/incomplete/split-reduced order): the picked item's
+      // on_hand was NEVER deducted (only dispatch deducts), so it is still counted at its
+      // source bin. Putting it away is therefore a MOVE (source → scanned bin), never an add —
+      // adding would double-count stock.
+      if (task.source_bin_id) {
+        if (task.source_bin_id !== binId) {
+          await addOnHand(token, profile.warehouse_id, task.product_id, task.source_bin_id, -qty, { type: "restock_move", userId: profile.id });
+          await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty, { type: "restock_move", userId: profile.id });
+        }
+      } else if (task.source_order_id) {
+        // Restock task whose source bin is unknown: the unit is still counted in on_hand at
+        // some original bin, so we must NOT add it again. Only the physical return is recorded.
+      } else {
+        await addOnHand(token, profile.warehouse_id, task.product_id, binId, qty, { type: "putaway", userId: profile.id });
+      }
       const newCompleted = (task.qty_completed || 0) + qty;
       const done = newCompleted >= task.qty;
       const isFirstCommit = !(task.qty_completed > 0) && !task.started_at;
@@ -4822,6 +4837,30 @@ function OrdersView({ token, profile, showToast, setView }) {
   // NEVER re-create a whole new pick task (that would ask the picker to re-pick everything
   // already done); it reopens the SAME pick_task and only touches the still-short line(s),
   // leaving qty_picked on the already-fulfilled lines exactly as it is.
+  // Admin/Lead: give up on an Incomplete order for now — every already-picked unit goes to a
+  // Restock putaway task (traceable, assignable), reservation is released, order → Received.
+  const resetIncompleteToStock = async (order) => {
+    if (!window.confirm(`${order.external_order_id} reset karein? Jo items pick ho chuke hain woh Restock putaway mein jayenge aur order "Received" par wapas chala jayega.`)) return;
+    try {
+      const r = await returnPickedToStock(token, profile.warehouse_id, order.id, profile.id, "Incomplete reset");
+      if (!r.ok) { showToast(r.msg, "err"); return; }
+      showToast(`♻ ${r.externalId} reset — ${r.restockUnits} pcs Restock putaway mein`);
+      load();
+    } catch (e) { showToast("Reset fail: " + e.message, "err"); }
+  };
+
+  const resetAllIncomplete = async () => {
+    const inc = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.incomplete&select=id,external_order_id`, { token });
+    if (!inc || !inc.length) { showToast("Koi Incomplete order nahi", "err"); return; }
+    if (!window.confirm(`${inc.length} Incomplete orders reset karein? Saare picked items Restock putaway mein jayenge.`)) return;
+    let ok = 0, units = 0, fail = 0;
+    for (const o of inc) {
+      try { const r = await returnPickedToStock(token, profile.warehouse_id, o.id, profile.id, "Bulk incomplete reset"); if (r.ok) { ok++; units += r.restockUnits; } else fail++; } catch (e) { fail++; }
+    }
+    showToast(`♻ ${ok} orders reset, ${units} pcs Restock putaway mein${fail ? `, ${fail} skip` : ""}`);
+    load();
+  };
+
   const retryReservation = async (order) => {
     try {
       const existingTasks = await sb(`/rest/v1/pick_tasks?order_id=eq.${order.id}&select=*&order=id.desc&limit=1`, { token });
@@ -5268,7 +5307,8 @@ function OrdersView({ token, profile, showToast, setView }) {
           { key: "picking", label: "Picked", color: "#5B9EE8", icon: "🚶" },
           { key: "rtd", label: "Packed / RTD", color: "#B084F5", icon: "📦" },
           { key: "dispatched", label: "Dispatched", color: "#4CAF7D", icon: "🚚" },
-          { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" }
+          { key: "incomplete", label: "Incomplete", color: "#E5484D", icon: "⚠" },
+          { key: "split_hold", label: "Split Hold", color: "#B084F5", icon: "✂" }
         ];
         const counts = Object.fromEntries(STAGES.map(s => [s.key, orders.filter(o => s.key === "dispatched" ? ["dispatched", "handed_over"].includes(o.status) : o.status === s.key).length]));
         const returnInTransitOrders = orders.filter(o => ["0002", "0006", "0007"].includes(o.courier_status_code) && !returnedOrderIds.has(o.id));
@@ -5320,6 +5360,14 @@ function OrdersView({ token, profile, showToast, setView }) {
             }} style={{ ...S.pill, ...(skuFilter === "multi" ? { background: "#5B9EE8", color: "#1A1206", borderColor: "#5B9EE8" } : {}) }}>Multi-SKU ({multiCount})</button>
           </div>
           <div style={{ color: "#8A8272", fontSize: 11, marginTop: 8 }}>Single-SKU ya Multi-SKU pe click karte hi woh saare orders automatically select ho jate hain — neeche seedha "Assign" kar sakte hain bulk mein, alag-alag tick karne ki zaroorat nahi.</div>
+        </div>
+      )}
+
+      {statusFilter === "incomplete" && ["admin", "warehouse_lead"].includes(profile.role) && (
+        <div style={{ ...S.panel, border: "1px solid #E5484D", background: "#FFF8F8" }}>
+          <div style={S.panelTitle}>Incomplete Orders — Resolution</div>
+          <div style={{ fontSize: 12, color: "#6B6355", marginBottom: 10 }}>Har order pe: <strong>🔄 Retry</strong> (stock aa gaya ho to sirf missing item dobara pick hoga) ya <strong>♻ Reset → Restock</strong> (picked items wapas putaway, order Received). Neeche wala button saare Incomplete orders ek saath reset karta hai.</div>
+          <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={resetAllIncomplete}>♻ Reset ALL Incomplete → Restock</button>
         </div>
       )}
 
@@ -5445,7 +5493,10 @@ function OrdersView({ token, profile, showToast, setView }) {
                       <button style={S.secondaryBtnSm} onClick={(e) => { e.stopPropagation(); reserveAndQueue(o); }}>Reserve only</button>
                     )}
                     {o.status === "incomplete" && (
-                      <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={(e) => { e.stopPropagation(); retryReservation(o); }}>🔄 Retry Reservation</button>
+                      <>
+                        <button style={{ ...S.secondaryBtnSm, color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={(e) => { e.stopPropagation(); retryReservation(o); }}>🔄 Retry</button>
+                        {["admin", "warehouse_lead"].includes(profile.role) && <button style={{ ...S.secondaryBtnSm, marginLeft: 6, color: "#E5484D", borderColor: "#E5484D" }} onClick={(e) => { e.stopPropagation(); resetIncompleteToStock(o); }}>♻ Reset → Restock</button>}
+                      </>
                     )}
                   </td>
                 </tr>
@@ -5628,31 +5679,32 @@ function PickingView({ token, profile, showToast }) {
     if (!task) return true;
     if (completedOrderIds[orderId]) return true;
     try {
+      // Order of operations matters: the pick_task is marked "picked" LAST. Previously it was
+      // marked first, so any later failure (e.g. pack_task insert error) made the order vanish
+      // from the picker's list while never reaching the packer — the "stuck / missing" bug.
       const lines = taskLines[task.id] || [];
       for (const l of lines) {
         const st = lineStatus[l.id];
         await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: st ? st.allocated : 0 } });
       }
-      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-      // Idempotent on retry: don't create a second pack_task if a REAL one already exists —
-      // but an earlier is_incomplete_transfer task (from before this order was Incomplete)
-      // doesn't count, since that one was only ever for handing off partial stock, not packing.
-      const existingPackTask = await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&is_incomplete_transfer=eq.false&select=id`, { token });
-      if (!existingPackTask || existingPackTask.length === 0) {
+      // 1) Guarantee exactly one live pack_task (no dependency on optional columns).
+      const livePack = await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&status=in.(pending,labeled)&select=id,is_incomplete_transfer`, { token }).catch(() => null);
+      const realLive = (livePack || []).filter(p => !p.is_incomplete_transfer);
+      if (!realLive.length) {
         await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: openTote.id } });
       }
-      // If the packer never got around to transferring the earlier incomplete_transfer task
-      // (still pending), it's now moot — the order has a real pack_task instead, so retire it.
-      try {
-        await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&is_incomplete_transfer=eq.true&status=eq.pending`, { method: "PATCH", token, body: { status: "superseded" } });
-      } catch (e) { /* best-effort cleanup */ }
-      // Any Incomplete-Hold stock for this order is now back in play (the packer will retrieve
-      // it from the Incomplete-Hold bin alongside the newly topped-up item) — mark it resolved
-      // for record-keeping.
-      try {
-        await sb(`/rest/v1/incomplete_holds?order_id=eq.${orderId}&resolved=eq.false`, { method: "PATCH", token, body: { resolved: true, resolved_at: new Date().toISOString() } });
-      } catch (e) { /* best-effort bookkeeping */ }
+      for (const p of (livePack || []).filter(p => p.is_incomplete_transfer)) {
+        try { await sb(`/rest/v1/pack_tasks?id=eq.${p.id}&status=eq.pending`, { method: "PATCH", token, body: { status: "superseded" } }); } catch (e) {}
+      }
+      try { await sb(`/rest/v1/incomplete_holds?order_id=eq.${orderId}&resolved=eq.false`, { method: "PATCH", token, body: { resolved: true, resolved_at: new Date().toISOString() } }); } catch (e) {}
+      // 2) Physically picked units leave their bins into PACK-STAGING (atomic, once only).
+      for (const l of lines) {
+        const st = lineStatus[l.id];
+        if (st && st.allocated > 0) await stagePickedLine(token, profile.warehouse_id, l, st.allocated, profile.id);
+      }
       await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "picking" } });
+      // 3) Only now close the pick task.
+      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "completed" } });
       setCompletedOrderIds(prev => ({ ...prev, [orderId]: true }));
       const order = orders[orderId];
@@ -5660,7 +5712,7 @@ function PickingView({ token, profile, showToast }) {
       return true;
     } catch (e) {
       const order = orders[orderId];
-      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed`, "err");
+      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed: ${(e.message || "").slice(0, 80)}`, "err");
       return false;
     }
   };
@@ -5681,15 +5733,20 @@ function PickingView({ token, profile, showToast }) {
         const st = lineStatus[l.id];
         await sb(`/rest/v1/pick_task_lines?id=eq.${l.id}`, { method: "PATCH", token, body: { qty_picked: st ? st.allocated : 0 } });
       }
-      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
-      await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "incomplete" } });
       const anyPicked = lines.some(l => Number(lineStatus[l.id]?.allocated || 0) > 0);
       if (anyPicked) {
-        const existingPackTask = await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&select=id`, { token });
+        const existingPackTask = await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}&status=in.(pending,labeled)&select=id`, { token });
         if (!existingPackTask || existingPackTask.length === 0) {
           await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: openTote.id, is_incomplete_transfer: true } });
         }
+        // Picked units of an incomplete order are physically in the tote too → PACK-STAGING.
+        for (const l of lines) {
+          const st = lineStatus[l.id];
+          if (st && st.allocated > 0) await stagePickedLine(token, profile.warehouse_id, l, st.allocated, profile.id);
+        }
       }
+      await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "incomplete" } });
+      await sb(`/rest/v1/pick_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pick_task", entity_id: task.id, user_id: profile.id, action: "completed_with_shortage_incomplete" } });
       setCompletedOrderIds(prev => ({ ...prev, [orderId]: true }));
       const order = orders[orderId];
@@ -6435,18 +6492,28 @@ function PackingView({ token, profile, showToast }) {
 
   const completePacking = async () => {
     const order = orders[openTask.order_id];
+    // Order must still be in the packing stage (not split-hold / reset / incomplete).
+    const fresh = await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}&select=status`, { token });
+    if (fresh?.[0]?.status !== "picking") {
+      showToast(`⛔ Order ab "${fresh?.[0]?.status || "?"}" status mein hai — isay pack/RTD nahi kiya ja sakta`, "err");
+      setOpenTask(null); load(); return;
+    }
     const labelNumber = `LBL-${order.external_order_id}-${Date.now().toString().slice(-5)}`;
-    await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, {
-      method: "PATCH", token,
+    // ATOMIC CLAIM: pending → labeled only if still pending. A second click / second packer
+    // gets nothing back and is stopped — no duplicate label, no double RTD.
+    const claimed = await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}&status=eq.pending`, {
+      method: "PATCH", token, prefer: "return=representation",
       body: { status: "labeled", scans: JSON.stringify(scans), label_number: labelNumber, assigned_to: profile.id, completed_at: new Date().toISOString() }
     });
+    if (!claimed || !claimed.length) { showToast("⛔ Yeh order pehle hi pack ho chuka hai", "err"); setOpenTask(null); load(); return; }
     await sb(`/rest/v1/sales_orders?id=eq.${openTask.order_id}`, { method: "PATCH", token, body: { status: "rtd" } });
     await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "pack_task", entity_id: openTask.id, user_id: profile.id, action: "labeled", metadata: { label_number: labelNumber } } });
     showToast(`Packed & labeled: ${labelNumber}`);
 
     if (openTask.tote_id) {
-      const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=*`, { token });
-      if (!remaining || remaining.length === 0) {
+      const remaining = await sb(`/rest/v1/pack_tasks?tote_id=eq.${openTask.tote_id}&status=eq.pending&select=id`, { token });
+      const stillPicking = await sb(`/rest/v1/pick_tasks?tote_id=eq.${openTask.tote_id}&status=neq.picked&select=id`, { token });
+      if ((!remaining || remaining.length === 0) && (!stillPicking || stillPicking.length === 0)) {
         await sb(`/rest/v1/totes?id=eq.${openTask.tote_id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, completed_at: new Date().toISOString() } });
         showToast("Tote fully packed — all orders RTD, trolley ab dobara available hai");
         setOpenTask(null); setOpenTote(null); load();
@@ -6482,9 +6549,17 @@ function PackingView({ token, profile, showToast }) {
         holdBin = created[0];
       }
 
+      // Atomic claim: only one transfer per pack_task, ever (blocks double-click / two devices).
+      const claim = await sb(`/rest/v1/pack_tasks?id=eq.${task.id}&status=eq.pending`, { method: "PATCH", token, prefer: "return=representation", body: { status: "transferred" } });
+      if (!claim || !claim.length) { showToast("Yeh transfer pehle hi ho chuka hai", "err"); setTransferring(false); setOpenTask(null); load(); return; }
+      const stagingBin = await getSpecialBin(token, profile.warehouse_id, STAGING_BIN_CODE);
       for (const l of pickedLines) {
-        await addOnHand(token, profile.warehouse_id, l.product_id, l.bin_id, -Number(l.qty_picked), { type: "incomplete_transfer", userId: profile.id });
-        await addOnHand(token, profile.warehouse_id, l.product_id, holdBin.id, Number(l.qty_picked), { type: "incomplete_transfer", userId: profile.id });
+        const fromBin = Number(l.staged_qty || 0) > 0 ? stagingBin.id : l.bin_id;
+        const q = Math.min(Number(l.qty_picked), await binOnHand(token, profile.warehouse_id, l.product_id, fromBin));
+        if (q > 0) {
+          await addOnHand(token, profile.warehouse_id, l.product_id, fromBin, -q, { type: "incomplete_transfer", userId: profile.id });
+          await addOnHand(token, profile.warehouse_id, l.product_id, holdBin.id, q, { type: "incomplete_transfer", userId: profile.id });
+        }
         await sb(`/rest/v1/incomplete_holds`, { method: "POST", token, body: { order_id: task.order_id, product_id: l.product_id, qty: l.qty_picked, bin_id: holdBin.id, held_by: profile.id } });
       }
       await sb(`/rest/v1/pack_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "transferred" } });
@@ -6504,9 +6579,15 @@ function PackingView({ token, profile, showToast }) {
     try {
       const existing = await sb(`/rest/v1/tracking_split_requests?order_id=eq.${task.order_id}&status=eq.pending&select=id`, { token });
       if (existing && existing.length) { showToast("Is order ka split request pehle se pending hai", "err"); setSplitRequesting(false); return; }
+      if (!window.confirm(`${order?.external_order_id || ""} ko Tracking Split k liye Admin/Lead ko bhejna hai? Yeh order aap ki packing list se hat jayega jab tak Admin/Lead split ya wapas nahi bhejte.`)) { setSplitRequesting(false); return; }
       await sb(`/rest/v1/tracking_split_requests`, { method: "POST", token, body: { order_id: task.order_id, requested_by: profile.id } });
+      // SPLIT HOLD: take the order OUT of the packing flow so it can't be packed and slip to RTD
+      // while the split is pending (that is exactly how a mistakenly-forwarded order ended up RTD).
+      await sb(`/rest/v1/pack_tasks?id=eq.${task.id}`, { method: "PATCH", token, body: { status: "split_hold" } });
+      await sb(`/rest/v1/sales_orders?id=eq.${task.order_id}`, { method: "PATCH", token, body: { status: "split_hold" } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: task.order_id, user_id: profile.id, action: "tracking_split_requested" } });
-      showToast(`✂ ${order?.external_order_id || ""} — Tracking Split request Admin/Warehouse Lead ko bhej diya`);
+      showToast(`✂ ${order?.external_order_id || ""} — Split Hold par chala gaya, Admin/Lead ko bhej diya`);
+      setOpenTask(null); load();
     } catch (e) { showToast("Request fail: " + e.message, "err"); }
     setSplitRequesting(false);
   };
@@ -6762,16 +6843,22 @@ function DispatchView({ token, profile, showToast }) {
     if (ls.handover_status === "handed_over") { showToast("Yeh load sheet already handover ho chuki hai — cancel nahi ho sakti", "err"); return; }
     setCancellingId(ls.id);
     try {
+      // Atomic: only one cancel can ever succeed for this load sheet.
+      const lsClaim = await sb(`/rest/v1/load_sheets?id=eq.${ls.id}&status=neq.cancelled`, { method: "PATCH", token, prefer: "return=representation", body: { status: "cancelled", cancelled_by: profile.id, cancelled_at: new Date().toISOString() } });
+      if (!lsClaim || !lsClaim.length) { showToast("Yeh load sheet pehle hi cancel ho chuki hai", "err"); setCancellingId(null); return; }
       const ids = ls.order_ids || [];
+      const stagingBin = await getSpecialBin(token, profile.warehouse_id, STAGING_BIN_CODE);
       for (const orderId of ids) {
+        // Per-order atomic claim back to RTD — only orders that really were dispatched get stock back.
+        const back = await sb(`/rest/v1/sales_orders?id=eq.${orderId}&status=eq.dispatched`, { method: "PATCH", token, prefer: "return=representation", body: { status: "rtd", dispatched_at: null } });
+        if (!back || !back.length) continue;
         const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
         for (const l of lines || []) {
-          await addOnHand(token, profile.warehouse_id, l.product_id, null, l.qty, { type: "restore", userId: profile.id }); // restore deducted stock
-          await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty); // re-reserve for this order
+          // Parcels are physically back at the dispatch area → restore into PACK-STAGING.
+          await addOnHand(token, profile.warehouse_id, l.product_id, stagingBin.id, l.qty, { type: "restore", userId: profile.id });
+          await adjustReserved(token, profile.warehouse_id, l.product_id, l.qty);
         }
-        await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "rtd", dispatched_at: null } });
       }
-      await sb(`/rest/v1/load_sheets?id=eq.${ls.id}`, { method: "PATCH", token, body: { status: "cancelled", cancelled_by: profile.id, cancelled_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "load_sheet", entity_id: ls.id, user_id: profile.id, action: "cancelled", metadata: { order_count: ids.length } } });
       showToast(`${ls.load_sheet_number} cancel ho gayi — ${ids.length} orders wapas 'RTD' mein aa gaye, dobara scan kar ke nayi load sheet banayein`);
       load();
@@ -6861,12 +6948,11 @@ function DispatchView({ token, profile, showToast }) {
         const lsNumber = await nextLoadSheetNumber(courierName);
         await sb(`/rest/v1/load_sheets`, { method: "POST", token, body: { warehouse_id: profile.warehouse_id, courier: courierName, load_sheet_number: lsNumber, order_ids: orderIds, created_by: profile.id } });
         for (const orderId of orderIds) {
-          const lines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token });
-          for (const l of lines) {
-            await deductStock(token, profile.warehouse_id, l.product_id, l.qty, { type: "dispatch", userId: profile.id });
-            await adjustReserved(token, profile.warehouse_id, l.product_id, -l.qty);
-          }
-          await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
+          // ATOMIC CLAIM: flip to dispatched ONLY if it isn't already — the row comes back to
+          // exactly one caller. Two users / a double-click can never deduct the same order twice.
+          const claimed = await sb(`/rest/v1/sales_orders?id=eq.${orderId}&status=in.(rtd,scanned)`, { method: "PATCH", token, prefer: "return=representation", body: { status: "dispatched", dispatched_at: new Date().toISOString() } });
+          if (!claimed || !claimed.length) continue;
+          await deductOrderOnDispatch(token, profile.warehouse_id, orderId, profile.id);
           await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: profile.id, action: "dispatched", metadata: { load_sheet: lsNumber } } });
         }
         generated.push(`${lsNumber} (${courierName}, ${orderIds.length})`);
@@ -8688,6 +8774,59 @@ function ToteMasterView({ token, profile, showToast }) {
     } catch (e) { showToast("Release failed", "err"); }
   };
 
+  const [doctoring, setDoctoring] = useState(false);
+  const [doctorReport, setDoctorReport] = useState(null);
+  // One-click repair for the "picked but never reached the packer" disaster:
+  //  1. every order in "picking" whose pick_task is closed but has NO live pack_task → pack_task
+  //     created on its tote, and its picked units staged into PACK-STAGING (atomic, once);
+  //  2. live pack_tasks with no tote → re-linked to the tote they were picked into;
+  //  3. totes holding pending pack_tasks with no unfinished picking → marked "picked" so the
+  //     packer can actually see them.
+  const runStuckDoctor = async () => {
+    if (!window.confirm("Stuck Orders Doctor chalayein? Yeh sirf missing pack-tasks banata hai aur chhupi hui totes packer ko dikhata hai — koi order dispatch/delete nahi hota.")) return;
+    setDoctoring(true);
+    const rep = { packTasksCreated: 0, relinked: 0, totesReleased: 0, unitsStaged: 0, orders: [] };
+    try {
+      const picking = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.picking&select=id,external_order_id`, { token }) || [];
+      const CH = 80;
+      for (let i = 0; i < picking.length; i += CH) {
+        const chunk = picking.slice(i, i + CH);
+        const ids = chunk.map(o => o.id).join(",");
+        const pts = await sb(`/rest/v1/pick_tasks?order_id=in.(${ids})&select=id,order_id,tote_id,status`, { token }) || [];
+        const packs = await sb(`/rest/v1/pack_tasks?order_id=in.(${ids})&status=in.(pending,labeled,split_hold)&select=id,order_id,tote_id`, { token }) || [];
+        for (const o of chunk) {
+          const myPts = pts.filter(t => t.order_id === o.id);
+          if (!myPts.length || myPts.some(t => t.status !== "picked")) continue; // still being picked — leave it
+          const myPacks = packs.filter(p => p.order_id === o.id);
+          const toteId = myPts[0].tote_id;
+          if (!myPacks.length) {
+            await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: o.id, status: "pending", tote_id: toteId } });
+            rep.packTasksCreated++; rep.orders.push(o.external_order_id);
+            const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${myPts.map(t => t.id).join(",")})&select=*`, { token }) || [];
+            for (const l of lines) if (Number(l.qty_picked || 0) > 0) rep.unitsStaged += await stagePickedLine(token, profile.warehouse_id, l, Number(l.qty_picked), profile.id);
+          } else {
+            for (const p of myPacks.filter(p => !p.tote_id && toteId)) { await sb(`/rest/v1/pack_tasks?id=eq.${p.id}`, { method: "PATCH", token, body: { tote_id: toteId } }); rep.relinked++; }
+          }
+        }
+      }
+      const pendPacks = await sb(`/rest/v1/pack_tasks?status=eq.pending&tote_id=not.is.null&select=tote_id`, { token }) || [];
+      const toteIds = [...new Set(pendPacks.map(p => p.tote_id))];
+      for (const tid of toteIds) {
+        const t = totes.find(x => x.id === tid);
+        if (!t || t.status === "picked") continue;
+        const unfinished = await sb(`/rest/v1/pick_tasks?tote_id=eq.${tid}&status=neq.picked&select=id`, { token });
+        if (unfinished && unfinished.length) continue;
+        await sb(`/rest/v1/totes?id=eq.${tid}`, { method: "PATCH", token, body: { status: "picked", locked_by: null, last_reassign_reason: "Doctor: had packable orders but was hidden from packer", last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
+        rep.totesReleased++;
+      }
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "system", entity_id: profile.warehouse_id, user_id: profile.id, action: "stuck_doctor", metadata: rep } });
+      setDoctorReport(rep);
+      showToast(`🩺 ${rep.packTasksCreated} orders packer ko bheje, ${rep.totesReleased} totes packer ko dikhayi, ${rep.relinked} re-link`);
+      load();
+    } catch (e) { showToast("Doctor fail: " + e.message, "err"); }
+    setDoctoring(false);
+  };
+
   const [resetting, setResetting] = useState(null);
   // Nukes every stale "picked but the tote never made it to Packing" pick_task on this tote —
   // legacy debris from the old force-release bug. Reverses whatever inventory those tasks still
@@ -8726,29 +8865,17 @@ function ToteMasterView({ token, profile, showToast }) {
       const skipMsg = skipped.length ? ` ${skipped.length} order(s) (jo already dispatched/RTD the) ko SAFELY chhod diya jayega.` : "";
       if (!window.confirm(`${tote.tote_number} — sirf ${resettableOrderIds.length} genuinely-stuck order(s) reset honge (Received par wapas).${skipMsg} Reserved inventory reverse hogi aur purane pick tasks delete honge. Undo nahi ho sakta. Confirm karein?`)) { setResetting(null); return; }
 
-      // Only touch pick_tasks whose order is in the resettable set.
-      const resettableTaskIds = (pts || []).filter(t => resettableOrderIds.includes(t.order_id)).map(t => t.id);
-      for (let i = 0; i < resettableTaskIds.length; i += CHUNK) {
-        const chunk = resettableTaskIds.slice(i, i + CHUNK);
-        const lines = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})&select=*`, { token });
-        for (const l of lines || []) {
-          if (Number(l.qty_picked || 0) > 0) {
-            try { await adjustReserved(token, profile.warehouse_id, l.product_id, -Number(l.qty_picked)); } catch (e) { /* best-effort — proceed with cleanup regardless */ }
-          }
-        }
-        await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-        await sb(`/rest/v1/pick_tasks?id=in.(${chunk.join(",")})`, { method: "DELETE", token });
+      // Every resettable order goes through the SAME audited unwind used everywhere else:
+      // full reservation released, already-picked units → Restock putaway tasks (traceable),
+      // order → Received. Nothing silently disappears any more.
+      let restockUnits = 0;
+      for (const oid of resettableOrderIds) {
+        try { const r = await returnPickedToStock(token, profile.warehouse_id, oid, profile.id, `Tote ${tote.tote_number} reset`); if (r.ok) restockUnits += r.restockUnits; } catch (e) { /* continue with the rest */ }
       }
-      for (let i = 0; i < resettableOrderIds.length; i += CHUNK) {
-        const chunk = resettableOrderIds.slice(i, i + CHUNK);
-        await sb(`/rest/v1/pack_tasks?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-        await sb(`/rest/v1/order_shortage_lines?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token });
-        await sb(`/rest/v1/incomplete_holds?order_id=in.(${chunk.join(",")})`, { method: "DELETE", token }).catch(() => {});
-        await sb(`/rest/v1/sales_orders?id=in.(${chunk.join(",")})`, { method: "PATCH", token, body: { status: "received" } });
-      }
+      await sb(`/rest/v1/pick_tasks?tote_id=eq.${tote.id}&status=eq.picked&order_id=in.(${resettableOrderIds.join(",")})`, { method: "DELETE", token }).catch(() => {});
       await sb(`/rest/v1/totes?id=eq.${tote.id}`, { method: "PATCH", token, body: { status: "open", assigned_to: null, locked_by: null, last_reassign_reason: `Full reset — ${resettableOrderIds.length} stuck order(s) cleared, ${skipped.length} progressed order(s) skipped`, last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "tote", entity_id: tote.id, user_id: profile.id, action: "full_reset", metadata: { reset_order_ids: resettableOrderIds, skipped_order_ids: skipped.map(o => o.id) } } });
-      showToast(`✅ ${tote.tote_number} — ${resettableOrderIds.length} stuck order(s) reset ho gaye${skipped.length ? `, ${skipped.length} already-dispatched order(s) safely chhode gaye` : ""}`);
+      showToast(`✅ ${tote.tote_number} — ${resettableOrderIds.length} stuck order(s) reset, ${restockUnits} pcs Restock putaway mein${skipped.length ? `, ${skipped.length} already-dispatched order(s) safely chhode gaye` : ""}`);
       load();
     } catch (e) { showToast("Reset failed: " + e.message, "err"); }
     setResetting(null);
@@ -8757,6 +8884,19 @@ function ToteMasterView({ token, profile, showToast }) {
   return (
     <div>
       <SectionTitle title="Tote Master (physical trolleys)" />
+      {["admin", "warehouse_lead"].includes(profile.role) && (
+        <div style={{ ...S.panel, border: "1px solid #5B9EE8" }}>
+          <div style={S.panelTitle}>🩺 Stuck Orders Doctor</div>
+          <div style={{ fontSize: 12, color: "#6B6355", marginBottom: 10 }}>Jo orders pick ho chuke lekin packer tak nahi pohnche (ya jin totes packer ko nazar nahi aa rahi), unhein dhoondh kar theek karta hai. Safe hai — koi order dispatch ya delete nahi hota.</div>
+          <button style={S.primaryBtnSm} onClick={runStuckDoctor} disabled={doctoring}>{doctoring ? "Check ho raha…" : "🩺 Run Doctor"}</button>
+          {doctorReport && (
+            <div style={{ marginTop: 10, fontSize: 12, color: "#2B2620" }}>
+              Packer ko bheje: <strong>{doctorReport.packTasksCreated}</strong> · Totes packer ko dikhayi: <strong>{doctorReport.totesReleased}</strong> · Re-link: <strong>{doctorReport.relinked}</strong> · Staging mein move: <strong>{doctorReport.unitsStaged} pcs</strong>
+              {doctorReport.orders.length > 0 && <div style={{ color: "#8A8272", marginTop: 4 }}>{doctorReport.orders.join(", ")}</div>}
+            </div>
+          )}
+        </div>
+      )}
       <div style={S.panel}>
         <div style={S.panelTitle}>Add tote</div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -9008,8 +9148,9 @@ function TrackingSplitView({ token, profile, showToast }) {
   const [linesByOrder, setLinesByOrder] = useState({});
   const [activeRequest, setActiveRequest] = useState(null);
   const [activeToteId, setActiveToteId] = useState(null);
+  const [pickBinByProduct, setPickBinByProduct] = useState({});
   const [groups, setGroups] = useState([]);
-  const [finalizing, setFinalizing] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -9030,106 +9171,189 @@ function TrackingSplitView({ token, profile, showToast }) {
   };
   useEffect(() => { load(); }, []);
 
+  // Split is only legal while the order is still physically in hand and unpacked.
+  const isSplittable = (o) => o && ["split_hold", "picking"].includes(o.status);
+
   const openRequest = async (req) => {
+    const o = orders[req.order_id];
     setActiveRequest(req);
-    setGroups([{ trackingNumber: "", courier: "Postex", allocations: {} }]);
+    // Group 1 defaults to the ORIGINAL tracking — the common real-world case is "keep the
+    // original AWB for part of the items, add a new AWB for the rest". Admin/Lead can change it.
+    setGroups([{ trackingNumber: o?.external_order_id || "", courier: o?.courier || "Postex", allocations: {} }]);
     try {
       const pt = await sb(`/rest/v1/pack_tasks?order_id=eq.${req.order_id}&is_incomplete_transfer=eq.false&select=tote_id&limit=1`, { token });
       setActiveToteId(pt?.[0]?.tote_id || null);
-    } catch (e) { setActiveToteId(null); }
+      const pts = await sb(`/rest/v1/pick_tasks?order_id=eq.${req.order_id}&select=id`, { token });
+      const ids = (pts || []).map(t => t.id);
+      const pls = ids.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${ids.join(",")})&select=product_id,bin_id,staged_qty`, { token }) : [];
+      const o2 = orders[req.order_id];
+      const stagingBin = await getSpecialBin(token, o2.warehouse_id, STAGING_BIN_CODE);
+      // Where the reduced units are counted right now: PACK-STAGING if they were staged at pick.
+      setPickBinByProduct(Object.fromEntries((pls || []).map(l => [l.product_id, Number(l.staged_qty || 0) > 0 ? stagingBin.id : l.bin_id])));
+    } catch (e) { setActiveToteId(null); setPickBinByProduct({}); }
   };
 
   const addGroup = () => setGroups(g => [...g, { trackingNumber: "", courier: "Postex", allocations: {} }]);
   const removeGroup = (idx) => setGroups(g => g.filter((_, i) => i !== idx));
   const setAlloc = (gi, lineId, qty) => setGroups(g => g.map((grp, i) => i === gi ? { ...grp, allocations: { ...grp.allocations, [lineId]: qty } } : grp));
+  const allocatedFor = (line) => groups.reduce((s, g) => s + Number(g.allocations[line.id] || 0), 0);
+  const restockFor = (line) => Number(line.qty) - allocatedFor(line);
 
-  const remainingFor = (line) => {
-    const used = groups.reduce((s, g) => s + Number(g.allocations[line.id] || 0), 0);
-    return Number(line.qty) - used;
+  const resolveRequest = async (note) => {
+    await sb(`/rest/v1/tracking_split_requests?id=eq.${activeRequest.id}`, { method: "PATCH", token, body: { status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() } });
+    await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: activeRequest.order_id, user_id: profile.id, action: "split_request_" + note } });
+  };
+
+  // Mistakenly forwarded → back to the packer exactly as it was.
+  const sendBackToPacking = async () => {
+    const o = orders[activeRequest.order_id];
+    if (!window.confirm(`${o?.external_order_id} ko bina split kiye wapas Packing mein bhejna hai?`)) return;
+    setBusy(true);
+    try {
+      await sb(`/rest/v1/pack_tasks?order_id=eq.${o.id}&status=eq.split_hold`, { method: "PATCH", token, body: { status: "pending" } });
+      await sb(`/rest/v1/sales_orders?id=eq.${o.id}`, { method: "PATCH", token, body: { status: "picking" } });
+      await resolveRequest("sent_back");
+      showToast(`↩ ${o.external_order_id} wapas Packing mein bhej diya`);
+      setActiveRequest(null); load();
+    } catch (e) { showToast("Fail: " + e.message, "err"); }
+    setBusy(false);
+  };
+
+  // Request raised on an order that was ALREADY packed/RTD/dispatched — nothing to split any more,
+  // just close the request without touching the order.
+  const closeStaleRequest = async (req) => {
+    setBusy(true);
+    try {
+      await sb(`/rest/v1/tracking_split_requests?id=eq.${req.id}`, { method: "PATCH", token, body: { status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() } });
+      await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: req.order_id, user_id: profile.id, action: "split_request_closed_stale" } });
+      showToast("Request close ho gaya — order ko touch nahi kiya");
+      load();
+    } catch (e) { showToast("Fail: " + e.message, "err"); }
+    setBusy(false);
+  };
+
+  const cancelToStock = async () => {
+    const o = orders[activeRequest.order_id];
+    if (!window.confirm(`${o?.external_order_id} poora cancel/reset: saare picked items Restock putaway mein jayenge aur order "Received" par wapas. Confirm?`)) return;
+    setBusy(true);
+    try {
+      const r = await returnPickedToStock(token, o.warehouse_id, o.id, profile.id, "Split cancelled");
+      if (!r.ok) { showToast(r.msg, "err"); setBusy(false); return; }
+      showToast(`✓ ${o.external_order_id} reset — ${r.restockUnits} pcs Restock putaway mein`);
+      setActiveRequest(null); load();
+    } catch (e) { showToast("Fail: " + e.message, "err"); }
+    setBusy(false);
   };
 
   const finalizeSplit = async () => {
-    const lines = linesByOrder[activeRequest.order_id] || [];
-    for (const l of lines) {
-      const total = groups.reduce((s, g) => s + Number(g.allocations[l.id] || 0), 0);
-      if (total !== Number(l.qty)) { showToast(`${products[l.product_id]?.barcode || l.product_id} ki total allocation (${total}) qty (${l.qty}) se match nahi karti — pura qty allocate karein`, "err"); return; }
-    }
-    const trimmedNumbers = groups.map(g => g.trackingNumber.trim());
-    for (const tn of trimmedNumbers) {
-      if (!tn) { showToast("Har group ka tracking number zaroori hai", "err"); return; }
-    }
-    // Two numbers can't be the same within this split...
-    const dupWithin = trimmedNumbers.filter((tn, i) => trimmedNumbers.indexOf(tn) !== i);
-    if (dupWithin.length) { showToast(`Groups mein same tracking number "${dupWithin[0]}" do baar hai — har group ka alag number rakhein`, "err"); return; }
     const order = orders[activeRequest.order_id];
-    // ...and none may reuse the ORIGINAL order's number or any number that already exists in
-    // sales_orders (external_order_id has a UNIQUE constraint — that's exactly the error you hit).
-    for (const tn of trimmedNumbers) {
-      if (tn === order.external_order_id) { showToast(`"${tn}" original order ka hi number hai — naye tracking number use karein`, "err"); return; }
+    const fresh = await sb(`/rest/v1/sales_orders?id=eq.${order.id}&select=status`, { token });
+    if (!isSplittable({ status: fresh?.[0]?.status })) { showToast(`Order ab "${fresh?.[0]?.status}" hai — split nahi ho sakta`, "err"); return; }
+    const lines = linesByOrder[order.id] || [];
+    for (const l of lines) {
+      const a = allocatedFor(l);
+      if (a > Number(l.qty)) { showToast(`${products[l.product_id]?.barcode || ""} — allocation (${a}) order qty (${l.qty}) se zyada hai`, "err"); return; }
     }
-    setFinalizing(true);
+    const usedGroups = groups.filter(g => lines.some(l => Number(g.allocations[l.id] || 0) > 0));
+    if (!usedGroups.length) { showToast("Kam se kam ek group mein items allocate karein", "err"); return; }
+    const nums = usedGroups.map(g => g.trackingNumber.trim());
+    if (nums.some(n => !n)) { showToast("Har group ka tracking number zaroori hai", "err"); return; }
+    const dup = nums.filter((n, i) => nums.indexOf(n) !== i);
+    if (dup.length) { showToast(`Tracking "${dup[0]}" do groups mein hai`, "err"); return; }
+    const newNums = nums.filter(n => n !== order.external_order_id);
+    const reduced = lines.filter(l => restockFor(l) > 0);
+    const reducedMsg = reduced.length ? `\n\n${reduced.reduce((s, l) => s + restockFor(l), 0)} pcs kam kiye gaye — Restock putaway mein jayenge.` : "";
+    if (!window.confirm(`Split finalize karein?\nGroups: ${nums.join(", ")}${reducedMsg}`)) return;
+    setBusy(true);
     try {
-      // Pre-check the DB so we fail with a clear message instead of a raw constraint error.
-      const enc = trimmedNumbers.map(encodeURIComponent).join(",");
-      const clash = await sb(`/rest/v1/sales_orders?external_order_id=in.(${enc})&select=external_order_id`, { token });
-      if (clash && clash.length) {
-        showToast(`Yeh tracking number(s) pehle se system mein maujood hain: ${clash.map(c => c.external_order_id).join(", ")} — alag number daalein`, "err");
-        setFinalizing(false); return;
+      if (newNums.length) {
+        const clash = await sb(`/rest/v1/sales_orders?external_order_id=in.(${newNums.map(encodeURIComponent).join(",")})&select=external_order_id`, { token });
+        if (clash && clash.length) { showToast(`Yeh tracking pehle se system mein hai: ${clash.map(c => c.external_order_id).join(", ")}`, "err"); setBusy(false); return; }
       }
-      let createdCount = 0;
-      for (const g of groups) {
-        const groupLines = lines.filter(l => Number(g.allocations[l.id] || 0) > 0);
-        if (!groupLines.length) continue;
-        const newOrder = await sb(`/rest/v1/sales_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: order.warehouse_id, external_order_id: g.trackingNumber.trim(), courier: g.courier, delivery_city: order.delivery_city, receiver_name: order.receiver_name, status: "picking", received_at: order.received_at, split_from_order_id: order.id } });
-        for (const l of groupLines) {
-          await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: newOrder[0].id, product_id: l.product_id, qty: g.allocations[l.id] } });
+      let keptOriginal = false;
+      for (const g of usedGroups) {
+        const gl = lines.filter(l => Number(g.allocations[l.id] || 0) > 0);
+        const tn = g.trackingNumber.trim();
+        if (tn === order.external_order_id) {
+          // Keep the original order/AWB: rewrite its lines to this group's quantities.
+          keptOriginal = true;
+          await sb(`/rest/v1/sales_order_lines?order_id=eq.${order.id}`, { method: "DELETE", token });
+          for (const l of gl) await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: order.id, product_id: l.product_id, qty: Number(g.allocations[l.id]) } });
+          await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "picking", courier: g.courier } });
+          const existingPt = await sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&is_incomplete_transfer=eq.false&select=id`, { token });
+          if (existingPt && existingPt.length) {
+            await sb(`/rest/v1/pack_tasks?id=eq.${existingPt[0].id}`, { method: "PATCH", token, body: { status: "pending", scans: null } });
+          } else {
+            await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: order.id, status: "pending", tote_id: activeToteId } });
+          }
+        } else {
+          const created = await sb(`/rest/v1/sales_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: order.warehouse_id, external_order_id: tn, courier: g.courier, delivery_city: order.delivery_city, receiver_name: order.receiver_name, status: "picking", received_at: order.received_at, split_from_order_id: order.id } });
+          for (const l of gl) await sb(`/rest/v1/sales_order_lines`, { method: "POST", token, body: { order_id: created[0].id, product_id: l.product_id, qty: Number(g.allocations[l.id]) } });
+          await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: created[0].id, status: "pending", tote_id: activeToteId } });
         }
-        await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: newOrder[0].id, status: "pending", tote_id: activeToteId } });
-        createdCount++;
       }
-      await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "split" } });
-      await sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&is_incomplete_transfer=eq.false`, { method: "PATCH", token, body: { status: "superseded" } });
-      await sb(`/rest/v1/tracking_split_requests?id=eq.${activeRequest.id}`, { method: "PATCH", token, body: { status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() } });
-      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, field_changed: "Tracking Split", old_value: order.external_order_id, new_value: trimmedNumbers.join(", "), changed_by: profile.id } });
-      showToast(`✓ Order ${order.external_order_id} — ${createdCount} naye tracking(s) mein split ho gaya`);
-      setActiveRequest(null);
-      load();
+      if (!keptOriginal) {
+        await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "split" } });
+        await sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&is_incomplete_transfer=eq.false`, { method: "PATCH", token, body: { status: "superseded" } });
+      }
+      // Reduced units: release their reservation and send them to Restock putaway (MOVE from the
+      // bin they were picked from — on_hand was never deducted, so nothing is double-counted).
+      for (const l of reduced) {
+        const q = restockFor(l);
+        try { await adjustReserved(token, order.warehouse_id, l.product_id, -q); } catch (e) {}
+        await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { product_id: l.product_id, qty: q, status: "pending", source_bin_id: pickBinByProduct[l.product_id] || null, source_order_id: order.id, return_reason: "Split reduction" } });
+      }
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, field_changed: "Tracking Split", old_value: order.external_order_id, new_value: nums.join(", ") + (reduced.length ? ` | restock ${reduced.reduce((s, l) => s + restockFor(l), 0)}` : ""), changed_by: profile.id } });
+      await resolveRequest("finalized");
+      showToast(`✓ Split ho gaya — ${usedGroups.length} tracking(s)${reduced.length ? `, ${reduced.reduce((s, l) => s + restockFor(l), 0)} pcs Restock mein` : ""}`);
+      setActiveRequest(null); load();
     } catch (e) { showToast("Split fail: " + (e.message || "").slice(0, 120), "err"); }
-    setFinalizing(false);
+    setBusy(false);
   };
 
   if (activeRequest) {
     const order = orders[activeRequest.order_id];
     const lines = linesByOrder[activeRequest.order_id] || [];
+    const splittable = isSplittable(order);
     return (
       <div>
         <SectionTitle title={`Tracking Split — ${order?.external_order_id}`} action={<button style={S.secondaryBtnSm} onClick={() => setActiveRequest(null)}>← Back</button>} />
+        {!splittable && (
+          <div style={{ ...S.panel, border: "1px solid #E5484D", background: "#FFF3F3", color: "#B0362E", fontSize: 13 }}>
+            ⛔ Yeh order "{order?.status}" status mein hai — packed/aage barh chuka hai, is liye split nahi ho sakta. Request list se isay close kar dein.
+          </div>
+        )}
         <div style={S.panel}>
           <div style={S.panelTitle}>Line-wise Allocation</div>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Har item ki poori qty kisi na kisi group mein allocate honi zaroori hai. Groups add karein, har group ka apna Tracking# aur Courier hoga.</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
-            <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Total Qty</th>{groups.map((g, i) => <th key={i} style={S.th}>Group {i + 1}</th>)}<th style={S.th}>Remaining</th></tr></thead>
-            <tbody>
-              {lines.map(l => (
-                <tr key={l.id}>
-                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[l.product_id]?.barcode || "—"}</td>
-                  <td style={S.td}>{products[l.product_id]?.name || "—"}</td>
-                  <td style={S.td}>{l.qty}</td>
-                  {groups.map((g, gi) => (
-                    <td key={gi} style={S.td}><input type="number" min={0} max={l.qty} style={{ ...S.input, width: 70 }} value={g.allocations[l.id] || ""} onChange={e => setAlloc(gi, l.id, e.target.value)} /></td>
-                  ))}
-                  <td style={{ ...S.td, color: remainingFor(l) === 0 ? "#4CAF7D" : "#E5484D", fontWeight: 600 }}>{remainingFor(l)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 14 }}>Group 1 mein original tracking pehle se hai (chahein to badal dein). Har item ki qty groups mein baantein — jo qty kisi group mein nahi di, woh <strong>kam ho kar Restock putaway</strong> mein chali jayegi.</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 14 }}>
+              <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Order Qty</th>{groups.map((g, i) => <th key={i} style={S.th}>Group {i + 1}</th>)}<th style={S.th}>→ Restock</th></tr></thead>
+              <tbody>
+                {lines.map(l => {
+                  const rs = restockFor(l);
+                  return (
+                    <tr key={l.id}>
+                      <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{products[l.product_id]?.barcode || "—"}</td>
+                      <td style={S.td}>{products[l.product_id]?.name || "—"}</td>
+                      <td style={S.td}>{l.qty}</td>
+                      {groups.map((g, gi) => (
+                        <td key={gi} style={S.td}><input type="number" min={0} max={l.qty} style={{ ...S.input, width: 70 }} value={g.allocations[l.id] || ""} onChange={e => setAlloc(gi, l.id, e.target.value)} /></td>
+                      ))}
+                      <td style={{ ...S.td, fontWeight: 700, color: rs < 0 ? "#E5484D" : rs > 0 ? "#B084F5" : "#4CAF7D" }}>{rs < 0 ? `⚠ ${rs}` : rs}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
           <button style={{ ...S.secondaryBtnSm, marginBottom: 14 }} onClick={addGroup}>+ Add Group</button>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {groups.map((g, i) => (
-              <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 10 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 60 }}>Group {i + 1}</span>
-                <input style={{ ...S.input, width: 180, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="New tracking #" value={g.trackingNumber} onChange={e => setGroups(gs => gs.map((x, xi) => xi === i ? { ...x, trackingNumber: e.target.value } : x))} />
-                <select style={{ ...S.input, width: 140 }} value={g.courier} onChange={e => setGroups(gs => gs.map((x, xi) => xi === i ? { ...x, courier: e.target.value } : x))}>
+              <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", background: "#FAF7EF", border: "1px solid #EFE8D8", borderRadius: 8, padding: 10 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, minWidth: 60 }}>Group {i + 1}{g.trackingNumber.trim() === order?.external_order_id && <span style={{ ...S.badgeSm, marginLeft: 6 }}>original</span>}</span>
+                <input style={{ ...S.input, width: 190, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Tracking #" value={g.trackingNumber} onChange={e => setGroups(gs => gs.map((x, xi) => xi === i ? { ...x, trackingNumber: e.target.value } : x))} />
+                <select style={{ ...S.input, width: 130 }} value={g.courier} onChange={e => setGroups(gs => gs.map((x, xi) => xi === i ? { ...x, courier: e.target.value } : x))}>
                   <option value="Postex">Postex</option>
                   <option value="M&P">M&P</option>
                   <option value="Other">Other</option>
@@ -9138,7 +9362,11 @@ function TrackingSplitView({ token, profile, showToast }) {
               </div>
             ))}
           </div>
-          <button style={{ ...S.primaryBtnSm, marginTop: 16 }} onClick={finalizeSplit} disabled={finalizing}>{finalizing ? "Split ho raha…" : "✓ Finalize Split"}</button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
+            <button style={S.primaryBtnSm} onClick={finalizeSplit} disabled={busy || !splittable}>{busy ? "…" : "✓ Finalize Split"}</button>
+            <button style={S.secondaryBtnSm} onClick={sendBackToPacking} disabled={busy || !splittable}>↩ Galti se aaya — wapas Packing</button>
+            <button style={{ ...S.secondaryBtnSm, color: "#E5484D", borderColor: "#E5484D" }} onClick={cancelToStock} disabled={busy || !splittable}>🔥 Cancel & Restock</button>
+          </div>
         </div>
       </div>
     );
@@ -9149,20 +9377,26 @@ function TrackingSplitView({ token, profile, showToast }) {
       <SectionTitle title="Tracking Split — Pending Requests" />
       <div style={S.panel}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Requested At</th><th style={S.th}></th></tr></thead>
+          <thead><tr><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Order Status</th><th style={S.th}>Requested At</th><th style={S.th}></th></tr></thead>
           <tbody>
             {requests.map(r => {
               const o = orders[r.order_id];
+              const ok = isSplittable(o);
               return (
                 <tr key={r.id}>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o?.external_order_id || "—"}</td>
                   <td style={S.td}>{o?.courier || "—"}</td>
+                  <td style={S.td}><span style={{ ...S.badgeSm, color: ok ? "#B084F5" : "#E5484D", borderColor: ok ? "#B084F5" : "#E5484D" }}>{o?.status || "—"}</span></td>
                   <td style={S.td}>{fmtTime(r.requested_at)}</td>
-                  <td style={S.td}><button style={S.primaryBtnSm} onClick={() => openRequest(r)}>Split Karein</button></td>
+                  <td style={S.td}>
+                    {ok
+                      ? <button style={S.primaryBtnSm} onClick={() => openRequest(r)}>Open</button>
+                      : <button style={S.secondaryBtnSm} onClick={() => closeStaleRequest(r)} disabled={busy}>Close request (already {o?.status})</button>}
+                  </td>
                 </tr>
               );
             })}
-            {!requests.length && <tr><td style={S.td} colSpan={4}><EmptyNote text="Koi pending split request nahi" /></td></tr>}
+            {!requests.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Koi pending split request nahi" /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -10139,6 +10373,118 @@ async function addOnHand(token, warehouseId, productId, binId, qtyDelta, activit
   }
 }
 // Adjust the reservation counter for a product (independent of any specific bin).
+// ====================== INVENTORY MOVEMENT (WMS standard) ======================
+// Allocate (reserve) → PICK CONFIRM: stock MOVES source bin → PACK-STAGING (bin now accurate,
+// warehouse total unchanged) → PACK: verification only → DISPATCH: stock leaves PACK-STAGING,
+// reservation released. Every unit is always in exactly one bin row, so nothing "disappears".
+const STAGING_BIN_CODE = "PACK-STAGING";
+const _specialBinCache = {};
+async function getSpecialBin(token, warehouseId, code) {
+  const key = warehouseId + ":" + code;
+  if (_specialBinCache[key]) return _specialBinCache[key];
+  let rows = await sb(`/rest/v1/bins?warehouse_id=eq.${warehouseId}&code=eq.${encodeURIComponent(code)}&select=*`, { token });
+  let bin = rows && rows[0];
+  if (!bin) {
+    const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: warehouseId, code } });
+    bin = created[0];
+  }
+  _specialBinCache[key] = bin;
+  return bin;
+}
+async function binOnHand(token, warehouseId, productId, binId) {
+  const r = await sb(`/rest/v1/inventory?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=eq.${binId}&select=on_hand`, { token });
+  return Number(r?.[0]?.on_hand || 0);
+}
+// Moves a pick line's picked qty from its source bin into PACK-STAGING — EXACTLY ONCE. The
+// conditional PATCH (staged_qty IS NULL) is an atomic claim: a double-click, a retry, or two
+// devices finalizing the same order can never move the same units twice.
+async function stagePickedLine(token, warehouseId, line, qty, userId) {
+  if (!qty || qty <= 0 || !line.bin_id) return 0;
+  const staging = await getSpecialBin(token, warehouseId, STAGING_BIN_CODE);
+  if (line.bin_id === staging.id) return 0;
+  const src = await binOnHand(token, warehouseId, line.product_id, line.bin_id);
+  const move = Math.min(qty, src); // never create stock that the source bin didn't hold
+  const claimed = await sb(`/rest/v1/pick_task_lines?id=eq.${line.id}&staged_qty=is.null`, { method: "PATCH", token, prefer: "return=representation", body: { staged_qty: move } });
+  if (!claimed || !claimed.length) return 0; // already staged by an earlier/parallel call
+  if (move > 0) {
+    await addOnHand(token, warehouseId, line.product_id, line.bin_id, -move, { type: "pick", userId });
+    await addOnHand(token, warehouseId, line.product_id, staging.id, move, { type: "pick", userId });
+  }
+  return move;
+}
+// Ship-time deduction for ONE order: staged units leave PACK-STAGING; legacy (pre-staging)
+// units leave the exact bin they were picked from; only a true remainder falls back to the old
+// largest-bin rule. Also releases the order's reservation.
+async function deductOrderOnDispatch(token, warehouseId, orderId, userId) {
+  const ord = await sb(`/rest/v1/sales_orders?id=eq.${orderId}&select=id,split_from_order_id`, { token });
+  const familyIds = [orderId, ord?.[0]?.split_from_order_id].filter(Boolean);
+  const soLines = await sb(`/rest/v1/sales_order_lines?order_id=eq.${orderId}&select=*`, { token }) || [];
+  const pts = await sb(`/rest/v1/pick_tasks?order_id=in.(${familyIds.join(",")})&select=id`, { token }) || [];
+  const ptl = pts.length ? (await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pts.map(p => p.id).join(",")})&select=*`, { token }) || []) : [];
+  const staging = await getSpecialBin(token, warehouseId, STAGING_BIN_CODE);
+  for (const l of soLines) {
+    let need = Number(l.qty || 0);
+    const mine = ptl.filter(x => x.product_id === l.product_id);
+    const stagedTotal = mine.reduce((s, x) => s + Number(x.staged_qty || 0), 0);
+    if (stagedTotal > 0 && need > 0) {
+      const take = Math.min(need, stagedTotal, await binOnHand(token, warehouseId, l.product_id, staging.id));
+      if (take > 0) { await addOnHand(token, warehouseId, l.product_id, staging.id, -take, { type: "dispatch", userId }); need -= take; }
+    }
+    for (const x of mine.filter(x => x.staged_qty == null && Number(x.qty_picked || 0) > 0 && x.bin_id)) {
+      if (need <= 0) break;
+      const take = Math.min(need, Number(x.qty_picked), await binOnHand(token, warehouseId, l.product_id, x.bin_id));
+      if (take > 0) { await addOnHand(token, warehouseId, l.product_id, x.bin_id, -take, { type: "dispatch", userId }); need -= take; }
+    }
+    if (need > 0) await deductStock(token, warehouseId, l.product_id, need, { type: "dispatch", userId });
+    await adjustReserved(token, warehouseId, l.product_id, -Number(l.qty || 0));
+  }
+}
+
+// Single, audited way to unwind an order that is mid-flow (picking / incomplete / split-hold):
+//  1. releases the ENTIRE reservation the order held (picked + unpicked),
+//  2. for every unit already physically picked, creates a Return-to-Stock putaway task whose
+//     source_bin_id is where that stock is still counted (INCOMPLETE-HOLD if it was parked
+//     there, else the bin it was picked from) — so on_hand is MOVED on putaway, never duplicated,
+//  3. deletes the dangling pick/pack/shortage rows and resets the order to "received".
+// Refuses to touch anything that has already progressed to RTD/dispatch — protects against the
+// earlier bug where shipped orders got reset.
+async function returnPickedToStock(token, warehouseId, orderId, userId, reason) {
+  const ord = await sb(`/rest/v1/sales_orders?id=eq.${orderId}&select=id,status,external_order_id`, { token });
+  const order = ord && ord[0];
+  if (!order) return { ok: false, msg: "Order nahi mila" };
+  if (!["queued", "picking", "incomplete", "split_hold"].includes(order.status)) {
+    return { ok: false, msg: `${order.external_order_id} status "${order.status}" hai — sirf picking/incomplete/split-hold orders reset ho sakte hain` };
+  }
+  const tasks = await sb(`/rest/v1/pick_tasks?order_id=eq.${orderId}&select=id`, { token });
+  const taskIds = (tasks || []).map(t => t.id);
+  const lines = taskIds.length ? await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})&select=*`, { token }) : [];
+  let holds = [];
+  try { holds = await sb(`/rest/v1/incomplete_holds?order_id=eq.${orderId}&resolved=eq.false&select=*`, { token }) || []; } catch (e) { holds = []; }
+  const holdBinByProduct = Object.fromEntries(holds.map(h => [h.product_id, h.bin_id]));
+  const stagingBin = await getSpecialBin(token, warehouseId, STAGING_BIN_CODE);
+  let restockUnits = 0;
+  for (const l of lines || []) {
+    const reserved = Number(l.qty_required || 0);
+    if (reserved > 0) { try { await adjustReserved(token, warehouseId, l.product_id, -reserved); } catch (e) { /* keep unwinding */ } }
+    const picked = Number(l.qty_picked || 0);
+    if (picked > 0) {
+      await sb(`/rest/v1/putaway_tasks`, { method: "POST", token, body: { product_id: l.product_id, qty: picked, status: "pending", source_bin_id: holdBinByProduct[l.product_id] || (Number(l.staged_qty || 0) > 0 ? stagingBin.id : l.bin_id), source_order_id: orderId, return_reason: reason } });
+      restockUnits += picked;
+    }
+  }
+  if (holds.length) { try { await sb(`/rest/v1/incomplete_holds?order_id=eq.${orderId}&resolved=eq.false`, { method: "PATCH", token, body: { resolved: true, resolved_at: new Date().toISOString() } }); } catch (e) {} }
+  if (taskIds.length) {
+    await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${taskIds.join(",")})`, { method: "DELETE", token });
+    await sb(`/rest/v1/pick_tasks?id=in.(${taskIds.join(",")})`, { method: "DELETE", token });
+  }
+  await sb(`/rest/v1/pack_tasks?order_id=eq.${orderId}`, { method: "DELETE", token });
+  await sb(`/rest/v1/order_shortage_lines?order_id=eq.${orderId}`, { method: "DELETE", token });
+  try { await sb(`/rest/v1/tracking_split_requests?order_id=eq.${orderId}&status=eq.pending`, { method: "PATCH", token, body: { status: "resolved", resolved_by: userId, resolved_at: new Date().toISOString() } }); } catch (e) {}
+  await sb(`/rest/v1/sales_orders?id=eq.${orderId}`, { method: "PATCH", token, body: { status: "received" } });
+  await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: orderId, user_id: userId, action: "returned_to_stock", metadata: { reason, restock_units: restockUnits } } });
+  return { ok: true, restockUnits, externalId: order.external_order_id };
+}
+
 async function adjustReserved(token, warehouseId, productId, delta) {
   const existing = await sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&select=*`, { token });
   if (existing && existing.length > 0) {
