@@ -5297,7 +5297,7 @@ function OrdersView({ token, profile, showToast, setView }) {
           <thead>
             <tr>
               <th style={S.th}><input type="checkbox" onChange={e => toggleAll(e.target.checked)} checked={selectedCount > 0 && selectedCount === displayedOrders.length} /></th>
-              <th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
+              <th style={S.th}>Order #</th><th style={S.th}>Customer Order #</th><th style={S.th}>Courier</th><th style={S.th}>Status</th>
               <th style={S.th}>Items</th><th style={S.th}>Qty</th><th style={S.th}>Type</th>
               <th style={S.th}>Assigned To</th><th style={S.th}>Tote</th>
               <th style={S.th}>Last-Mile Status</th><th style={S.th}>City</th><th style={S.th}>Courier Order Ref</th>
@@ -5318,6 +5318,7 @@ function OrdersView({ token, profile, showToast, setView }) {
                     <input type="checkbox" checked={!!selectedOrders[o.id]} onChange={e => setSelectedOrders({ ...selectedOrders, [o.id]: e.target.checked })} />
                   </td>
                   <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
+                  <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#2B2620" }}>{o.raw_data?.customer_order_number || o.raw_data?.customer || "—"}</td>
                   <td style={S.td}>{o.courier}</td>
                   <td style={S.td}><span style={{ ...S.badgeSm, color: STATUS_COLORS[o.status] || "#5B9EE8", borderColor: STATUS_COLORS[o.status] || "#5B9EE8" }}>{ORDER_STATUS_LABEL[o.status] || o.status}</span></td>
                   <td style={{ ...S.td, color: "#6B6355" }}>{stat.count}</td>
@@ -5345,7 +5346,7 @@ function OrdersView({ token, profile, showToast, setView }) {
               );
             })}
             {displayedOrders.length === 0 && (
-              <tr><td colSpan={14}><EmptyNote text="No orders in this status." /></td></tr>
+              <tr><td colSpan={15}><EmptyNote text="No orders in this status." /></td></tr>
             )}
           </tbody>
         </table>
@@ -8947,12 +8948,28 @@ function TrackingSplitView({ token, profile, showToast }) {
       const total = groups.reduce((s, g) => s + Number(g.allocations[l.id] || 0), 0);
       if (total !== Number(l.qty)) { showToast(`${products[l.product_id]?.barcode || l.product_id} ki total allocation (${total}) qty (${l.qty}) se match nahi karti — pura qty allocate karein`, "err"); return; }
     }
-    for (const g of groups) {
-      if (!g.trackingNumber.trim()) { showToast("Har group ka tracking number zaroori hai", "err"); return; }
+    const trimmedNumbers = groups.map(g => g.trackingNumber.trim());
+    for (const tn of trimmedNumbers) {
+      if (!tn) { showToast("Har group ka tracking number zaroori hai", "err"); return; }
+    }
+    // Two numbers can't be the same within this split...
+    const dupWithin = trimmedNumbers.filter((tn, i) => trimmedNumbers.indexOf(tn) !== i);
+    if (dupWithin.length) { showToast(`Groups mein same tracking number "${dupWithin[0]}" do baar hai — har group ka alag number rakhein`, "err"); return; }
+    const order = orders[activeRequest.order_id];
+    // ...and none may reuse the ORIGINAL order's number or any number that already exists in
+    // sales_orders (external_order_id has a UNIQUE constraint — that's exactly the error you hit).
+    for (const tn of trimmedNumbers) {
+      if (tn === order.external_order_id) { showToast(`"${tn}" original order ka hi number hai — naye tracking number use karein`, "err"); return; }
     }
     setFinalizing(true);
     try {
-      const order = orders[activeRequest.order_id];
+      // Pre-check the DB so we fail with a clear message instead of a raw constraint error.
+      const enc = trimmedNumbers.map(encodeURIComponent).join(",");
+      const clash = await sb(`/rest/v1/sales_orders?external_order_id=in.(${enc})&select=external_order_id`, { token });
+      if (clash && clash.length) {
+        showToast(`Yeh tracking number(s) pehle se system mein maujood hain: ${clash.map(c => c.external_order_id).join(", ")} — alag number daalein`, "err");
+        setFinalizing(false); return;
+      }
       let createdCount = 0;
       for (const g of groups) {
         const groupLines = lines.filter(l => Number(g.allocations[l.id] || 0) > 0);
@@ -8965,13 +8982,13 @@ function TrackingSplitView({ token, profile, showToast }) {
         createdCount++;
       }
       await sb(`/rest/v1/sales_orders?id=eq.${order.id}`, { method: "PATCH", token, body: { status: "split" } });
-      await sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}`, { method: "PATCH", token, body: { status: "superseded" } });
+      await sb(`/rest/v1/pack_tasks?order_id=eq.${order.id}&is_incomplete_transfer=eq.false`, { method: "PATCH", token, body: { status: "superseded" } });
       await sb(`/rest/v1/tracking_split_requests?id=eq.${activeRequest.id}`, { method: "PATCH", token, body: { status: "resolved", resolved_by: profile.id, resolved_at: new Date().toISOString() } });
-      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, field_changed: "Tracking Split", old_value: order.external_order_id, new_value: groups.map(g => g.trackingNumber).join(", "), changed_by: profile.id } });
+      await sb(`/rest/v1/audit_trail`, { method: "POST", token, body: { entity_type: "sales_order", entity_id: order.id, field_changed: "Tracking Split", old_value: order.external_order_id, new_value: trimmedNumbers.join(", "), changed_by: profile.id } });
       showToast(`✓ Order ${order.external_order_id} — ${createdCount} naye tracking(s) mein split ho gaya`);
       setActiveRequest(null);
       load();
-    } catch (e) { showToast("Split fail: " + e.message, "err"); }
+    } catch (e) { showToast("Split fail: " + (e.message || "").slice(0, 120), "err"); }
     setFinalizing(false);
   };
 
@@ -10085,8 +10102,8 @@ function SectionTitle({ title, action }) {
 function EmptyNote({ text }) { return <div style={{ color: "#8A8272", fontSize: 13, padding: "20px 4px", fontFamily: "'IBM Plex Mono', monospace" }}>— {text}</div>; }
 
 /* ================= STOCKING WAREHOUSE — RECEIVING ================= */
-const STK_SOURCES = ["E-COM", "LOCAL", "IMPORT"];
-const STK_BENCHMARK_DAYS = { "E-COM": 1, "LOCAL": 3, "IMPORT": 15 };
+const STK_SOURCES = ["LOCAL", "IMPORT"];
+const STK_BENCHMARK_DAYS = { "LOCAL": 3, "IMPORT": 15 };
 const STK_DC_STATUS_LABEL = { pending_import: "Pending Import", ready_for_inspection: "Ready for Inspection", in_progress: "Inspection In Progress", completed: "Inspection Complete", grn_posted: "GRN Posted" };
 // A single derived STR status label used everywhere (status cards, list views, exports) — kept
 // purely computed from stk_str's existing fields (status/picked_at/packed_at) rather than a new
@@ -10139,7 +10156,7 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [dcs, setDcs] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  const [poNumber, setPoNumber] = useState(""); const [scheduledDate, setScheduledDate] = useState("");
+  const [poNumber, setPoNumber] = useState(""); const [scheduledDate, setScheduledDate] = useState(""); const [noAppointment, setNoAppointment] = useState(false);
   const [importSourceChoice, setImportSourceChoice] = useState({});
   const [dcNumber, setDcNumber] = useState(""); const [dcQty, setDcQty] = useState("");
 
@@ -10150,6 +10167,7 @@ function StockingReceivingView({ token, profile, showToast }) {
   const [grnDc, setGrnDc] = useState(null); const [grnLines, setGrnLines] = useState([]); const [grnNumberInput, setGrnNumberInput] = useState("");
   const [dcLineTotals, setDcLineTotals] = useState({}); // { [dc_id]: { grnQty, rtvQty } }
   const [activePoDetail, setActivePoDetail] = useState(null);
+  const [editDemand, setEditDemand] = useState(""); const [demandReason, setDemandReason] = useState(""); const [poQtyHistory, setPoQtyHistory] = useState([]);
 
   const loadAll = async () => {
     setLoading(true);
@@ -10193,14 +10211,19 @@ function StockingReceivingView({ token, profile, showToast }) {
     setLoading(true);
     try {
       let po = poByPo(poNumber);
+      if (po && po.status === "completed") {
+        if (!window.confirm(`PO ${po.po_number} already COMPLETED hai. Kya is PO par naya DC add karna hai? PO wapas "Partial" ho jayega aur Admin/Inbound Executive ko Demand check karni hogi.`)) { setLoading(false); return; }
+        await sb(`/rest/v1/stk_purchase_orders?id=eq.${po.id}`, { method: "PATCH", token, body: { status: "partial" } });
+        po = { ...po, status: "partial" }; setPos(ps => ps.map(p => p.id === po.id ? po : p));
+      }
       if (!po) {
         const created = await sb(`/rest/v1/stk_purchase_orders`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: whId, po_number: poNumber.trim(), supplier: null, source: null, scheduled_date: scheduledDate || null, created_by: profile.id } });
         po = created[0]; setPos(p => [po, ...p]);
       }
-      const dcCreated = await sb(`/rest/v1/stk_dc_arrivals`, { method: "POST", token, prefer: "return=representation", body: { po_id: po.id, warehouse_id: whId, dc_number: dcNumber.trim(), dc_qty_total: Number(dcQty), received_by: profile.id } });
+      const dcCreated = await sb(`/rest/v1/stk_dc_arrivals`, { method: "POST", token, prefer: "return=representation", body: { po_id: po.id, warehouse_id: whId, dc_number: dcNumber.trim(), dc_qty_total: Number(dcQty), received_by: profile.id, delivery_type: noAppointment ? "unscheduled" : ((po.scheduled_date || scheduledDate) ? "scheduled" : null) } });
       setDcs(d => [dcCreated[0], ...d]);
       showToast(`DC ${dcNumber} arrival flag ho gayi — PO ${po.po_number} k against`);
-      setDcNumber(""); setDcQty("");
+      setDcNumber(""); setDcQty(""); setNoAppointment(false);
     } catch (e) { showToast("Save fail: " + e.message, "err"); }
     setLoading(false);
   };
@@ -10223,14 +10246,18 @@ function StockingReceivingView({ token, profile, showToast }) {
         const dcQty = Number(r["Stock move/Quantity"] ?? r["Quantity"] ?? 0) || 0;
         const demandQty = Number(r["Stock move/Demand"] ?? r["Demand"] ?? dcQty) || 0;
         poTotalDemand += demandQty;
+        const costRaw = r["Unit Cost"] ?? r["Cost"] ?? r["Unit Price"] ?? r["Stock move/Unit Price"] ?? r["Stock move/Price Unit"] ?? r["Stock move/Product/Cost"] ?? r["Price Unit"];
+        const cost = costRaw === undefined || costRaw === null || String(costRaw).trim() === "" ? null : Number(String(costRaw).replace(/,/g, ""));
         const key = barcode || String(productRaw);
-        if (!grouped[key]) grouped[key] = { product_barcode: barcode || null, product_name: String(productRaw), demand_qty: 0 };
+        if (!grouped[key]) grouped[key] = { product_barcode: barcode || null, product_name: String(productRaw), demand_qty: 0, costQty: 0, costSum: 0 };
         grouped[key].demand_qty += dcQty;
+        if (cost !== null && !isNaN(cost)) { grouped[key].costQty += dcQty || 1; grouped[key].costSum += cost * (dcQty || 1); }
       }
       const lines = Object.values(grouped);
       if (!lines.length) { showToast("File mai koi valid line nahi mili", "err"); setLoading(false); return; }
       for (const l of lines) {
-        await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, body: { dc_id: dc.id, product_barcode: l.product_barcode, product_name: l.product_name, demand_qty: l.demand_qty } });
+        const unitCost = l.costQty > 0 ? Math.round((l.costSum / l.costQty) * 100) / 100 : null;
+        await sb(`/rest/v1/stk_dc_lines`, { method: "POST", token, body: { dc_id: dc.id, product_barcode: l.product_barcode, product_name: l.product_name, demand_qty: l.demand_qty, ...(unitCost !== null ? { unit_cost: unitCost } : {}) } });
       }
       // Auto-seed the catalogue from whatever this transfer already tells us (barcode + name).
       // ignore-duplicates so this NEVER overwrites a richer row that came from a full Catalogue
@@ -10243,10 +10270,14 @@ function StockingReceivingView({ token, profile, showToast }) {
       // PO Qty = this file's "Demand" total — same Odoo file used for every DC on this PO
       // already carries the full PO's Demand, so this is set (overwritten) directly, not
       // accumulated across DC imports. No separate template upload needed.
-      const poPatch = { po_qty: poTotalDemand, ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) };
+      const poCur = pos.find(p => p.id === dc.po_id) || {};
+      const keepManual = !!poCur.po_qty_manual && Number(poCur.po_qty) !== Number(poTotalDemand);
+      const poPatch = { ...(keepManual ? {} : { po_qty: poTotalDemand }), ...(supplierFromFile ? { supplier: supplierFromFile } : {}), ...(sourceChoice ? { source: sourceChoice } : {}) };
       await sb(`/rest/v1/stk_purchase_orders?id=eq.${dc.po_id}`, { method: "PATCH", token, body: poPatch });
       setPos(ps => ps.map(p => p.id === dc.po_id ? { ...p, ...poPatch } : p));
-      showToast(`${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai (PO Qty: ${poTotalDemand})`);
+      showToast(keepManual
+        ? `${lines.length} lines import ho gayin — DC ${dc.dc_number} inspection k liye ready. ⚠ PO Demand manually ${poCur.po_qty} set hai (Odoo file: ${poTotalDemand}) — manual value rakhi gayi.`
+        : `${lines.length} lines import ho gayin — DC ${dc.dc_number} ab inspection k liye ready hai (PO Qty: ${poTotalDemand})`);
       loadAll();
     } catch (e) { showToast("Import fail: " + e.message, "err"); }
     setLoading(false);
@@ -10254,6 +10285,30 @@ function StockingReceivingView({ token, profile, showToast }) {
 
   const openPoDetail = async (po) => {
     setActivePoDetail({ po, dcRows: dcs.filter(d => d.po_id === po.id) });
+    setEditDemand(""); setDemandReason(""); setPoQtyHistory([]);
+    try { setPoQtyHistory(await sb(`/rest/v1/stk_po_qty_history?po_id=eq.${po.id}&select=*&order=changed_at.desc`, { token }) || []); } catch (e) { /* history table optional until SQL is run */ }
+  };
+
+  const canEditDemand = ["admin", "inbound_executive"].includes(profile.role);
+  const saveDemandQty = async (newQtyRaw, reason) => {
+    const po = activePoDetail?.po; if (!po) return;
+    const newQty = Number(newQtyRaw);
+    const receivedOk = activePoDetail.dcRows.reduce((s, d) => s + Number(dcLineTotals[d.id]?.grnQty || 0), 0);
+    if (String(newQtyRaw ?? "").trim() === "" || isNaN(newQty) || newQty < 0) { showToast("Sahi Demand qty daalein", "err"); return; }
+    if (newQty < receivedOk) { showToast(`Demand ${receivedOk} (already received OK qty) se kam nahi ho sakti`, "err"); return; }
+    if (!String(reason || "").trim()) { showToast("Edit ki wajah likhna zaroori hai (audit ke liye)", "err"); return; }
+    setLoading(true);
+    try {
+      await sb(`/rest/v1/stk_purchase_orders?id=eq.${po.id}`, { method: "PATCH", token, body: { po_qty: newQty, po_qty_manual: true, po_qty_edited_by: profile.id, po_qty_edited_at: new Date().toISOString(), po_qty_edit_reason: String(reason).trim() } });
+      const res = await recomputePoStatus(po.id);
+      const updatedPo = { ...po, po_qty: newQty, po_qty_manual: true, po_qty_edit_reason: String(reason).trim(), status: res?.status || po.status };
+      setPos(ps => ps.map(p => p.id === po.id ? { ...p, ...updatedPo } : p));
+      setActivePoDetail(a => ({ ...a, po: updatedPo }));
+      setEditDemand(""); setDemandReason("");
+      try { setPoQtyHistory(await sb(`/rest/v1/stk_po_qty_history?po_id=eq.${po.id}&select=*&order=changed_at.desc`, { token }) || []); } catch (e) {}
+      showToast(`✅ PO ${po.po_number} Demand ${po.po_qty || 0} → ${newQty}${res?.status === "completed" ? " · PO COMPLETED" : res ? ` · PO ${res.status} (${res.received}/${res.ordered})` : ""}`);
+    } catch (e) { showToast("Demand update fail: " + e.message, "err"); }
+    setLoading(false);
   };
 
   const openDcForInspection = async (dc) => {
@@ -10262,8 +10317,9 @@ function StockingReceivingView({ token, profile, showToast }) {
       const lines = await sb(`/rest/v1/stk_dc_lines?dc_id=eq.${dc.id}&select=*&order=product_name.asc`, { token });
       setActiveDc(dc); setActiveLines(lines || []);
       if (dc.status === "ready_for_inspection") {
-        await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "in_progress" } });
-        setDcs(ds => ds.map(d => d.id === dc.id ? { ...d, status: "in_progress" } : d));
+        const startedAt = new Date().toISOString();
+        await sb(`/rest/v1/stk_dc_arrivals?id=eq.${dc.id}`, { method: "PATCH", token, body: { status: "in_progress", inspection_started_at: startedAt } });
+        setDcs(ds => ds.map(d => d.id === dc.id ? { ...d, status: "in_progress", inspection_started_at: startedAt } : d));
       }
     } catch (e) { showToast("Load fail: " + e.message, "err"); }
     setLoading(false);
@@ -10311,7 +10367,7 @@ function StockingReceivingView({ token, profile, showToast }) {
   const submitInspection = async () => {
     await saveInspectionProgress();
     try {
-      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${activeDc.id}`, { method: "PATCH", token, body: { status: "completed" } });
+      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${activeDc.id}`, { method: "PATCH", token, body: { status: "completed", inspection_completed_at: new Date().toISOString() } });
       showToast(`DC ${activeDc.dc_number} inspection submit ho gayi — Inbound Executive ki window mai ab Completed dikhega`);
       setActiveDc(null); setActiveLines([]);
       loadAll();
@@ -10321,6 +10377,34 @@ function StockingReceivingView({ token, profile, showToast }) {
   const openGrnDc = async (dc) => {
     const lines = await sb(`/rest/v1/stk_dc_lines?dc_id=eq.${dc.id}&select=*`, { token });
     setGrnDc(dc); setGrnLines(lines || []); setGrnNumberInput("");
+  };
+
+  // A PO is Completed only when every DC on it is GRN-posted AND accepted (OK) qty has reached
+  // the PO's Demand (po_qty) — from Odoo, or as edited by Admin / Inbound Executive when Odoo's
+  // PO was short-closed. Multiple partial DCs keep the PO "partial" until then.
+  const recomputePoStatus = async (poId, justPostedDcId = null) => {
+    const [poRows, allDcs] = await Promise.all([
+      sb(`/rest/v1/stk_purchase_orders?id=eq.${poId}&select=id,po_qty,status`, { token }),
+      sb(`/rest/v1/stk_dc_arrivals?po_id=eq.${poId}&select=id,status`, { token })
+    ]);
+    const po = (poRows || [])[0]; if (!po) return null;
+    const dcList = allDcs || [];
+    const lines = [];
+    for (let i = 0; i < dcList.length; i += 60) {
+      const ids = dcList.slice(i, i + 60).map(d => d.id);
+      const rows = await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${ids.join(",")})&select=demand_qty,ok_qty`, { token });
+      lines.push(...(rows || []));
+    }
+    const dcSum = lines.reduce((s, l) => s + Number(l.demand_qty || 0), 0);
+    const ordered = Number(po.po_qty) > 0 ? Number(po.po_qty) : dcSum;
+    const received = lines.reduce((s, l) => s + Number(l.ok_qty || 0), 0);
+    const allPosted = dcList.length > 0 && dcList.every(d => d.status === "grn_posted" || d.id === justPostedDcId);
+    const status = allPosted && ordered > 0 && received >= ordered ? "completed" : dcList.length ? "partial" : "open";
+    const body = { status };
+    try { await sb(`/rest/v1/stk_purchase_orders?id=eq.${poId}`, { method: "PATCH", token, body: { ...body, closed_at: status === "completed" ? new Date().toISOString() : null } }); }
+    catch (e) { await sb(`/rest/v1/stk_purchase_orders?id=eq.${poId}`, { method: "PATCH", token, body }); }
+    setPos(ps => ps.map(p => p.id === poId ? { ...p, status } : p));
+    return { status, ordered, received };
   };
 
   const postGrn = async () => {
@@ -10337,15 +10421,8 @@ function StockingReceivingView({ token, profile, showToast }) {
           await sb(`/rest/v1/stk_rtv_queue`, { method: "POST", token, body: { dc_line_id: l.id, dc_id: grnDc.id, po_id: grnDc.po_id, warehouse_id: whId, supplier: supplierName, product_name: l.product_name, product_barcode: l.product_barcode, dmg_qty: l.dmg_qty, mnf_qty: l.mnf_qty, wrong_qty: l.wrong_qty, excess_qty: l.excess_qty, short_qty: l.short_qty, demand_qty: l.demand_qty, ok_qty: l.ok_qty, photo_data_url: l.photo_data_url || null, comment: l.comment || null } });
         }
       }
-      const allDcs = await sb(`/rest/v1/stk_dc_arrivals?po_id=eq.${grnDc.po_id}&select=*`, { token });
-      const dcIds = allDcs.map(d => d.id).join(",");
-      const allLines = dcIds ? await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${dcIds})&select=demand_qty,ok_qty`, { token }) : [];
-      const ordered = allLines.reduce((s, l) => s + Number(l.demand_qty || 0), 0);
-      const received = allLines.reduce((s, l) => s + Number(l.ok_qty || 0), 0);
-      const allPosted = allDcs.every(d => d.status === "grn_posted" || d.id === grnDc.id);
-      const poStatus = (allPosted && ordered > 0 && received >= ordered) ? "completed" : "partial";
-      await sb(`/rest/v1/stk_purchase_orders?id=eq.${grnDc.po_id}`, { method: "PATCH", token, body: { status: poStatus } });
-      showToast(`✅ GRN ${grnNumberInput} post ho gayi — DC ${grnDc.dc_number} automatically Stocking Outbound tab mein forward ho gayi hai (Assignment k liye ready)`);
+      const poRes = await recomputePoStatus(grnDc.po_id, grnDc.id);
+      showToast(`✅ GRN ${grnNumberInput} post ho gayi — DC ${grnDc.dc_number} automatically Stocking Outbound tab mein forward ho gayi hai (Assignment k liye ready)${poRes ? (poRes.status === "completed" ? " · PO COMPLETED" : ` · PO partial: ${poRes.received}/${poRes.ordered} received`) : ""}`);
       setGrnDc(null); setGrnLines([]); setGrnNumberInput("");
       loadAll();
     } catch (e) { showToast("GRN post fail: " + e.message, "err"); }
@@ -10379,6 +10456,7 @@ function StockingReceivingView({ token, profile, showToast }) {
             <input type="date" style={{ ...S.input, flex: 1, minWidth: 140 }} value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} disabled={!!poByPo(poNumber)} />
             <input style={{ ...S.input, flex: 1, minWidth: 140, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="DC Number" value={dcNumber} onChange={e => setDcNumber(e.target.value)} />
             <input type="number" style={{ ...S.input, flex: 1, minWidth: 120 }} placeholder="DC Total Qty" value={dcQty} onChange={e => setDcQty(e.target.value)} />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#6B6355", cursor: "pointer" }}><input type="checkbox" checked={noAppointment} onChange={e => setNoAppointment(e.target.checked)} /> Unscheduled (no appointment)</label>
             <button style={S.primaryBtnSm} onClick={addPoAndDc} disabled={loading || !whId}>+ Flag Arrival</button>
           </div>
           {poByPo(poNumber) && <div style={{ marginTop: 8, fontSize: 12, color: "#8A8272" }}>PO {poNumber} pehle se maujood hai — DC add karne se attach ho jayegi. Supplier/Source Odoo import se automatically aa jayega.</div>}
@@ -10436,6 +10514,44 @@ function StockingReceivingView({ token, profile, showToast }) {
               </div>
             ))}
           </div>
+          {(() => {
+            const po = activePoDetail.po;
+            const receivedOk = activePoDetail.dcRows.reduce((s, d) => s + Number(dcLineTotals[d.id]?.grnQty || 0), 0);
+            const demand = Number(po.po_qty || 0);
+            const original = po.original_po_qty != null ? Number(po.original_po_qty) : null;
+            return (
+              <div style={{ background: "#F4EFE6", border: "1px solid #E0D8C5", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+                <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12.5, color: "#2B2620", marginBottom: canEditDemand ? 12 : 0 }}>
+                  <span>PO Demand: <b>{demand}</b>{po.po_qty_manual ? <span style={{ color: "#F5A623" }}> (manually edited)</span> : ""}</span>
+                  {original != null && original !== demand && <span>Original Odoo Demand: <b>{original}</b></span>}
+                  <span>Received (OK, all DCs): <b>{receivedOk}</b></span>
+                  <span>Remaining: <b style={{ color: demand - receivedOk > 0 ? "#E5484D" : "#4CAF7D" }}>{Math.max(0, demand - receivedOk)}</b></span>
+                  <span>DCs on this PO: <b>{activePoDetail.dcRows.length}</b></span>
+                </div>
+                {canEditDemand && (
+                  <>
+                    <div style={{ fontSize: 11, color: "#6B6355", marginBottom: 8 }}>Odoo mein PO edit / short-close hua ho (vendor ke paas baqi stock nahi) to yahan Demand update karein. PO tab Completed hoga jab saare DCs ki GRN post ho aur received qty Demand tak pahunch jaye. Demand wapas barhane se PO dobara Partial ho jata hai.</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                      <input type="number" min={receivedOk} style={{ ...S.input, width: 150 }} placeholder={`New Demand (min ${receivedOk})`} value={editDemand} onChange={e => setEditDemand(e.target.value)} />
+                      <input style={{ ...S.input, flex: 1, minWidth: 220 }} placeholder="Wajah (zaroori) — e.g. Odoo PO short-closed, vendor stock khatam" value={demandReason} onChange={e => setDemandReason(e.target.value)} />
+                      <button style={S.primaryBtnSm} disabled={loading} onClick={() => saveDemandQty(editDemand, demandReason)}>Save Demand</button>
+                      <button style={S.secondaryBtnSm} disabled={loading || receivedOk === demand} onClick={() => { if (window.confirm(`Demand ${demand} → ${receivedOk} (jitna aa chuka) set karein aur PO close karein?`)) saveDemandQty(receivedOk, demandReason || "Short-close: Demand set to received qty (Odoo PO edited)"); }}>Short-close: Demand = Received ({receivedOk})</button>
+                    </div>
+                  </>
+                )}
+                {poQtyHistory.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 10.5, color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace", marginBottom: 6 }}>DEMAND CHANGE HISTORY</div>
+                    {poQtyHistory.map(h => (
+                      <div key={h.id} style={{ fontSize: 12, color: "#2B2620", padding: "4px 0", borderBottom: "1px solid #EFE8D8" }}>
+                        {fmtTime(h.changed_at)} · <b>{h.old_qty ?? "—"} → {h.new_qty}</b> · {h.change_source === "manual" ? "Manual" : "Odoo import"}{h.reason ? ` · "${h.reason}"` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={S.th}>DC#</th><th style={S.th}>DC Qty</th><th style={S.th}>GRN#</th><th style={S.th}>GRN Qty</th><th style={S.th}>RTV Qty</th><th style={S.th}>Status</th><th style={S.th}>Received At</th></tr></thead>
             <tbody>
@@ -13232,131 +13348,795 @@ function StockingReportsView({ token, profile, showToast }) {
 }
 
 /* ================= STOCKING WAREHOUSE — DASHBOARD ================= */
+/* ================= STOCKING — GRN & SUPPLIER PERFORMANCE DASHBOARD ================= */
+// Date/time basis: Asia/Karachi (UTC+05:00, no DST). SLA calendar v1: 24h working days,
+// Sundays excluded. All heavy aggregation (lines, putaway, RTV per DC) happens server-side
+// in the secured view stk_v_receipt_cases; the browser only receives one row per DC.
+const STK_PKT = "+05:00";
+const STK_DAY_MS = 86400000;
+function pkYmd(d) { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi", year: "numeric", month: "2-digit", day: "2-digit" }).format(d); }
+function pkStart(ymd) { return new Date(`${ymd}T00:00:00${STK_PKT}`); }
+function pkAddDays(ymd, n) { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function pkDow(ymd) { return new Date(`${ymd}T12:00:00Z`).getUTCDay(); }
+function pkMonthKey(iso) { return iso ? pkYmd(new Date(iso)).slice(0, 7) : null; }
+function pkMonthStart(ymd, back = 0) { const [y, m] = ymd.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 - back, 1)); return d.toISOString().slice(0, 10); }
+function stkWorkingMs(startISO, endISO) {
+  if (!startISO || !endISO) return null;
+  const e = new Date(endISO).getTime(); let cur = new Date(startISO).getTime();
+  if (e <= cur) return 0;
+  let total = 0;
+  for (let i = 0; i < 4000 && cur < e; i++) {
+    const ymd = pkYmd(new Date(cur));
+    const next = pkStart(pkAddDays(ymd, 1)).getTime();
+    const segEnd = Math.min(next, e);
+    if (pkDow(ymd) !== 0) total += segEnd - cur;
+    cur = segEnd;
+  }
+  return total;
+}
+function stkAddWorkingMs(startISO, ms) {
+  let cur = new Date(startISO).getTime(); let left = ms;
+  for (let i = 0; i < 4000 && left > 0; i++) {
+    const ymd = pkYmd(new Date(cur));
+    const next = pkStart(pkAddDays(ymd, 1)).getTime();
+    if (pkDow(ymd) === 0) { cur = next; continue; }
+    const avail = next - cur;
+    if (avail >= left) { cur += left; left = 0; } else { left -= avail; cur = next; }
+  }
+  return new Date(cur).toISOString();
+}
+function stkPct(num, den) { return den > 0 ? `${((num / den) * 100).toFixed(1)}%` : "N/A"; }
+function stkN(v) { return Number(v || 0).toLocaleString(); }
+function stkDur(ms) { if (ms == null) return "—"; const h = ms / 3600000; return h < 48 ? `${h.toFixed(1)}h` : `${(h / 24).toFixed(1)}d`; }
+function stkP90(arr) { if (!arr.length) return null; const s = [...arr].sort((a, b) => a - b); return s[Math.max(0, Math.ceil(0.9 * s.length) - 1)]; }
+function stkAvg(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
+
+const STK_STAGE_DEFS = [
+  ["awaiting_import", "Awaiting Odoo import", "Import Odoo transfer"],
+  ["awaiting_inspection", "Awaiting inspection", "Start inspection"],
+  ["inspecting", "Inspection in progress", "Complete & submit inspection"],
+  ["awaiting_grn", "Accepted — awaiting GRN posting", "Post GRN in Odoo & enter reference"],
+  ["awaiting_putaway", "GRN posted — awaiting putaway", "Assign / start putaway"],
+  ["putaway_progress", "Putaway in progress", "Complete putaway"],
+  ["stocked", "Fully stocked", "—"]
+];
+const STK_STAGE_LABEL = Object.fromEntries(STK_STAGE_DEFS.map(s => [s[0], s[1]]));
+const STK_STAGE_NEXT = Object.fromEntries(STK_STAGE_DEFS.map(s => [s[0], s[2]]));
+const STK_SLA_META = {
+  open_ok: { label: "Open — Within SLA", color: "#4ADE80" },
+  open_warn: { label: "Open — Approaching", color: "#F5A623" },
+  open_breach: { label: "Open — Breached", color: "#F87171" },
+  done_ok: { label: "Completed — Within SLA", color: "#4ADE80" },
+  done_breach: { label: "Completed — Breached", color: "#F87171" },
+  unknown: { label: "SLA unknown", color: "#8F8879" }
+};
+
+function stkStageOf(c) {
+  if (c.status === "pending_import") return "awaiting_import";
+  if (c.status === "ready_for_inspection") return "awaiting_inspection";
+  if (c.status === "in_progress") return "inspecting";
+  if (c.status === "completed") return "awaiting_grn";
+  if (c.status === "grn_posted") {
+    if (Number(c.putaway_pending_qty) > 0) return Number(c.putaway_done_qty) > 0 ? "putaway_progress" : "awaiting_putaway";
+    return "stocked";
+  }
+  return "awaiting_import";
+}
+
+function stkEnrich(c, nowISO, cfg) {
+  const x = { ...c };
+  x.stage = stkStageOf(c);
+  x.rejected_qty = Number(c.dmg_qty || 0) + Number(c.mnf_qty || 0) + Number(c.wrong_qty || 0);
+  x.inspected = c.status === "completed" || c.status === "grn_posted";
+  x.uninspected_qty = x.inspected ? 0 : Number(c.dc_qty_total || 0);
+  x.pending_grn_qty = x.stage === "awaiting_grn" ? Number(c.accepted_qty || 0) : 0;
+  x.posted_qty = c.status === "grn_posted" ? Number(c.accepted_qty || 0) : 0;
+  // --- GRN SLA: physical receipt → GRN posted ---
+  if (!c.received_at || c.sla_days == null) {
+    x.sla = "unknown"; x.deadline = null; x.elapsedMs = c.received_at ? stkWorkingMs(c.received_at, c.grn_posted_at || nowISO) : null;
+  } else {
+    const targetMs = Number(c.sla_days) * STK_DAY_MS;
+    x.deadline = stkAddWorkingMs(c.received_at, targetMs);
+    const end = c.status === "grn_posted" ? c.grn_posted_at : null;
+    x.elapsedMs = stkWorkingMs(c.received_at, end || nowISO);
+    const within = new Date(end || nowISO).getTime() <= new Date(x.deadline).getTime(); // exactly at deadline = within
+    const warnAt = (Number(c.approaching_pct || cfg.approaching_pct || 80) / 100) * targetMs;
+    if (end) x.sla = within ? "done_ok" : "done_breach";
+    else x.sla = !within ? "open_breach" : (x.elapsedMs >= warnAt ? "open_warn" : "open_ok");
+    x.remainingMs = end ? null : Math.max(0, targetMs - x.elapsedMs);
+    x.overdueMs = within ? 0 : Math.max(0, x.elapsedMs - targetMs);
+  }
+  // --- separate stage clocks (working time) ---
+  x.clkArrToInsp = stkWorkingMs(c.received_at, c.inspection_started_at);
+  x.clkInsp = stkWorkingMs(c.inspection_started_at, c.inspection_completed_at);
+  x.clkInspToGrn = stkWorkingMs(c.inspection_completed_at, c.grn_posted_at);
+  x.clkGrnToPutaway = x.stage === "stocked" && c.last_putaway_at ? stkWorkingMs(c.grn_posted_at, c.last_putaway_at) : null;
+  x.dockToStock = x.stage === "stocked" && c.last_putaway_at ? stkWorkingMs(c.received_at, c.last_putaway_at) : null;
+  x.grnMs = c.status === "grn_posted" ? stkWorkingMs(c.received_at, c.grn_posted_at) : null;
+  // --- schedule classification (original appointment preserved) ---
+  x.schedDate = c.original_scheduled_date || c.scheduled_date || null;
+  x.schedClass = c.delivery_type === "unscheduled" ? "unscheduled" : x.schedDate ? "scheduled" : "unknown";
+  x.arrival = null;
+  if (x.schedClass === "scheduled" && c.received_at) {
+    const diff = Math.round((pkStart(pkYmd(new Date(c.received_at))) - pkStart(x.schedDate)) / STK_DAY_MS);
+    const tol = Number(cfg.arrival_tolerance_days || 0);
+    x.arrival = diff < -tol ? "early" : diff > tol ? "late" : "on_time";
+    x.arrivalDiff = diff;
+  }
+  x.inFull = x.inspected && Number(c.demand_qty) > 0 ? Number(c.accepted_qty || 0) >= Number(c.demand_qty) : null;
+  x.otif = x.arrival && x.inFull !== null ? (x.arrival !== "late" && x.inFull) : null;
+  // --- ownership & progress ---
+  x.ownerIds = x.stage === "inspecting" ? (c.inspector_ids || []) : (x.stage === "awaiting_putaway" || x.stage === "putaway_progress") ? (c.putaway_owner_ids || []) : [];
+  const acts = [c.received_at, c.inspection_started_at, c.last_line_update, c.inspection_completed_at, c.grn_posted_at, c.last_putaway_at].filter(Boolean).map(t => new Date(t).getTime());
+  x.lastActivity = acts.length ? new Date(Math.max(...acts)).toISOString() : null;
+  x.open = x.stage !== "stocked";
+  x.noProgress = x.open && x.lastActivity && (new Date(nowISO) - new Date(x.lastActivity)) > Number(cfg.no_progress_hours || 24) * 3600000;
+  x.unassigned = (x.stage === "inspecting" && !(c.inspector_ids || []).length) || ((x.stage === "awaiting_putaway" || x.stage === "putaway_progress") && Number(c.putaway_unassigned_rows) > 0);
+  x.pickupOverdue = c.rtv_oldest_ready_at && (new Date(nowISO) - new Date(c.rtv_oldest_ready_at)) > Number(cfg.pickup_overdue_days || 3) * STK_DAY_MS;
+  x.missingTimestamps = !c.received_at || (x.inspected && !c.inspection_completed_at) || (c.status === "grn_posted" && !c.grn_posted_at);
+  x.issues = [];
+  if (!c.supplier) x.issues.push("Missing supplier");
+  if (c.sla_days == null) x.issues.push("No SLA (source missing)");
+  if (Number(c.missing_barcode_lines) > 0) x.issues.push(`${c.missing_barcode_lines} line(s) without barcode`);
+  if (Number(c.rtv_flagged_qty) > 0) x.issues.push("RTV awaiting verification");
+  if (x.pickupOverdue) x.issues.push("RTV pickup overdue");
+  x.nextAction = STK_STAGE_NEXT[x.stage];
+  return x;
+}
+
+function stkComputePeriod(preset, cFrom, cTo) {
+  const today = pkYmd(new Date());
+  let fromYmd, toYmd, label;
+  if (preset === "today") { fromYmd = today; toYmd = today; label = "Today"; }
+  else if (preset === "yesterday") { fromYmd = pkAddDays(today, -1); toYmd = fromYmd; label = "Yesterday"; }
+  else if (preset === "week") { const dow = pkDow(today); fromYmd = pkAddDays(today, -((dow + 6) % 7)); toYmd = today; label = "This Week"; }
+  else if (preset === "prev") { fromYmd = pkMonthStart(today, 1); toYmd = pkAddDays(pkMonthStart(today, 0), -1); label = "Previous Month"; }
+  else if (preset === "custom" && cFrom && cTo) { fromYmd = cFrom; toYmd = cTo; label = `${cFrom} → ${cTo}`; }
+  else { fromYmd = pkMonthStart(today, 0); toYmd = today; label = "Month to Date"; }
+  const from = pkStart(fromYmd).getTime(); const to = pkStart(pkAddDays(toYmd, 1)).getTime();
+  const days = Math.round((to - from) / STK_DAY_MS);
+  let pFrom, pTo, prevLabel;
+  if (preset === "mtd" || (preset !== "custom" && !["today", "yesterday", "week", "prev"].includes(preset))) {
+    const pStartYmd = pkMonthStart(today, 1);
+    const pEndCap = pkStart(pkMonthStart(today, 0)).getTime();
+    pFrom = pkStart(pStartYmd).getTime(); pTo = Math.min(pFrom + days * STK_DAY_MS, pEndCap);
+    prevLabel = `same ${days} day(s) of previous month`;
+  } else { pTo = from; pFrom = from - days * STK_DAY_MS; prevLabel = `previous ${days} day(s)`; }
+  return { fromYmd, toYmd, from, to, days, label, pFrom, pTo, prevLabel };
+}
+
 function StockingDashboardView({ token, profile }) {
   const whId = useStkWarehouseId(token, profile);
-  const [pos, setPos] = useState([]);
-  const [dcs, setDcs] = useState([]);
-  const [lines, setLines] = useState([]);
-  const [rtvRows, setRtvRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("overview");
+  const [preset, setPreset] = useState("mtd");
+  const [customFrom, setCustomFrom] = useState(""); const [customTo, setCustomTo] = useState("");
+  const [flt, setFlt] = useState({ supplier: "", source: "", sched: "", stage: "", sla: "", user: "", search: "" });
+  const [raw, setRaw] = useState([]); const [pos, setPos] = useState([]);
+  const [settings, setSettings] = useState({}); const [people, setPeople] = useState({});
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  const [loadMs, setLoadMs] = useState(null); const [lastUpdated, setLastUpdated] = useState(null);
+  const [rtvRows, setRtvRows] = useState(null); const [rtvCost, setRtvCost] = useState({}); const [rtvErr, setRtvErr] = useState("");
+  const [drill, setDrill] = useState(null); const [showSecondary, setShowSecondary] = useState(false);
+  const [sortKey, setSortKey] = useState("received"); const [sortDir, setSortDir] = useState(-1);
+  const [actionPage, setActionPage] = useState(0); const [nowTick, setNowTick] = useState(Date.now());
+  const cfg = { arrival_tolerance_days: 0, min_rank_volume: 50, pickup_overdue_days: 3, no_progress_hours: 24, approaching_pct: 80, ...settings };
 
+  const BG = "#0F0D0A", CARD = "#1A1712", BORDER = "rgba(255,255,255,0.08)", TXT = "#F4EFE6", MUTED = "#8F8879", AMBER = "#F5A623", GREEN = "#4ADE80", RED = "#F87171", BLUE = "#60A5FA", GREY = "#6B6355";
+  const panel = { background: CARD, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, marginBottom: 14, overflowX: "auto" };
+  const head = { color: TXT, fontSize: 13, fontWeight: 700, letterSpacing: 0.3 };
+  const basisTag = (t) => <span style={{ fontSize: 10, color: MUTED, border: `1px solid ${BORDER}`, borderRadius: 20, padding: "2px 8px", marginLeft: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{t}</span>;
+  const th = { textAlign: "left", color: MUTED, fontSize: 10.5, padding: "7px 8px", borderBottom: `1px solid ${BORDER}`, fontFamily: "'IBM Plex Mono', monospace", whiteSpace: "nowrap", cursor: "default" };
+  const td = { padding: "8px 8px", fontSize: 12.5, color: TXT, borderBottom: `1px solid rgba(255,255,255,0.05)`, whiteSpace: "nowrap" };
+  const inp = { background: "rgba(255,255,255,0.05)", border: `1px solid ${BORDER}`, borderRadius: 6, color: TXT, padding: "7px 9px", fontSize: 12, fontFamily: "'Space Grotesk', sans-serif" };
+  const pill = (a, c = AMBER) => ({ background: a ? c : "transparent", color: a ? "#1A1206" : TXT, border: `1px solid ${a ? c : BORDER}`, borderRadius: 20, padding: "6px 13px", fontSize: 12, cursor: "pointer", fontWeight: a ? 700 : 400, fontFamily: "'Space Grotesk', sans-serif" });
+  const badge = (label, color) => <span style={{ fontSize: 10, color, border: `1px solid ${color}`, borderRadius: 20, padding: "2px 8px", fontFamily: "'IBM Plex Mono', monospace" }}>{label}</span>;
+  const name = (id) => people[id] || (id ? "—" : "Unassigned");
+
+  const load = async () => {
+    if (!whId) return;
+    const t0 = performance.now();
+    setErr("");
+    try {
+      const today = pkYmd(new Date());
+      let sinceYmd = pkMonthStart(today, 14);
+      if (preset === "custom" && customFrom && customFrom < sinceYmd) sinceYmd = customFrom;
+      const since = pkStart(sinceYmd).toISOString().split(".")[0] + "Z";
+      const whF = whId ? `warehouse_id=eq.${whId}&` : "";
+      const [cases, poRows, st, profs] = await Promise.all([
+        sb(`/rest/v1/stk_v_receipt_cases?${whF}or=(received_at.gte.${since},grn_posted_at.gte.${since},status.neq.grn_posted,putaway_pending_qty.gt.0,rtv_open_qty.gt.0)&select=*&order=received_at.desc&limit=10000`, { token }),
+        sb(`/rest/v1/stk_purchase_orders?${whF}original_scheduled_date=gte.${sinceYmd}&select=id,po_number,supplier,source,scheduled_date,original_scheduled_date,status`, { token }).catch(() => []),
+        sb(`/rest/v1/stk_dashboard_settings?select=*&limit=1`, { token }).catch(() => []),
+        sb(`/rest/v1/profiles?select=id,full_name`, { token }).catch(() => [])
+      ]);
+      setRaw(cases || []); setPos(poRows || []);
+      setSettings((st && st[0]) || {});
+      setPeople(Object.fromEntries((profs || []).map(p => [p.id, p.full_name])));
+      setLastUpdated(new Date()); setNowTick(Date.now());
+      setLoadMs(Math.round(performance.now() - t0));
+    } catch (e) {
+      setErr(/stk_v_receipt_cases|does not exist|42P01/i.test(e.message || "") ? "Dashboard view nahi mila — pehle wms-stk-grn-dashboard.sql Supabase mein chalayein." : `Load fail: ${e.message}`);
+    }
+    setLoading(false);
+  };
+
+  const loadRtv = async () => {
+    if (!whId) return;
+    setRtvErr("");
+    const whF = `warehouse_id=eq.${whId}&`;
+    const cols = "id,dc_id,dc_line_id,po_id,supplier,product_barcode,product_name,dmg_qty,mnf_qty,wrong_qty,excess_qty,short_qty,status,verified_at,verified_by,handed_over_at,handed_over_by,comment";
+    try {
+      let rows;
+      try { rows = await sb(`/rest/v1/stk_rtv_queue?${whF}select=${cols},created_at&limit=10000`, { token }); }
+      catch (e) { rows = await sb(`/rest/v1/stk_rtv_queue?${whF}select=${cols}&limit=10000`, { token }); }
+      rows = rows || [];
+      const openLineIds = [...new Set(rows.filter(r => r.status !== "handed_over" && r.dc_line_id).map(r => r.dc_line_id))];
+      const costMap = {};
+      for (let i = 0; i < openLineIds.length; i += 60) {
+        const chunk = openLineIds.slice(i, i + 60);
+        const ls = await sb(`/rest/v1/stk_dc_lines?id=in.(${chunk.join(",")})&select=id,unit_cost`, { token }).catch(() => []);
+        for (const l of ls || []) costMap[l.id] = l.unit_cost;
+      }
+      setRtvCost(costMap); setRtvRows(rows);
+    } catch (e) { setRtvErr(`RTV load fail: ${e.message}`); setRtvRows([]); }
+  };
+
+  useEffect(() => { if (whId) load(); }, [whId, preset === "custom" ? customFrom : ""]);
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const whFilter = whId ? `warehouse_id=eq.${whId}&` : "";
-        const [poRows, dcRows, rtv] = await Promise.all([
-          sb(`/rest/v1/stk_purchase_orders?${whFilter}select=*`, { token }),
-          sb(`/rest/v1/stk_dc_arrivals?${whFilter}select=*`, { token }),
-          sb(`/rest/v1/stk_rtv_queue?${whFilter}select=*`, { token })
-        ]);
-        const dcIds = (dcRows || []).map(d => d.id);
-        const lineRows = dcIds.length ? await sb(`/rest/v1/stk_dc_lines?dc_id=in.(${dcIds.join(",")})&select=*`, { token }) : [];
-        setPos(poRows || []); setDcs(dcRows || []); setLines(lineRows || []); setRtvRows(rtv || []);
-      } catch (e) { /* silent */ }
-      setLoading(false);
-    })();
-  }, [whId]);
+    const iv = setInterval(() => { if (document.visibilityState === "visible") { load(); if (rtvRows !== null) loadRtv(); } }, 60000);
+    const onVis = () => { if (document.visibilityState === "visible" && lastUpdated && Date.now() - lastUpdated.getTime() > 60000) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [whId, lastUpdated, rtvRows]);
+  useEffect(() => { if ((tab === "rtv" || tab === "trends") && rtvRows === null && whId) loadRtv(); }, [tab, whId]);
 
-  const totalPos = pos.length;
-  const completedPos = pos.filter(p => p.status === "completed").length;
-  const partialPos = pos.filter(p => p.status === "partial" || p.status === "open").length;
-  const pendingImportDcs = dcs.filter(d => d.status === "pending_import").length;
-  const pendingInspectionDcs = dcs.filter(d => d.status === "ready_for_inspection" || d.status === "in_progress" || d.status === "completed").length;
-  const rtvPendingQty = rtvRows.filter(r => r.status === "pending").reduce((s, r) => s + Number(r.dmg_qty || 0) + Number(r.mnf_qty || 0) + Number(r.wrong_qty || 0) + Number(r.excess_qty || 0) + Number(r.short_qty || 0), 0);
+  const period = useMemo(() => stkComputePeriod(preset, customFrom, customTo), [preset, customFrom, customTo, nowTick]);
+  const nowISO = new Date(nowTick).toISOString();
+  const all = useMemo(() => raw.map(c => stkEnrich(c, nowISO, cfg)), [raw, nowTick, settings]);
+  const inR = (iso, a = period.from, b = period.to) => { if (!iso) return false; const t = new Date(iso).getTime(); return t >= a && t < b; };
 
-  const vendorStats = {};
-  for (const l of lines) {
-    const dc = dcs.find(d => d.id === l.dc_id); if (!dc) continue;
-    const po = pos.find(p => p.id === dc.po_id); if (!po) continue;
-    const v = vendorStats[po.supplier] || (vendorStats[po.supplier] = { supplier: po.supplier, received: 0, dmg: 0, mnf: 0, wrong: 0, excess: 0, short: 0 });
-    // "Received Qty" = what was actually SUPPOSED to arrive for this line (the DC's demand
-    // qty from the Odoo import) — NOT ok+dmg+mnf+wrong+excess. Those, plus short, should sum
-    // back up to demand_qty at the item level; excess sits outside that (it's extra, not part
-    // of what was ordered), which is why it isn't counted in the RTV ratio's numerator either.
-    v.received += Number(l.demand_qty || 0);
-    v.dmg += Number(l.dmg_qty || 0); v.mnf += Number(l.mnf_qty || 0); v.wrong += Number(l.wrong_qty || 0); v.excess += Number(l.excess_qty || 0); v.short += Number(l.short_qty || 0);
-  }
-  const vendorRows = Object.values(vendorStats).map(v => ({ ...v, exception: v.dmg + v.mnf + v.wrong + v.short, ratio: v.received > 0 ? ((v.dmg + v.mnf + v.wrong + v.short) / v.received) * 100 : 0 })).sort((a, b) => b.ratio - a.ratio);
+  const matches = (c) => {
+    if (flt.supplier && c.supplier !== flt.supplier) return false;
+    if (flt.source && c.source !== flt.source) return false;
+    if (flt.sched && c.schedClass !== flt.sched) return false;
+    if (flt.stage && c.stage !== flt.stage) return false;
+    if (flt.sla && c.sla !== flt.sla) return false;
+    if (flt.user) { const ids = [c.received_by, c.grn_posted_by, ...(c.inspector_ids || []), ...(c.putaway_owner_ids || [])]; if (!ids.includes(flt.user)) return false; }
+    if (flt.search) {
+      const q = flt.search.trim().toLowerCase();
+      const hay = [c.po_number, c.dc_number, c.grn_number, c.odoo_reference, ...(c.sku_keys || [])].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+  const fc = useMemo(() => all.filter(matches), [all, flt]);
+  const suppliers = useMemo(() => [...new Set(all.map(c => c.supplier).filter(Boolean))].sort(), [all]);
+  const userOpts = useMemo(() => { const s = new Set(); all.forEach(c => [c.received_by, c.grn_posted_by, ...(c.inspector_ids || []), ...(c.putaway_owner_ids || [])].forEach(i => i && s.add(i))); return [...s].map(id => [id, people[id] || id.slice(0, 8)]).sort((a, b) => a[1].localeCompare(b[1])); }, [all, people]);
 
-  const supplierBench = {};
-  for (const dc of dcs.filter(d => d.status === "grn_posted")) {
-    const po = pos.find(p => p.id === dc.po_id); if (!po) continue;
-    const days = stkBizDaysExclSunday(dc.received_at, dc.grn_posted_at);
-    const bm = STK_BENCHMARK_DAYS[po.source] ?? 3;
-    const s = supplierBench[po.supplier] || (supplierBench[po.supplier] = { supplier: po.supplier, total: 0, within: 0, delayed: 0, delayDays: 0 });
-    s.total++;
-    if (days <= bm) s.within++; else { s.delayed++; s.delayDays += (days - bm); }
-  }
-  const supplierRows = Object.values(supplierBench).sort((a, b) => b.delayed - a.delayed);
+  // ---------------- core metric sets ----------------
+  const cohort = fc.filter(c => inR(c.received_at));
+  const prevCohort = fc.filter(c => inR(c.received_at, period.pFrom, period.pTo));
+  const postedP = fc.filter(c => c.status === "grn_posted" && inR(c.grn_posted_at));
+  const prevPosted = fc.filter(c => c.status === "grn_posted" && inR(c.grn_posted_at, period.pFrom, period.pTo));
+  const pendingGrn = fc.filter(c => c.stage === "awaiting_grn");
+  const openGrnWork = fc.filter(c => c.status !== "grn_posted");
+  const overdueOpen = openGrnWork.filter(c => c.sla === "open_breach");
+  const completedSla = postedP.filter(c => c.sla === "done_ok" || c.sla === "done_breach");
+  const stockedP = fc.filter(c => c.stage === "stocked" && c.dockToStock != null && inR(c.last_putaway_at));
+  const sum = (arr, k) => arr.reduce((s, c) => s + Number(c[k] || 0), 0);
+  const skuUnion = (arr) => { const s = new Set(); arr.forEach(c => (c.sku_keys || []).forEach(k => s.add(k))); return s.size; };
+  const inspectedCohort = cohort.filter(c => c.inspected);
+  const costCoverage = (arr) => { const lines = sum(arr, "line_count"); return lines ? sum(arr, "costed_lines") / lines : 0; };
+  const d2s = stockedP.map(c => c.dockToStock);
+  const delta = (cur, prev) => { if (!prev) return null; const d = ((cur - prev) / prev) * 100; return `${d >= 0 ? "▲" : "▼"} ${Math.abs(d).toFixed(0)}% vs ${period.prevLabel}`; };
 
-  const today = new Date().toISOString();
-  const pendingAlerts = dcs.filter(d => d.status !== "grn_posted").map(d => {
-    const po = pos.find(p => p.id === d.po_id); if (!po) return null;
-    const days = stkBizDaysExclSunday(d.received_at, today);
-    const bm = STK_BENCHMARK_DAYS[po.source] ?? 3;
-    return { supplier: po.supplier, po_number: po.po_number, dc_number: d.dc_number, source: po.source, days, bm, breach: days > bm };
-  }).filter(Boolean).sort((a, b) => b.days - a.days);
+  const K = {
+    pos: new Set(cohort.map(c => c.po_id)).size, skus: skuUnion(cohort), receipts: cohort.length,
+    physical: sum(inspectedCohort, "physical_qty"), declaredInspected: sum(inspectedCohort, "dc_qty_total"), declaredUninspected: sum(cohort.filter(c => !c.inspected), "dc_qty_total"),
+    grnDocs: new Set(postedP.map(c => c.grn_number || c.dc_id)).size, postedQty: sum(postedP, "posted_qty"),
+    pendingCases: pendingGrn.length, pendingPos: new Set(pendingGrn.map(c => c.po_id)).size, pendingQty: sum(pendingGrn, "pending_grn_qty"),
+    slaOk: completedSla.filter(c => c.sla === "done_ok").length, slaDone: completedSla.length,
+    overdueCount: overdueOpen.length, overdueQty: overdueOpen.reduce((s, c) => s + (c.inspected ? Number(c.accepted_qty || 0) : Number(c.dc_qty_total || 0)), 0),
+    oldest: [...openGrnWork].sort((a, b) => new Date(a.received_at) - new Date(b.received_at))[0],
+    rtvApproved: sum(cohort, "rtv_exception_qty"), rtvDen: sum(cohort, "demand_qty"),
+    d2sAvg: stkAvg(d2s), d2sP90: stkP90(d2s), d2sN: d2s.length,
+    prevPhysical: sum(prevCohort.filter(c => c.inspected), "physical_qty"), prevReceipts: prevCohort.length, prevPosted: sum(prevPosted, "posted_qty")
+  };
+  const schedCount = { scheduled: cohort.filter(c => c.schedClass === "scheduled").length, unscheduled: cohort.filter(c => c.schedClass === "unscheduled").length, unknown: cohort.filter(c => c.schedClass === "unknown").length };
 
-  if (loading) return <EmptyNote text="Loading..." />;
+  const openDrill = (title, basis, rows) => setDrill({ title, basis, rows });
 
-  return (
-    <div>
-      <SectionTitle title="Stocking Warehouse — Inbound Dashboard" />
-      <div style={S.statGrid}>
-        {[["Total POs", totalPos], ["Completed POs", completedPos], ["Open/Partial POs", partialPos], ["Pending Odoo Import", pendingImportDcs], ["In Inspection Pipeline", pendingInspectionDcs], ["RTV Pending Qty", rtvPendingQty]].map(([label, val]) => (
-          <div key={label} style={S.statCard}>
-            <div style={{ fontSize: 10, color: "#8A8272", letterSpacing: 0.5, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()}</div>
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#2B2620", marginTop: 4 }}>{val}</div>
+  // ---------------- reusable UI ----------------
+  const Card = ({ label, value, sub, sub2, color = TXT, tip, onClick, deltaText }) => (
+    <div title={tip} onClick={onClick} style={{ ...panel, marginBottom: 0, cursor: onClick ? "pointer" : "default", position: "relative", overflow: "hidden", borderTop: `2px solid ${color}` }}>
+      <div style={{ position: "absolute", top: -24, right: -24, width: 80, height: 80, borderRadius: "50%", background: color, opacity: 0.08, filter: "blur(10px)" }} />
+      <div style={{ color: MUTED, fontSize: 10, letterSpacing: 0.6, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()} {tip && <span style={{ opacity: 0.6 }}>ⓘ</span>}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color, marginTop: 6, textShadow: `0 0 22px ${color}33` }}>{value}</div>
+      {sub && <div style={{ color: MUTED, fontSize: 11, marginTop: 3 }}>{sub}</div>}
+      {sub2 && <div style={{ color: MUTED, fontSize: 11, marginTop: 1 }}>{sub2}</div>}
+      {deltaText && <div style={{ color: deltaText.startsWith("▲") ? GREEN : RED, fontSize: 10.5, marginTop: 4 }}>{deltaText}</div>}
+    </div>
+  );
+  const HBars = ({ items, unit = "" }) => {
+    const max = Math.max(1, ...items.map(i => i.value));
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {items.map((i, k) => (
+          <div key={k} onClick={i.onClick} style={{ cursor: i.onClick ? "pointer" : "default" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, marginBottom: 3 }}>
+              <span style={{ color: TXT }}>{i.label}</span><span style={{ color: MUTED, fontFamily: "'IBM Plex Mono', monospace" }}>{stkN(i.value)}{unit}{i.sub ? ` · ${i.sub}` : ""}</span>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 20, height: 10, overflow: "hidden" }}>
+              <div style={{ width: `${(i.value / max) * 100}%`, height: "100%", background: i.color || AMBER, borderRadius: 20, transition: "width 0.4s" }} />
+            </div>
           </div>
         ))}
+        {!items.length && <div style={{ color: MUTED, fontSize: 12, textAlign: "center", padding: 12 }}>No data for this selection</div>}
       </div>
-
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Vendor-wise RTV Ratio</div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Total Qty (DC Demand)</th><th style={S.th}>DMG</th><th style={S.th}>MNF</th><th style={S.th}>Wrong</th><th style={S.th}>Short</th><th style={S.th}>RTV Ratio %</th></tr></thead>
-          <tbody>
-            {vendorRows.map(v => (
-              <tr key={v.supplier}>
-                <td style={S.td}>{v.supplier}</td><td style={S.td}>{v.received}</td><td style={S.td}>{v.dmg}</td><td style={S.td}>{v.mnf}</td><td style={S.td}>{v.wrong}</td><td style={S.td}>{v.short}</td>
-                <td style={{ ...S.td, color: v.ratio > 10 ? "#E5484D" : "#2B2620", fontWeight: 600 }}>{v.ratio.toFixed(1)}%</td>
-              </tr>
+    );
+  };
+  const PairBars = ({ days }) => {
+    const max = Math.max(1, ...days.flatMap(d => [d.a, d.b]));
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 160, overflowX: "auto" }}>
+          {days.map((d, k) => (
+            <div key={k} title={`${d.label}: received ${d.a} · posted ${d.b}`} style={{ display: "flex", flexDirection: "column", alignItems: "center", minWidth: 16, flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 1, height: 140 }}>
+                <div style={{ width: 6, height: `${(d.a / max) * 100}%`, background: BLUE, borderRadius: 2 }} />
+                <div style={{ width: 6, height: `${(d.b / max) * 100}%`, background: GREEN, borderRadius: 2 }} />
+              </div>
+              <div style={{ fontSize: 8.5, color: MUTED, marginTop: 3 }}>{d.label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 14, fontSize: 11, color: MUTED, marginTop: 6 }}><span><span style={{ color: BLUE }}>■</span> Physically received (by receipt date)</span><span><span style={{ color: GREEN }}>■</span> GRN posted qty (by posting date)</span></div>
+      </div>
+    );
+  };
+  const caseCols = [
+    ["Supplier", c => c.supplier || "—"], ["PO", c => c.po_number], ["DC", c => c.dc_number], ["GRN Ref", c => c.grn_number || "—"],
+    ["Received", c => c.received_at ? fmtTime(c.received_at) : "—"], ["Physical", c => c.inspected ? stkN(c.physical_qty) : `(${stkN(c.dc_qty_total)} DC)`],
+    ["Accepted", c => c.inspected ? stkN(c.accepted_qty) : "—"], ["Posted", c => stkN(c.posted_qty)], ["Pending GRN", c => stkN(c.pending_grn_qty)],
+    ["Stage", c => STK_STAGE_LABEL[c.stage]], ["Owner", c => c.ownerIds.length ? c.ownerIds.map(name).join(", ") : "Unassigned"],
+    ["Deadline", c => c.deadline ? fmtTime(c.deadline) : "—"], ["Age", c => stkDur(c.elapsedMs)], ["Overdue", c => c.overdueMs ? stkDur(c.overdueMs) : "—"],
+    ["SLA", c => STK_SLA_META[c.sla].label], ["Next Action", c => c.nextAction], ["Issues", c => c.issues.join("; ") || "—"]
+  ];
+  const exportCases = (rows, fname) => exportCSV(fname, caseCols.map(c => c[0]), rows.map(r => caseCols.map(([, fn]) => fn(r))));
+  const CaseTable = ({ rows, limit }) => (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead><tr>{caseCols.map(([h]) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+      <tbody>
+        {(limit ? rows.slice(0, limit) : rows).map(c => (
+          <tr key={c.dc_id} style={{ background: c.sla === "open_breach" ? "rgba(248,113,113,0.06)" : c.sla === "open_warn" ? "rgba(245,166,35,0.05)" : "transparent" }}>
+            {caseCols.map(([h, fn]) => (
+              <td key={h} style={{ ...td, ...(h === "SLA" ? { color: STK_SLA_META[c.sla].color, fontWeight: 600 } : {}), ...(h === "PO" || h === "DC" || h === "GRN Ref" ? { fontFamily: "'IBM Plex Mono', monospace", color: AMBER } : {}), ...(h === "Owner" && !c.ownerIds.length && c.open ? { color: RED } : {}) }}>{fn(c)}</td>
             ))}
-            {!vendorRows.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Abhi data nahi" /></td></tr>}
-          </tbody>
-        </table>
+          </tr>
+        ))}
+        {!rows.length && <tr><td colSpan={caseCols.length} style={{ ...td, color: MUTED, textAlign: "center" }}>No records</td></tr>}
+      </tbody>
+    </table>
+  );
+
+  const printSummary = () => {
+    const filt = Object.entries(flt).filter(([, v]) => v).map(([k, v]) => `${k}: ${k === "user" ? name(v) : v}`).join(", ") || "None";
+    const rows = [
+      ["POs Received (receipt cohort)", `${K.pos} POs · ${K.skus} SKUs · ${K.receipts} receipts`],
+      ["Physical Received Qty", `${stkN(K.physical)} (DC-declared ${stkN(K.declaredInspected)}, variance ${stkN(K.physical - K.declaredInspected)})`],
+      ["GRN Posted (period activity)", `${K.grnDocs} docs · ${stkN(K.postedQty)} qty`],
+      ["Pending GRN (current backlog)", `${K.pendingCases} cases · ${K.pendingPos} POs · ${stkN(K.pendingQty)} qty`],
+      ["GRN Within SLA", `${stkPct(K.slaOk, K.slaDone)} (${K.slaOk}/${K.slaDone})`],
+      ["Overdue Open Work", `${K.overdueCount} cases · ${stkN(K.overdueQty)} qty`],
+      ["RTV Ratio — (DMG+MNF+Wrong+Short) ÷ Received", `${stkPct(K.rtvApproved, K.rtvDen)} (${stkN(K.rtvApproved)} / ${stkN(K.rtvDen)})`],
+      ["Dock-to-Stock", `avg ${stkDur(K.d2sAvg)} · P90 ${stkDur(K.d2sP90)} (n=${K.d2sN})`]
+    ];
+    const w = window.open("", "_blank");
+    w.document.write(`<html><head><title>GRN & Supplier Performance — ${period.label}</title><style>body{font-family:Arial;padding:24px;color:#111}h1{font-size:20px;margin:0}table{border-collapse:collapse;width:100%;margin-top:14px}td{border:1px solid #ccc;padding:8px;font-size:13px}td:first-child{font-weight:bold;width:40%}.m{color:#555;font-size:12px;margin-top:6px}</style></head><body>
+      <h1>Stocking Warehouse — GRN &amp; Supplier Performance</h1>
+      <div class="m">Period: ${period.label} (${period.fromYmd} → ${period.toYmd}, Asia/Karachi) · Filters: ${filt}</div>
+      <div class="m">SLA calendar: working days, Sundays excluded · Data refreshed: ${lastUpdated ? lastUpdated.toLocaleString() : "—"}</div>
+      <table>${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("")}</table></body></html>`);
+    w.document.close(); w.print();
+  };
+
+  if (loading) return <div style={{ padding: 60, textAlign: "center", color: MUTED, background: BG, borderRadius: 12 }}>Loading GRN & Supplier Performance…</div>;
+
+  const stale = lastUpdated && Date.now() - lastUpdated.getTime() > 180000;
+  const tabs = [["overview", "Executive Overview"], ["live", "Live Operations"], ["supplier", "Supplier Performance"], ["rtv", "RTV Control"], ["trends", "Monthly Trends"]];
+
+  return (
+    <div style={{ background: BG, borderRadius: 14, padding: 20, color: TXT, fontFamily: "'Space Grotesk', sans-serif" }}>
+      {/* header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>GRN &amp; Supplier Performance</div>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>Stocking Warehouse · Asia/Karachi · SLA v1: Local 3 / Import 15 working days (Sunday off)</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: stale ? "rgba(245,166,35,0.1)" : "rgba(74,222,128,0.1)", border: `1px solid ${stale ? AMBER : GREEN}55`, borderRadius: 20, padding: "5px 12px" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: stale ? AMBER : GREEN, boxShadow: `0 0 8px ${stale ? AMBER : GREEN}` }} />
+            <span style={{ color: stale ? AMBER : GREEN, fontSize: 11, fontWeight: 600 }}>{stale ? "STALE" : "LIVE"}</span>
+            <span style={{ color: MUTED, fontSize: 11 }}>Updated {lastUpdated ? lastUpdated.toLocaleTimeString() : "—"} · loaded in {loadMs ?? "—"} ms</span>
+          </div>
+          <button style={pill(false)} onClick={() => { load(); if (rtvRows !== null) loadRtv(); }}>↻ Refresh</button>
+          <button style={pill(false)} onClick={printSummary}>🖨 Print summary</button>
+        </div>
+      </div>
+      {err && <div style={{ ...panel, borderColor: RED, color: RED }}>{err}</div>}
+
+      {/* global filters */}
+      <div style={{ ...panel, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {[["today", "Today"], ["yesterday", "Yesterday"], ["week", "This Week"], ["mtd", "Month to Date"], ["prev", "Previous Month"], ["custom", "Custom"]].map(([k, l]) => <button key={k} style={pill(preset === k)} onClick={() => setPreset(k)}>{l}</button>)}
+          {preset === "custom" && <><input type="date" style={inp} value={customFrom} onChange={e => setCustomFrom(e.target.value)} /><span style={{ color: MUTED }}>→</span><input type="date" style={inp} value={customTo} onChange={e => setCustomTo(e.target.value)} /></>}
+          <span style={{ color: MUTED, fontSize: 11, marginLeft: "auto" }}>{period.fromYmd} → {period.toYmd}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={inp} value={flt.supplier} onChange={e => setFlt({ ...flt, supplier: e.target.value })}><option value="">All suppliers</option>{suppliers.map(s => <option key={s} value={s}>{s}</option>)}</select>
+          <select style={inp} value={flt.source} onChange={e => setFlt({ ...flt, source: e.target.value })}><option value="">All sources</option>{STK_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}</select>
+          <select style={inp} value={flt.sched} onChange={e => setFlt({ ...flt, sched: e.target.value })}><option value="">Scheduled / Unscheduled / Unknown</option><option value="scheduled">Scheduled</option><option value="unscheduled">Unscheduled</option><option value="unknown">Unknown</option></select>
+          <select style={inp} value={flt.stage} onChange={e => setFlt({ ...flt, stage: e.target.value })}><option value="">All stages</option>{STK_STAGE_DEFS.map(s => <option key={s[0]} value={s[0]}>{s[1]}</option>)}</select>
+          <select style={inp} value={flt.sla} onChange={e => setFlt({ ...flt, sla: e.target.value })}><option value="">All SLA statuses</option>{Object.entries(STK_SLA_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
+          <select style={inp} value={flt.user} onChange={e => setFlt({ ...flt, user: e.target.value })}><option value="">All users</option>{userOpts.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
+          <input style={{ ...inp, minWidth: 200, flex: 1 }} placeholder="🔍 PO, DC, GRN ref or barcode…" value={flt.search} onChange={e => setFlt({ ...flt, search: e.target.value })} />
+          {Object.values(flt).some(Boolean) && <button style={pill(false)} onClick={() => setFlt({ supplier: "", source: "", sched: "", stage: "", sla: "", user: "", search: "" })}>Clear</button>}
+        </div>
+        <div style={{ color: MUTED, fontSize: 10.5 }}>Warehouse: Stocking (fixed for this module). Department/category filter unavailable — receipts are not linked to product categories.</div>
       </div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Supplier Benchmark Performance (GRN-posted DCs)</div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>Total</th><th style={S.th}>Within Benchmark</th><th style={S.th}>Delayed</th><th style={S.th}>Total Delay Days</th></tr></thead>
-          <tbody>
-            {supplierRows.map(s => <tr key={s.supplier}><td style={S.td}>{s.supplier}</td><td style={S.td}>{s.total}</td><td style={S.td}>{s.within}</td><td style={{ ...S.td, color: s.delayed ? "#E5484D" : "#2B2620" }}>{s.delayed}</td><td style={S.td}>{s.delayDays}</td></tr>)}
-            {!supplierRows.length && <tr><td style={S.td} colSpan={5}><EmptyNote text="Abhi GRN-posted DC nahi" /></td></tr>}
-          </tbody>
-        </table>
+      {/* tabs */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {tabs.map(([k, l]) => <button key={k} style={pill(tab === k)} onClick={() => setTab(k)}>{l}</button>)}
       </div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Pending POs — Ageing &amp; SOP Breach Alert</div>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr><th style={S.th}>Supplier</th><th style={S.th}>PO#</th><th style={S.th}>DC#</th><th style={S.th}>Source</th><th style={S.th}>Days Pending</th><th style={S.th}>Benchmark</th><th style={S.th}>SOP</th></tr></thead>
-          <tbody>
-            {pendingAlerts.map((a, i) => (
-              <tr key={i}>
-                <td style={S.td}>{a.supplier}</td><td style={S.td}>{a.po_number}</td><td style={S.td}>{a.dc_number}</td><td style={S.td}>{a.source}</td><td style={S.td}>{a.days}</td><td style={S.td}>{a.bm}</td>
-                <td style={{ ...S.td, color: a.breach ? "#E5484D" : "#4CAF7D", fontWeight: 600 }}>{a.breach ? "⚠ SOP BREACH" : "OK"}</td>
-              </tr>
-            ))}
-            {!pendingAlerts.length && <tr><td style={S.td} colSpan={7}><EmptyNote text="Koi PO pending nahi" /></td></tr>}
-          </tbody>
-        </table>
-      </div>
+      {tab === "overview" && (() => {
+        const dayList = []; if (period.days <= 62) { for (let i = 0; i < period.days; i++) { const ymd = pkAddDays(period.fromYmd, i); dayList.push(ymd); } }
+        const daily = dayList.map(ymd => ({ label: ymd.slice(8), a: sum(cohort.filter(c => c.inspected && pkYmd(new Date(c.received_at)) === ymd), "physical_qty"), b: sum(postedP.filter(c => pkYmd(new Date(c.grn_posted_at)) === ymd), "posted_qty") }));
+        const openStages = STK_STAGE_DEFS.filter(s => s[0] !== "stocked").map(([k, l]) => { const rows = fc.filter(c => c.stage === k); return { label: l, value: rows.length, sub: `${stkN(rows.reduce((s, c) => s + (c.inspected ? Number(c.accepted_qty || 0) : Number(c.dc_qty_total || 0)), 0))} qty`, onClick: () => openDrill(l, "Current backlog (as of now)", rows), color: k === "awaiting_grn" ? AMBER : BLUE }; });
+        const supAgg = {}; cohort.filter(c => c.inspected).forEach(c => { const s = c.supplier || "Unknown"; supAgg[s] = (supAgg[s] || 0) + Number(c.physical_qty || 0); });
+        const top10 = Object.entries(supAgg).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([s, v]) => ({ label: s, value: v, sub: stkPct(v, K.physical), onClick: () => openDrill(`Receipts — ${s}`, "Receipt cohort (received in period)", cohort.filter(c => (c.supplier || "Unknown") === s)) }));
+        const buckets = [["0–1 d", 0, 1], ["1–3 d", 1, 3], ["3–7 d", 3, 7], ["7–15 d", 7, 15], ["15+ d", 15, 1e9]].map(([l, a, b]) => { const rows = openGrnWork.filter(c => { const d = (c.elapsedMs || 0) / STK_DAY_MS; return d >= a && d < b; }); return { label: l, value: rows.length, sub: `${rows.filter(r => r.sla === "open_breach").length} breached`, color: b >= 7 ? RED : b >= 3 ? AMBER : GREEN, onClick: () => openDrill(`Pending GRN ageing ${l}`, "Current backlog (working days since receipt)", rows) }; });
+        const val = costCoverage(inspectedCohort);
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 14 }}>
+              <Card label="POs Received" value={stkN(K.pos)} sub={`${stkN(K.skus)} SKUs · ${K.receipts} receipts`} color={BLUE} deltaText={delta(K.receipts, K.prevReceipts)} tip="Distinct POs with a physical DC arrival in the period. Basis: receipt date (received_at)." onClick={() => openDrill("POs received", "Receipt cohort", cohort)} />
+              <Card label="Physical Received Qty" value={stkN(K.physical)} sub={`DC-declared ${stkN(K.declaredInspected)} · variance ${stkN(K.physical - K.declaredInspected)}`} sub2={K.declaredUninspected ? `+ ${stkN(K.declaredUninspected)} DC qty not yet counted` : null} color={BLUE} deltaText={delta(K.physical, K.prevPhysical)} tip="Counted units (OK+DMG+MNF+Wrong+Excess) on inspected receipts. Short is not physical. Basis: receipt date." onClick={() => openDrill("Physical received", "Receipt cohort", cohort)} />
+              <Card label="GRN Posted" value={stkN(K.grnDocs)} sub={`${stkN(K.postedQty)} qty posted`} color={GREEN} deltaText={delta(K.postedQty, K.prevPosted)} tip="GRN documents posted in the period (by grn_posted_at). Posted qty = accepted (OK) qty. Period activity — may belong to earlier receipts." onClick={() => openDrill("GRN posted", "Period activity (posting date)", postedP)} />
+              <Card label="Pending GRN" value={stkN(K.pendingCases)} sub={`${K.pendingPos} POs · ${stkN(K.pendingQty)} eligible qty`} color={AMBER} tip="Inspected, accepted stock awaiting GRN posting — current backlog including earlier months. Uninspected qty shown separately." onClick={() => openDrill("Pending GRN", "Current backlog", pendingGrn)} />
+              <Card label="GRN Within SLA" value={stkPct(K.slaOk, K.slaDone)} sub={`${K.slaOk} / ${K.slaDone} completed with valid timing`} color={K.slaDone && K.slaOk / K.slaDone < 0.9 ? RED : GREEN} tip="GRNs posted in period within deadline ÷ all posted with SLA data. Clock: physical receipt → GRN posting, working days excl. Sunday. Exactly at deadline = within." onClick={() => openDrill("Completed GRN SLA", "Period activity (posting date)", completedSla)} />
+              <Card label="Overdue Open Work" value={stkN(K.overdueCount)} sub={`${stkN(K.overdueQty)} qty beyond SLA`} sub2={K.oldest ? `Oldest: DC ${K.oldest.dc_number} · ${stkDur(K.oldest.elapsedMs)}` : null} color={K.overdueCount ? RED : GREEN} tip="Receipts not yet GRN-posted whose SLA deadline has passed. Current backlog." onClick={() => openDrill("Overdue open work", "Current backlog", overdueOpen)} />
+              <Card label="RTV Ratio" value={stkPct(K.rtvApproved, K.rtvDen)} sub={`${stkN(K.rtvApproved)} exceptions / ${stkN(K.rtvDen)} received`} color={K.rtvDen && K.rtvApproved / K.rtvDen > 0.10 ? RED : GREEN} tip="Original Stocking formula: (DMG + MNF + Wrong + Short) ÷ Received qty (DC transfer qty from the Odoo import), for receipts in the period. Excess is excluded." onClick={() => openDrill("RTV — receipt cohort", "Receipt cohort", cohort.filter(c => Number(c.rtv_exception_qty) > 0))} />
+              <Card label="Dock-to-Stock" value={stkDur(K.d2sAvg)} sub={`P90 ${stkDur(K.d2sP90)} · n=${K.d2sN}`} color={BLUE} tip="Physical receipt → final putaway completion (working time). Completed cases with valid timestamps, basis: putaway completion date." onClick={() => openDrill("Dock-to-stock", "Putaway completed in period", stockedP)} />
+            </div>
+
+            <div style={{ ...panel }}>
+              <div style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setShowSecondary(v => !v)}><span style={head}>Secondary metrics</span><span style={{ color: MUTED, fontSize: 12 }}>{showSecondary ? "▲ Hide" : "▼ Show"}</span></div>
+              {showSecondary && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 12 }}>
+                  {[
+                    (() => { const poMap = {}; cohort.forEach(c => { poMap[c.po_id] = c.po_qty; }); const vals = Object.values(poMap); const known = vals.filter(v => Number(v) > 0); return ["PO ordered qty", known.length ? stkN(known.reduce((a, b) => a + Number(b), 0)) : "Data unavailable", known.length ? `${known.length}/${vals.length} POs have Odoo Demand · DC transfer qty ${stkN(sum(cohort, "demand_qty"))}` : "PO Demand not imported yet"]; })(),
+                    ["Scheduled receipts", stkN(schedCount.scheduled), `Unscheduled ${schedCount.unscheduled} · Unknown ${schedCount.unknown}`],
+                    ["GRN pending within SLA", stkN(openGrnWork.filter(c => c.sla === "open_ok" || c.sla === "open_warn").length), `${openGrnWork.filter(c => c.sla === "open_warn").length} approaching deadline`],
+                    ["GRN completed after SLA", stkN(completedSla.filter(c => c.sla === "done_breach").length), "Posted in period"],
+                    ["Inspection pending qty", stkN(sum(fc, "uninspected_qty")), "DC-declared, not yet counted (backlog)"],
+                    ["Putaway pending qty", stkN(sum(fc, "putaway_pending_qty")), "Backlog"],
+                    ["RTV pending handover", stkN(sum(fc, "rtv_awaiting_pickup_qty")), "Verified, awaiting supplier pickup"],
+                    ["Received value", val >= 0.999 ? stkN(Math.round(sum(inspectedCohort, "received_value"))) : "Data unavailable", `Cost coverage ${(val * 100).toFixed(0)}% of lines`],
+                    ["Damaged/defective value", val >= 0.999 ? stkN(Math.round(sum(inspectedCohort, "rejected_value"))) : "Data unavailable", "DMG+MNF+Wrong × unit cost"]
+                  ].map(([l, v, s]) => (
+                    <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: 10 }}>
+                      <div style={{ color: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }}>{l.toUpperCase()}</div>
+                      <div style={{ fontSize: 17, fontWeight: 700, color: v === "Data unavailable" ? GREY : TXT, marginTop: 3 }}>{v}</div>
+                      <div style={{ color: MUTED, fontSize: 10.5, marginTop: 2 }}>{s}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 14 }}>
+              <div style={panel}><div style={head}>Daily received vs GRN posted {basisTag("different cohorts")}</div><div style={{ color: MUTED, fontSize: 10.5, margin: "4px 0 10px" }}>Receipt-date vs posting-date activity — the gap is NOT backlog.</div>{dayList.length ? <PairBars days={daily} /> : <div style={{ color: MUTED, fontSize: 12 }}>Daily chart shown for ranges up to 62 days.</div>}</div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>Open workload by stage {basisTag("backlog now")}</div><HBars items={openStages} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>Top 10 suppliers by received qty {basisTag("receipt cohort")}</div><HBars items={top10} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>Pending GRN ageing {basisTag("backlog now")}</div><HBars items={buckets} /></div>
+            </div>
+          </>
+        );
+      })()}
+
+      {tab === "live" && (() => {
+        const stageCards = STK_STAGE_DEFS.map(([k, l]) => { const rows = fc.filter(c => c.stage === k); return { k, l, rows, qty: rows.reduce((s, c) => s + (c.inspected ? Number(c.accepted_qty || 0) : Number(c.dc_qty_total || 0)), 0) }; });
+        const discrepancy = fc.filter(c => Number(c.rtv_flagged_qty) > 0);
+        const rank = { open_breach: 0, open_warn: 1, open_ok: 2, unknown: 3, done_breach: 4, done_ok: 5 };
+        const action = fc.filter(c => c.open).sort((a, b) => (rank[a.sla] - rank[b.sla]) || (new Date(a.received_at) - new Date(b.received_at)));
+        const flags = [
+          ["Unassigned work", fc.filter(c => c.unassigned), RED], ["No recent progress", fc.filter(c => c.noProgress), AMBER],
+          ["Barcode / master-data issues", fc.filter(c => c.open && Number(c.missing_barcode_lines) > 0), AMBER], ["RTV awaiting verification", discrepancy, AMBER],
+          ["Supplier pickup overdue", fc.filter(c => c.pickupOverdue), RED], ["Missing mandatory timestamps", fc.filter(c => c.open && c.missingTimestamps), GREY]
+        ];
+        const today = pkYmd(new Date());
+        const arrivedPo = new Set(fc.map(c => c.po_id));
+        const expToday = pos.filter(p => (p.original_scheduled_date || p.scheduled_date) === today);
+        const overdueNA = pos.filter(p => { const d = p.original_scheduled_date || p.scheduled_date; return d && d < today && !arrivedPo.has(p.id) && p.status !== "completed"; });
+        const schedP = cohort.filter(c => c.schedClass === "scheduled");
+        const pageRows = action.slice(actionPage * 50, actionPage * 50 + 50);
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
+              {stageCards.map(s => <Card key={s.k} label={s.l} value={stkN(s.rows.length)} sub={`${stkN(s.qty)} qty`} color={s.k === "stocked" ? GREEN : s.k === "awaiting_grn" ? AMBER : BLUE} onClick={() => openDrill(s.l, "Current status", s.rows)} />)}
+              <Card label="Awaiting discrepancy verification" value={stkN(discrepancy.length)} sub={`${stkN(sum(discrepancy, "rtv_flagged_qty"))} qty (parallel RTV flow)`} color={AMBER} onClick={() => openDrill("Discrepancy verification", "Current backlog", discrepancy)} />
+              <Card label="Partially posted" value="N/A" sub="Each DC is posted with one GRN in the current workflow" color={GREY} />
+            </div>
+            <div style={{ ...panel }}>
+              <div style={{ ...head, marginBottom: 10 }}>Scheduled deliveries {basisTag("appointments")}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                {[["Expected today", expToday.length, `${expToday.filter(p => arrivedPo.has(p.id)).length} arrived`, BLUE],
+                  ["Arrived on time", schedP.filter(c => c.arrival === "on_time").length, `tolerance ±${cfg.arrival_tolerance_days}d`, GREEN],
+                  ["Arrived early", schedP.filter(c => c.arrival === "early").length, "in period", BLUE],
+                  ["Arrived late", schedP.filter(c => c.arrival === "late").length, "in period", RED],
+                  ["Overdue, not arrived", overdueNA.length, "appointment passed", RED],
+                  ["Cancelled appointments", "N/A", "No cancellation step recorded", GREY],
+                  ["Classification coverage", stkPct(schedCount.scheduled + schedCount.unscheduled, cohort.length), `${schedCount.unknown} unknown`, GREY]
+                ].map(([l, v, s, c]) => (
+                  <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: 10, borderLeft: `3px solid ${c}` }}>
+                    <div style={{ color: MUTED, fontSize: 10, fontFamily: "'IBM Plex Mono', monospace" }}>{l.toUpperCase()}</div>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: c, marginTop: 3 }}>{v}</div>
+                    <div style={{ color: MUTED, fontSize: 10.5 }}>{s}</div>
+                  </div>
+                ))}
+              </div>
+              {overdueNA.length > 0 && <div style={{ marginTop: 10, fontSize: 11.5, color: RED }}>Overdue: {overdueNA.slice(0, 12).map(p => `${p.po_number} (${p.supplier || "—"}, due ${p.original_scheduled_date || p.scheduled_date})`).join(" · ")}{overdueNA.length > 12 ? " …" : ""}</div>}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              {flags.map(([l, rows, c]) => <button key={l} onClick={() => openDrill(l, "Current status", rows)} style={{ ...pill(false), borderColor: rows.length ? c : BORDER, color: rows.length ? c : MUTED }}>{l}: <b>{rows.length}</b></button>)}
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div style={head}>Manager action queue {basisTag("open work · breached → approaching → oldest")}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button style={pill(false)} onClick={() => exportCases(action, `grn-action-queue-${pkYmd(new Date())}.csv`)}>⬇ CSV</button>
+                  <button style={pill(false)} disabled={actionPage === 0} onClick={() => setActionPage(p => Math.max(0, p - 1))}>←</button>
+                  <span style={{ color: MUTED, fontSize: 11 }}>{action.length ? `${actionPage * 50 + 1}–${Math.min(action.length, actionPage * 50 + 50)} of ${action.length}` : "0"}</span>
+                  <button style={pill(false)} disabled={(actionPage + 1) * 50 >= action.length} onClick={() => setActionPage(p => p + 1)}>→</button>
+                </div>
+              </div>
+              <CaseTable rows={pageRows} />
+              <div style={{ color: MUTED, fontSize: 10.5, marginTop: 8 }}>Assignments are made in the existing Stocking Receiving / Putaway screens — this queue only surfaces the work.</div>
+            </div>
+          </>
+        );
+      })()}
+
+      {tab === "supplier" && (() => {
+        const build = (rows, prevRows) => {
+          const g = {};
+          rows.forEach(c => { const s = c.supplier || "Unknown"; (g[s] = g[s] || []).push(c); });
+          const totalPhys = sum(rows.filter(c => c.inspected), "physical_qty");
+          return Object.entries(g).map(([s, cs]) => {
+            const insp = cs.filter(c => c.inspected); const phys = sum(insp, "physical_qty");
+            const sched = cs.filter(c => c.schedClass === "scheduled");
+            const dueNotArrived = pos.filter(p => (p.supplier || "Unknown") === s && (p.original_scheduled_date || p.scheduled_date) && inR(pkStart(p.original_scheduled_date || p.scheduled_date).toISOString()) && !all.some(c => c.po_id === p.id) && (p.original_scheduled_date || p.scheduled_date) < pkYmd(new Date())).length;
+            const onTime = sched.filter(c => c.arrival !== "late").length;
+            const infullKnown = insp.filter(c => c.inFull !== null); const otifKnown = cs.filter(c => c.otif !== null);
+            const rtvQ = sum(cs, "rtv_exception_qty"); const recv = sum(cs, "demand_qty");
+            const grnT = cs.filter(c => c.grnMs != null).map(c => c.grnMs);
+            const prevPhys = sum((prevRows || []).filter(c => (c.supplier || "Unknown") === s && c.inspected), "physical_qty");
+            const pendPick = all.filter(c => (c.supplier || "Unknown") === s && Number(c.rtv_awaiting_pickup_qty) > 0);
+            const oldestPick = pendPick.map(c => c.rtv_oldest_ready_at).filter(Boolean).sort()[0];
+            return {
+              supplier: s, pos: new Set(cs.map(c => c.po_id)).size, deliveries: cs.length, skus: skuUnion(cs), phys, share: totalPhys ? phys / totalPhys : 0,
+              posted: sum(cs, "posted_qty"), sched: sched.length, unsched: cs.filter(c => c.schedClass === "unscheduled").length,
+              otd: sched.length + dueNotArrived ? onTime / (sched.length + dueNotArrived) : null, otdN: sched.length + dueNotArrived, late: sched.filter(c => c.arrival === "late").length + dueNotArrived,
+              infull: infullKnown.length ? infullKnown.filter(c => c.inFull).length / infullKnown.length : null, otif: otifKnown.length ? otifKnown.filter(c => c.otif).length / otifKnown.length : null,
+              rej: phys ? sum(insp, "rejected_qty") / phys : null, defects: sum(insp, "rejected_qty"), rtvQ, recv, rtvR: recv ? rtvQ / recv : null,
+              pendPickQty: sum(pendPick, "rtv_awaiting_pickup_qty"), pickAge: oldestPick ? Date.now() - new Date(oldestPick).getTime() : null,
+              grnAvg: stkAvg(grnT), mom: prevPhys ? (phys - prevPhys) / prevPhys : null, lowVol: recv < cfg.min_rank_volume
+            };
+          });
+        };
+        const rows = build(cohort, prevCohort);
+        const cols = [
+          ["supplier", "Supplier", r => r.supplier], ["pos", "POs", r => r.pos], ["deliveries", "Deliveries", r => r.deliveries], ["skus", "SKUs", r => r.skus],
+          ["phys", "Physical qty", r => stkN(r.phys)], ["share", "Share", r => `${(r.share * 100).toFixed(1)}%`], ["posted", "GRN posted qty", r => stkN(r.posted)],
+          ["sched", "Sched / Unsched", r => `${r.sched} / ${r.unsched}`], ["otd", "On-time", r => r.otd == null ? "N/A" : `${(r.otd * 100).toFixed(0)}% (n=${r.otdN})`],
+          ["infull", "In-full", r => r.infull == null ? "N/A" : `${(r.infull * 100).toFixed(0)}%`], ["otif", "OTIF", r => r.otif == null ? "N/A" : `${(r.otif * 100).toFixed(0)}%`],
+          ["rej", "Rejection", r => r.rej == null ? "N/A" : `${(r.rej * 100).toFixed(1)}%`], ["recv", "Received (DC qty)", r => stkN(r.recv)], ["rtvQ", "Exceptions (D+M+W+S)", r => stkN(r.rtvQ)], ["rtvR", "RTV ratio", r => r.rtvR == null ? "N/A" : `${(r.rtvR * 100).toFixed(1)}%`],
+          ["pendPickQty", "Pickup pending", r => r.pendPickQty ? `${stkN(r.pendPickQty)} · ${stkDur(r.pickAge)}` : "—"], ["grnAvg", "Avg GRN time", r => stkDur(r.grnAvg)],
+          ["mom", "MoM qty", r => r.mom == null ? "—" : `${r.mom >= 0 ? "▲" : "▼"}${Math.abs(r.mom * 100).toFixed(0)}%`]
+        ];
+        const sorted = [...rows].sort((a, b) => { const va = a[sortKey], vb = b[sortKey]; if (va == null) return 1; if (vb == null) return -1; return (typeof va === "string" ? va.localeCompare(vb) : va - vb) * sortDir; });
+        const eligible = rows.filter(r => !r.lowVol);
+        const rankings = [
+          ["Highest received volume", [...rows].sort((a, b) => b.phys - a.phys), r => stkN(r.phys)],
+          ["Highest RTV quantity", [...rows].sort((a, b) => b.rtvQ - a.rtvQ).filter(r => r.rtvQ > 0), r => stkN(r.rtvQ)],
+          ["Highest RTV ratio (min vol)", [...eligible].filter(r => r.rtvR != null).sort((a, b) => b.rtvR - a.rtvR), r => `${(r.rtvR * 100).toFixed(1)}% · n=${stkN(r.recv)}`],
+          ["Most late deliveries", [...rows].sort((a, b) => b.late - a.late).filter(r => r.late > 0), r => `${r.late} late`],
+          ["Most recurring defects", [...rows].sort((a, b) => b.defects - a.defects).filter(r => r.defects > 0), r => `${stkN(r.defects)} units`]
+        ];
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 14 }}>
+              {rankings.map(([t, list, fmt]) => (
+                <div key={t} style={{ ...panel, marginBottom: 0 }}>
+                  <div style={{ ...head, fontSize: 12, marginBottom: 8 }}>{t}</div>
+                  {list.slice(0, 5).map((r, i) => <div key={r.supplier} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid rgba(255,255,255,0.04)` }}><span>{i + 1}. {r.supplier}{r.lowVol ? " ⚠" : ""}</span><span style={{ color: MUTED }}>{fmt(r)}</span></div>)}
+                  {!list.length && <div style={{ color: MUTED, fontSize: 11 }}>No data</div>}
+                </div>
+              ))}
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                <div style={head}>Supplier scorecard {basisTag("receipt cohort · " + period.label)}</div>
+                <button style={pill(false)} onClick={() => exportCSV(`supplier-scorecard-${period.fromYmd}-${period.toYmd}.csv`, cols.map(c => c[1]), sorted.map(r => cols.map(c => c[2](r))))}>⬇ CSV</button>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{cols.map(([k, l]) => <th key={k} style={{ ...th, cursor: "pointer", color: sortKey === k ? AMBER : MUTED }} onClick={() => { if (sortKey === k) setSortDir(d => -d); else { setSortKey(k); setSortDir(-1); } }}>{l}{sortKey === k ? (sortDir < 0 ? " ▼" : " ▲") : ""}</th>)}</tr></thead>
+                <tbody>{sorted.map(r => <tr key={r.supplier} style={{ cursor: "pointer", opacity: r.lowVol ? 0.7 : 1 }} onClick={() => openDrill(`Receipts — ${r.supplier}`, "Receipt cohort", cohort.filter(c => (c.supplier || "Unknown") === r.supplier))}>{cols.map(([k, , fn]) => <td key={k} style={{ ...td, ...(k === "rtvR" && r.rtvR > 0.10 ? { color: RED, fontWeight: 600 } : {}), ...(k === "otd" && r.otd != null && r.otd < 0.8 ? { color: RED } : {}) }}>{fn(r)}{k === "supplier" && r.lowVol ? <span style={{ color: AMBER, fontSize: 10 }}> low vol</span> : null}</td>)}</tr>)}
+                  {!sorted.length && <tr><td colSpan={cols.length} style={{ ...td, color: MUTED, textAlign: "center" }}>No receipts in this period</td></tr>}</tbody>
+              </table>
+              <div style={{ color: MUTED, fontSize: 10.5, marginTop: 8, lineHeight: 1.5 }}>
+                RTV ratio = (DMG + MNF + Wrong + Short) ÷ Received (DC transfer qty) — the original Stocking formula. Ratios = summed numerator ÷ summed denominator. On-time counts appointments already due but not arrived as failures (tolerance ±{cfg.arrival_tolerance_days}d); cancellations not recorded. In-full = accepted qty ≥ Odoo transfer demand for that receipt (PO-line quantities unavailable). Min volume for % rankings: {cfg.min_rank_volume} units. "Avg GRN time" reflects warehouse processing and is NOT a supplier penalty. No overall supplier score — no approved weights.
+              </div>
+            </div>
+          </>
+        );
+      })()}
+
+      {tab === "rtv" && (() => {
+        if (rtvRows === null) return <div style={{ ...panel, color: MUTED }}>Loading RTV records…</div>;
+        const caseById = Object.fromEntries(all.map(c => [c.dc_id, c]));
+        const R = rtvRows.filter(r => { const c = caseById[r.dc_id]; if (flt.supplier && r.supplier !== flt.supplier) return false; if (flt.search) { const q = flt.search.toLowerCase(); if (![r.product_barcode, r.product_name, c?.po_number, c?.dc_number].filter(Boolean).join(" ").toLowerCase().includes(q)) return false; } return true; });
+        const q = r => Number(r.dmg_qty || 0) + Number(r.mnf_qty || 0) + Number(r.wrong_qty || 0) + Number(r.excess_qty || 0) + Number(r.short_qty || 0);
+        const openR = R.filter(r => r.status !== "handed_over");
+        const stages = [["Flagged for verification", R.filter(r => r.status === "pending")], ["Verified & approved — awaiting pickup", R.filter(r => r.status === "verified")], ["Fully handed over", R.filter(r => r.status === "handed_over")]];
+        const reasons = [["Damage (DMG)", sum(R, "dmg_qty")], ["Manufacturing defect (MNF)", sum(R, "mnf_qty")], ["Wrong item", sum(R, "wrong_qty")], ["Excess", sum(R, "excess_qty")], ["Short", sum(R, "short_qty")]];
+        const qualityStart = r => caseById[r.dc_id]?.inspection_completed_at || caseById[r.dc_id]?.received_at || r.created_at;
+        const ageDays = iso => iso ? (Date.now() - new Date(iso).getTime()) / STK_DAY_MS : null;
+        const B = [["0–2", 0, 3], ["3–7", 3, 8], ["8–14", 8, 15], ["15–30", 15, 31], [">30", 31, 1e9]];
+        const bucketize = (rows, fn) => B.map(([l, a, b]) => { const rs = rows.filter(r => { const d = fn(r); return d != null && d >= a && d < b; }); return { label: `${l} days`, value: rs.reduce((s, r) => s + q(r), 0), sub: `${rs.length} lines`, color: a >= 15 ? RED : a >= 8 ? AMBER : GREEN }; });
+        const pickupOver = R.filter(r => r.status === "verified" && ageDays(r.verified_at) > cfg.pickup_overdue_days);
+        const valOpen = openR.every(r => r.dc_line_id && rtvCost[r.dc_line_id] != null) && openR.length ? openR.reduce((s, r) => s + q(r) * Number(rtvCost[r.dc_line_id]), 0) : null;
+        const months = []; for (let i = 5; i >= 0; i--) months.push(pkMonthStart(pkYmd(new Date()), i).slice(0, 7));
+        const supMonth = {}; all.filter(c => (!flt.supplier || c.supplier === flt.supplier)).forEach(c => { const m = pkMonthKey(c.received_at); if (!months.includes(m)) return; const s = c.supplier || "Unknown"; const o = (supMonth[s] = supMonth[s] || {}); o[m] = o[m] || { rtv: 0, phys: 0 }; o[m].rtv += Number(c.rtv_exception_qty || 0); o[m].phys += Number(c.demand_qty || 0); });
+        const oldest = [...openR].sort((a, b) => new Date(qualityStart(a) || 0) - new Date(qualityStart(b) || 0)).slice(0, 25);
+        return (
+          <>
+            {rtvErr && <div style={{ ...panel, color: RED }}>{rtvErr}</div>}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 14 }}>
+              <Card label="Approved RTV qty" value={stkN(R.filter(r => r.status !== "pending").reduce((s, r) => s + q(r), 0))} sub="Verified + handed over (all time, filtered)" color={AMBER} />
+              <Card label="Handed over qty" value={stkN(R.filter(r => r.status === "handed_over").reduce((s, r) => s + q(r), 0))} sub={`${stkN(R.filter(r => r.status === "handed_over" && inR(r.handed_over_at)).reduce((s, r) => s + q(r), 0))} in period`} color={GREEN} />
+              <Card label="Open RTV qty" value={stkN(openR.reduce((s, r) => s + q(r), 0))} sub={`${openR.length} lines`} color={RED} />
+              <Card label="Approved in period" value={stkN(R.filter(r => r.status !== "pending" && inR(r.verified_at)).reduce((s, r) => s + q(r), 0))} sub="Operational workload (verified date)" color={BLUE} />
+              <Card label="Pickup overdue" value={stkN(pickupOver.length)} sub={`> ${cfg.pickup_overdue_days} days since verified`} color={pickupOver.length ? RED : GREEN} />
+              <Card label="Value at risk" value={valOpen == null ? "Data unavailable" : stkN(Math.round(valOpen))} sub="Open RTV × unit cost (needs cost on all lines)" color={valOpen == null ? GREY : AMBER} />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14 }}>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>RTV workflow stages</div>
+                <HBars items={stages.map(([l, rs]) => ({ label: l, value: rs.reduce((s, r) => s + q(r), 0), sub: `${rs.length} lines`, color: l.startsWith("Fully") ? GREEN : AMBER }))} />
+                <div style={{ color: MUTED, fontSize: 10.5, marginTop: 10 }}>"Prepared for return", "Partially handed over" and "Closed" are not separate steps in the current workflow.</div></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>RTV reasons (all RTV lines)</div><HBars items={reasons.map(([l, v]) => ({ label: l, value: v, color: l === "Excess" || l === "Short" ? AMBER : RED }))} />
+                <div style={{ color: MUTED, fontSize: 10.5, marginTop: 10 }}>Same buckets as the RTV module. The supplier RTV ratio counts DMG + MNF + Wrong + Short (Excess excluded).</div></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>Quality-case age {basisTag("from inspection")}</div><HBars items={bucketize(openR, r => ageDays(qualityStart(r)))} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 10 }}>Pickup age {basisTag("from verified")}</div><HBars items={bucketize(R.filter(r => r.status === "verified"), r => ageDays(r.verified_at))} /></div>
+            </div>
+            <div style={panel}>
+              <div style={{ ...head, marginBottom: 10 }}>RTV ratio by supplier &amp; month {basisTag("receipt cohort")}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Supplier</th>{months.map(m => <th key={m} style={th}>{m}</th>)}</tr></thead>
+                <tbody>{Object.entries(supMonth).sort().map(([s, o]) => <tr key={s}><td style={td}>{s}</td>{months.map(m => { const v = o[m]; const r = v && v.phys ? v.rtv / v.phys : null; return <td key={m} style={{ ...td, color: r == null ? MUTED : r > 0.05 ? RED : TXT }}>{r == null ? "—" : `${(r * 100).toFixed(1)}%`}<span style={{ color: MUTED, fontSize: 10 }}>{v ? ` (${stkN(v.phys)})` : ""}</span></td>; })}</tr>)}</tbody>
+              </table>
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div style={head}>Oldest open RTV cases</div>
+                <button style={pill(false)} onClick={() => exportCSV(`rtv-open-${pkYmd(new Date())}.csv`, ["Supplier", "PO", "DC", "Barcode", "Item", "DMG", "MNF", "Wrong", "Status", "Quality age (d)", "Pickup age (d)", "Verifier", "Comment"], openR.map(r => { const c = caseById[r.dc_id]; return [r.supplier, c?.po_number, c?.dc_number, r.product_barcode, r.product_name, r.dmg_qty, r.mnf_qty, r.wrong_qty, r.status, ageDays(qualityStart(r))?.toFixed(1), r.verified_at ? ageDays(r.verified_at).toFixed(1) : "", name(r.verified_by), r.comment]; }))}>⬇ CSV</button></div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Supplier", "PO", "DC", "Item", "RTV qty", "Status", "Quality age", "Pickup age", "Verifier", "Comment"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>{oldest.map(r => { const c = caseById[r.dc_id]; const pa = r.verified_at ? ageDays(r.verified_at) : null; return (
+                  <tr key={r.id}><td style={td}>{r.supplier || "—"}</td><td style={{ ...td, color: AMBER }}>{c?.po_number || "—"}</td><td style={{ ...td, color: AMBER }}>{c?.dc_number || "—"}</td><td style={td}>{r.product_name || r.product_barcode}</td><td style={td}>{q(r)}</td><td style={td}>{badge(r.status === "pending" ? "Flagged" : "Awaiting pickup", r.status === "pending" ? AMBER : BLUE)}</td><td style={td}>{ageDays(qualityStart(r))?.toFixed(1) ?? "—"}d</td><td style={{ ...td, color: pa > cfg.pickup_overdue_days ? RED : TXT }}>{pa == null ? "—" : `${pa.toFixed(1)}d`}</td><td style={td}>{r.verified_by ? name(r.verified_by) : "—"}</td><td style={{ ...td, whiteSpace: "normal", maxWidth: 220 }}>{r.comment || "—"}</td></tr>); })}
+                  {!oldest.length && <tr><td colSpan={10} style={{ ...td, color: MUTED, textAlign: "center" }}>No open RTV</td></tr>}</tbody>
+              </table>
+            </div>
+          </>
+        );
+      })()}
+
+      {tab === "trends" && (() => {
+        const months = []; for (let i = 11; i >= 0; i--) months.push(pkMonthStart(pkYmd(new Date()), i).slice(0, 7));
+        const rtvR = rtvRows || [];
+        const q = r => Number(r.dmg_qty || 0) + Number(r.mnf_qty || 0) + Number(r.wrong_qty || 0) + Number(r.excess_qty || 0) + Number(r.short_qty || 0);
+        const T = months.map(m => {
+          const rec = fc.filter(c => pkMonthKey(c.received_at) === m); const recI = rec.filter(c => c.inspected);
+          const post = fc.filter(c => c.status === "grn_posted" && pkMonthKey(c.grn_posted_at) === m);
+          const [y, mo] = m.split("-").map(Number); const eom = pkStart(pkAddDays(`${m}-01`, new Date(Date.UTC(y, mo, 0)).getUTCDate())).getTime();
+          const eomPending = fc.filter(c => c.received_at && new Date(c.received_at).getTime() < eom && (!c.grn_posted_at || new Date(c.grn_posted_at).getTime() >= eom));
+          const gT = post.map(c => c.grnMs).filter(v => v != null); const dT = fc.filter(c => c.dockToStock != null && pkMonthKey(c.last_putaway_at) === m).map(c => c.dockToStock);
+          return { m, pos: new Set(rec.map(c => c.po_id)).size, deliveries: rec.length, phys: sum(recI, "physical_qty"), grnDocs: post.length, grnQty: sum(post, "posted_qty"),
+            sched: rec.filter(c => c.schedClass === "scheduled").length, unsched: rec.filter(c => c.schedClass === "unscheduled").length,
+            within: post.filter(c => c.sla === "done_ok").length, beyond: post.filter(c => c.sla === "done_breach").length,
+            eomPending: eomPending.length, eomPendingQty: eomPending.reduce((s, c) => s + (c.inspection_completed_at && new Date(c.inspection_completed_at).getTime() < eom ? Number(c.accepted_qty || 0) : 0), 0),
+            rtvApproved: rtvR.filter(r => r.status !== "pending" && pkMonthKey(r.verified_at) === m && (!flt.supplier || r.supplier === flt.supplier)).reduce((s, r) => s + q(r), 0),
+            rtvHanded: rtvR.filter(r => r.status === "handed_over" && pkMonthKey(r.handed_over_at) === m && (!flt.supplier || r.supplier === flt.supplier)).reduce((s, r) => s + q(r), 0),
+            cohortRtv: sum(rec, "demand_qty") ? sum(rec, "rtv_exception_qty") / sum(rec, "demand_qty") : null,
+            gAvg: stkAvg(gT), gP90: stkP90(gT), dAvg: stkAvg(dT), dP90: stkP90(dT) };
+        });
+        const curM = months[months.length - 1];
+        const recCur = fc.filter(c => pkMonthKey(c.received_at) === curM && c.inspected);
+        const supVol = {}; recCur.forEach(c => { const s = c.supplier || "Unknown"; supVol[s] = (supVol[s] || 0) + Number(c.physical_qty || 0); });
+        const topVol = Object.entries(supVol).sort((a, b) => b[1] - a[1])[0];
+        const supR = {}; fc.filter(c => pkMonthKey(c.received_at) === curM).forEach(c => { const s = c.supplier || "Unknown"; supR[s] = supR[s] || { r: 0, p: 0 }; supR[s].r += Number(c.rtv_exception_qty || 0); supR[s].p += Number(c.demand_qty || 0); });
+        const topRtv = Object.entries(supR).filter(([, v]) => v.p >= cfg.min_rank_volume).sort((a, b) => b[1].r / b[1].p - a[1].r / a[1].p)[0];
+        const backlogGrowth = {}; fc.filter(c => c.open).forEach(c => { const s = c.supplier || "Unknown"; backlogGrowth[s] = (backlogGrowth[s] || 0) + (pkMonthKey(c.received_at) === curM ? 1 : 0); });
+        const growTop = Object.entries(backlogGrowth).sort((a, b) => b[1] - a[1])[0];
+        const clk = [["Arrival → inspection start", fc.map(c => c.clkArrToInsp)], ["Inspection duration", fc.map(c => c.clkInsp)], ["Inspection → GRN posting", fc.map(c => c.clkInspToGrn)], ["GRN → final putaway", fc.map(c => c.clkGrnToPutaway)]].map(([l, a]) => [l, stkAvg(a.filter(v => v != null)), a.filter(v => v != null).length]);
+        const worst = clk.filter(c => c[2] > 0).sort((a, b) => b[1] - a[1])[0];
+        const pivotSup = {}; fc.filter(c => c.inspected).forEach(c => { const m = pkMonthKey(c.received_at); if (!months.includes(m)) return; const s = c.supplier || "Unknown"; pivotSup[s] = pivotSup[s] || {}; pivotSup[s][m] = (pivotSup[s][m] || 0) + Number(c.physical_qty || 0); });
+        const maxPhys = Math.max(1, ...T.map(t => t.phys));
+        const cols = [["Month", t => t.m], ["POs", t => t.pos], ["Deliveries", t => t.deliveries], ["Physical qty", t => stkN(t.phys)], ["GRN docs", t => t.grnDocs], ["GRN qty", t => stkN(t.grnQty)], ["Sched/Unsched", t => `${t.sched}/${t.unsched}`], ["SLA within/beyond", t => `${t.within}/${t.beyond}`], ["EOM pending GRN", t => `${t.eomPending} · ${stkN(t.eomPendingQty)}`], ["RTV approved", t => rtvRows ? stkN(t.rtvApproved) : "…"], ["RTV handed", t => rtvRows ? stkN(t.rtvHanded) : "…"], ["RTV ratio %", t => t.cohortRtv == null ? "N/A" : `${(t.cohortRtv * 100).toFixed(1)}%`], ["GRN avg/P90", t => `${stkDur(t.gAvg)} / ${stkDur(t.gP90)}`], ["Dock-to-stock avg/P90", t => `${stkDur(t.dAvg)} / ${stkDur(t.dP90)}`]];
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 14 }}>
+              <Card label="Highest-volume supplier (this month)" value={topVol ? topVol[0] : "—"} sub={topVol ? `${stkN(topVol[1])} units` : "No receipts"} color={BLUE} />
+              <Card label="Highest RTV ratio (min vol)" value={topRtv ? topRtv[0] : "—"} sub={topRtv ? `${((topRtv[1].r / topRtv[1].p) * 100).toFixed(1)}% · n=${stkN(topRtv[1].p)}` : `No supplier ≥ ${cfg.min_rank_volume} units`} color={RED} />
+              <Card label="Fastest-growing backlog" value={growTop && growTop[1] ? growTop[0] : "—"} sub={growTop && growTop[1] ? `${growTop[1]} new open receipts this month` : "No new open receipts"} color={AMBER} />
+              <Card label="Stage causing most delay" value={worst ? worst[0] : "Data unavailable"} sub={worst ? `avg ${stkDur(worst[1])} · n=${worst[2]}` : "Stage timestamps recorded from this release onward"} color={worst ? AMBER : GREY} />
+            </div>
+            <div style={panel}>
+              <div style={{ ...head, marginBottom: 12 }}>Physical received qty — 12 months {basisTag("receipt month")}</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 150 }}>
+                {T.map(t => <div key={t.m} title={`${t.m}: ${t.phys}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}><div style={{ fontSize: 9, color: MUTED, marginBottom: 2 }}>{t.phys ? stkN(t.phys) : ""}</div><div style={{ width: "70%", height: `${(t.phys / maxPhys) * 115}px`, background: t.m === curM ? AMBER : BLUE, borderRadius: "4px 4px 0 0" }} /><div style={{ fontSize: 9, color: MUTED, marginTop: 3 }}>{t.m.slice(2)}</div></div>)}
+              </div>
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div style={head}>Monthly table {basisTag("each column labelled by its own date basis")}</div>
+                <button style={pill(false)} onClick={() => exportCSV(`grn-monthly-trends.csv`, cols.map(c => c[0]), T.map(t => cols.map(c => c[1](t))))}>⬇ CSV</button></div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{cols.map(([h]) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>{T.map(t => <tr key={t.m} style={{ background: t.m === curM ? "rgba(245,166,35,0.06)" : "transparent" }}>{cols.map(([h, fn]) => <td key={h} style={td}>{fn(t)}</td>)}</tr>)}
+                  <tr>{cols.map(([h], i) => <td key={h} style={{ ...td, fontWeight: 700, color: AMBER }}>{i === 0 ? "Total" : ["POs", "Deliveries", "GRN docs"].includes(h) ? T.reduce((s, t) => s + t[{ POs: "pos", Deliveries: "deliveries", "GRN docs": "grnDocs" }[h]], 0) : h === "Physical qty" ? stkN(T.reduce((s, t) => s + t.phys, 0)) : h === "GRN qty" ? stkN(T.reduce((s, t) => s + t.grnQty, 0)) : ""}</td>)}</tr>
+                </tbody>
+              </table>
+              <div style={{ color: MUTED, fontSize: 10.5, marginTop: 8, lineHeight: 1.5 }}>Receipt columns use receipt month; GRN columns use posting month; RTV approved/handed use verification/handover month; RTV ratio % = (DMG+MNF+Wrong+Short) ÷ Received (DC qty), by receipt month. End-of-month pending GRN is reconstructed from event timestamps (received before month-end, posted after), not from current status; its qty counts only cases whose inspection was complete by month-end. Current month is partial.</div>
+            </div>
+            <div style={panel}>
+              <div style={{ ...head, marginBottom: 10 }}>Supplier × month physical qty (subtotals &amp; grand total)</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Supplier</th>{months.map(m => <th key={m} style={th}>{m.slice(2)}</th>)}<th style={th}>Total</th></tr></thead>
+                <tbody>{Object.entries(pivotSup).sort((a, b) => Object.values(b[1]).reduce((s, v) => s + v, 0) - Object.values(a[1]).reduce((s, v) => s + v, 0)).map(([s, o]) => <tr key={s}><td style={td}>{s}</td>{months.map(m => <td key={m} style={{ ...td, color: o[m] ? TXT : MUTED }}>{o[m] ? stkN(o[m]) : "—"}</td>)}<td style={{ ...td, fontWeight: 700 }}>{stkN(Object.values(o).reduce((s, v) => s + v, 0))}</td></tr>)}
+                  <tr><td style={{ ...td, fontWeight: 700, color: AMBER }}>Grand total</td>{months.map(m => <td key={m} style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(Object.values(pivotSup).reduce((s, o) => s + (o[m] || 0), 0))}</td>)}<td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(Object.values(pivotSup).reduce((s, o) => s + Object.values(o).reduce((a, v) => a + v, 0), 0))}</td></tr></tbody>
+              </table>
+            </div>
+          </>
+        );
+      })()}
+
+      {/* data quality */}
+      {(() => {
+        const dq = [["Missing supplier", fc.filter(c => !c.supplier)], ["No SLA (source missing)", fc.filter(c => c.sla_days == null)], ["Schedule unknown", fc.filter(c => c.schedClass === "unknown")], ["Stage timestamps missing (pre-release)", fc.filter(c => c.inspected && !c.inspection_completed_at)], ["Cost missing", fc.filter(c => c.inspected && Number(c.costed_lines) < Number(c.line_count))], ["DC vs physical variance", fc.filter(c => c.inspected && Number(c.physical_qty) !== Number(c.dc_qty_total))]];
+        return (
+          <div style={{ ...panel, marginTop: 4 }}>
+            <div style={{ ...head, marginBottom: 8 }}>Data quality {basisTag(`${fc.length} receipts loaded`)}</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{dq.map(([l, rows]) => <button key={l} onClick={() => openDrill(`Data quality — ${l}`, "All loaded receipts", rows)} style={{ ...pill(false), color: rows.length ? AMBER : GREEN, borderColor: rows.length ? `${AMBER}66` : `${GREEN}55` }}>{rows.length ? "⚠" : "✓"} {l}: {rows.length}</button>)}</div>
+          </div>
+        );
+      })()}
+
+      {drill && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setDrill(null)}>
+          <div style={{ background: BG, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 1300, maxHeight: "85vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+              <div><div style={{ ...head, fontSize: 15 }}>{drill.title} <span style={{ color: MUTED, fontWeight: 400 }}>({drill.rows.length})</span></div><div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>Date basis: {drill.basis} · {period.label}</div></div>
+              <div style={{ display: "flex", gap: 8 }}><button style={pill(false)} onClick={() => exportCases(drill.rows, `${drill.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`)}>⬇ CSV</button><button style={pill(true)} onClick={() => setDrill(null)}>Close</button></div>
+            </div>
+            <CaseTable rows={drill.rows} limit={500} />
+            {drill.rows.length > 500 && <div style={{ color: MUTED, fontSize: 11, marginTop: 8 }}>Showing first 500 — export CSV for all {drill.rows.length}.</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 const S = {
   scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
