@@ -323,7 +323,7 @@ function App() {
       } catch (e) { /* notifications table may not exist yet — silently ignore */ }
     };
     poll();
-    const interval = setInterval(poll, 20000);
+    const interval = setInterval(poll, 30000);
     return () => { cancelled = true; clearInterval(interval); };
   }, [session, profile, notifBeep]);
 
@@ -412,6 +412,7 @@ function App() {
           {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreports" && <StockingReportsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkdashboardv2" && <StockingDashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -580,6 +581,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
   ];
   const STOCKING_ITEMS = [
     { id: "stkdashboard", label: "Stocking Dashboard", icon: "🧮" },
+    { id: "stkdashboardv2", label: "Inventory & Outbound", icon: "📊" },
     { id: "stkcatalogue", label: "Stocking Catalogue", icon: "📚" },
     { id: "stkreceiving", label: "Stocking Receiving", icon: "📥" },
     { id: "stkrtv", label: "RTV", icon: "↩" },
@@ -597,8 +599,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
   // Ground-level Stocking roles get a restricted tab set (mirrors how e-commerce restricts
   // non-lead roles); Inbound/Outbound Executive get full access across their whole side.
   const STOCKING_ROLE_TABS = {
-    inbound_executive: ["stkdashboard", "stkcatalogue", "stkreceiving", "stkrtv", "stkinventory", "stkreports"],
-    outbound_executive: ["stkdashboard", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports"],
+    inbound_executive: ["stkdashboard", "stkdashboardv2", "stkcatalogue", "stkreceiving", "stkrtv", "stkinventory", "stkreports"],
+    outbound_executive: ["stkdashboard", "stkdashboardv2", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports"],
     physical_receiver: ["stkdashboard", "stkreceiving"],
     inspection_officer: ["stkdashboard", "stkreceiving"],
     putaway_officer: ["stkdashboard", "stkoutbound", "stkrepair"],
@@ -615,8 +617,8 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     : ecomExtras && profile.role === "compliance_officer" ? [{ id: "dashboard", label: "Dashboard", icon: "🗂" }, { id: "complaints", label: "Complaints", icon: "🗣" }]
     : !ecomExtras && STOCKING_ROLE_TABS[profile.role] ? STOCKING_ITEMS.filter(it => STOCKING_ROLE_TABS[profile.role].includes(it.id))
     : items;
-  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkcatalogue", "stkrtv", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports", "stkbins", "returns", "damage", "complaints", "trackingsplit", "reports", "bins", "totemaster", "users"];
-  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkcatalogue: { label: "Stocking Catalogue", icon: "📚" }, stkrtv: { label: "RTV", icon: "↩" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkrepair: { label: "Repair/Touch-up", icon: "🔧" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkreports: { label: "Stocking Reports", icon: "📊" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, complaints: { label: "Complaints", icon: "🗣" }, trackingsplit: { label: "Tracking Split", icon: "✂" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
+  const ALL_NAV_IDS = ["dashboard", "dashboardv2", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch", "kpi", "stkreceiving", "stkdashboard", "stkdashboardv2", "stkcatalogue", "stkrtv", "stkoutbound", "stkstr", "stkpicking", "stkrepair", "stkpacking", "stklogistics", "stkinventory", "stkreports", "stkbins", "returns", "damage", "complaints", "trackingsplit", "reports", "bins", "totemaster", "users"];
+  const ALL_NAV_META = { dashboard: { label: "Dashboard", icon: "🗂" }, dashboardv2: { label: "Dashboard V2", icon: "📈" }, products: { label: "Products", icon: "📦" }, receiving: { label: "Inbound Ops", icon: "⬇" }, putaway: { label: "Putaway", icon: "📍" }, inventory: { label: "Inventory", icon: "🧰" }, orders: { label: "Sales Orders", icon: "🧾" }, picking: { label: "Picking", icon: "🛒" }, packing: { label: "Packing", icon: "🏷" }, dispatch: { label: "Dispatch", icon: "🚚" }, kpi: { label: "My KPI", icon: "📈" }, stkreceiving: { label: "Stocking Receiving", icon: "📥" }, stkcatalogue: { label: "Stocking Catalogue", icon: "📚" }, stkrtv: { label: "RTV", icon: "↩" }, stkdashboard: { label: "Stocking Dashboard", icon: "🧮" }, stkdashboardv2: { label: "Inventory & Outbound", icon: "📊" }, stkoutbound: { label: "Stocking Outbound", icon: "📤" }, stkstr: { label: "STR", icon: "🧾" }, stkpicking: { label: "Stocking Picking", icon: "🧑‍🤝‍🧑" }, stkrepair: { label: "Repair/Touch-up", icon: "🔧" }, stkpacking: { label: "Stocking Packing", icon: "📦" }, stklogistics: { label: "Stocking Logistics", icon: "🚚" }, stkinventory: { label: "Stocking Inventory", icon: "🧰" }, stkreports: { label: "Stocking Reports", icon: "📊" }, stkbins: { label: "Bin Master", icon: "🗺" }, returns: { label: "Returns", icon: "↩" }, damage: { label: "Damage", icon: "💔" }, complaints: { label: "Complaints", icon: "🗣" }, trackingsplit: { label: "Tracking Split", icon: "✂" }, pna: { label: "PNA", icon: "🔍" }, reports: { label: "Reports", icon: "📊" }, bins: { label: "Bin Master", icon: "🗺" }, totemaster: { label: "Tote Master", icon: "🧺" }, users: { label: "Users", icon: "👥" } };
   let visibleItems = baseItems;
   if (profile.nav_overrides) {
     const baseIds = new Set(baseItems.map(i => i.id));
@@ -681,6 +683,20 @@ function Toast({ toast }) {
 
 /* ================= DASHBOARD ================= */
 function DashboardView({ token, profile, setView, showToast }) {
+  // Dark management theme (same design language as the Stocking dashboards)
+  const D = {
+    panel: { background: "#1A1712", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: 18, marginBottom: 14, overflowX: "auto" },
+    panelTitle: { color: "#F4EFE6", fontSize: 13, fontWeight: 700, marginBottom: 14, textTransform: "uppercase", letterSpacing: 0.5 },
+    th: { ...S.th, color: "#8F8879", borderBottom: "1px solid rgba(255,255,255,0.08)", background: "transparent" },
+    td: { ...S.td, color: "#F4EFE6", borderBottom: "1px solid rgba(255,255,255,0.05)" },
+    input: { ...S.input, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#F4EFE6", colorScheme: "dark" },
+    primaryBtnSm: S.primaryBtnSm,
+    secondaryBtnSm: { ...S.secondaryBtnSm, background: "transparent", color: "#F4EFE6", border: "1px solid rgba(255,255,255,0.15)" }
+  };
+  const [pipeline, setPipeline] = useState({});
+  const [courierSummary, setCourierSummary] = useState([]);
+  const [todayStats, setTodayStats] = useState({ received: 0, dispatched: 0 });
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [overall, setOverall] = useState({ grnPending: 0, grnComplete: 0, grnPendingQty: 0, grnCompleteQty: 0, pcsPendingPutaway: 0, ordersCompleted: 0, ordersPending: 0, ordersPendingQty: 0, ordersCompletedQty: 0, returnOrders: 0 });
   const [fulfillmentKpis, setFulfillmentKpis] = useState({ totalOrders: 0, dispatched: 0, pending: 0, avgBucketSize: 0, avgFulfillmentHrs: null });
   const [kpi24, setKpi24] = useState({ onTime: 0, delayed: 0, rate: null });
@@ -771,6 +787,25 @@ function DashboardView({ token, profile, setView, showToast }) {
         }
         setOverall({ grnPending, grnComplete, grnPendingQty, grnCompleteQty, pcsPendingPutaway, ordersCompleted, ordersPending, ordersPendingQty, ordersCompletedQty, returnOrders });
 
+        const pc = {}; for (const o of orders || []) { const k = o.status === "handed_over" ? "dispatched" : o.status; pc[k] = (pc[k] || 0) + 1; }
+        setPipeline(pc);
+        const cs = {};
+        for (const o of (orders || []).filter(x => ["dispatched", "handed_over"].includes(x.status))) {
+          const name = isPostex(o.courier) ? "PostEx" : isMnp(o.courier) ? "M&P" : (o.courier || "Other");
+          const c = cs[name] || (cs[name] = { courier: name, dispatched: 0, delivered: 0, returned: 0, synced: 0 });
+          c.dispatched++;
+          if (o.courier_status_code) c.synced++;
+          if (o.courier_status_code === "0005") c.delivered++;
+          if (["0002", "0006", "0007"].includes(o.courier_status_code)) c.returned++;
+        }
+        setCourierSummary(Object.values(cs).sort((x, y) => y.dispatched - x.dispatched));
+        const todayKey = new Date().toDateString();
+        setTodayStats({
+          received: (orders || []).filter(o => o.received_at && new Date(o.received_at).toDateString() === todayKey).length,
+          dispatched: (orders || []).filter(o => o.dispatched_at && new Date(o.dispatched_at).toDateString() === todayKey).length
+        });
+        setLastUpdated(new Date());
+
         const dispatchedWithDates = (orders || []).filter(o => o.received_at && o.dispatched_at);
         let onTime = 0, delayed = 0;
         for (const o of dispatchedWithDates) {
@@ -843,7 +878,7 @@ function DashboardView({ token, profile, setView, showToast }) {
       } catch (e) {}
     };
     loadDashboard();
-    const interval = setInterval(loadDashboard, 30000);
+    const interval = setInterval(loadDashboard, 90000);
     return () => clearInterval(interval);
   }, [token, profile.warehouse_id, refreshTick]);
 
@@ -893,7 +928,7 @@ function DashboardView({ token, profile, setView, showToast }) {
       data: {
         datasets: [{
           data: [rate, 100 - rate],
-          backgroundColor: [gaugeColor, "#EFE8D8"],
+          backgroundColor: [gaugeColor, "rgba(255,255,255,0.07)"],
           borderWidth: 0
         }]
       },
@@ -920,11 +955,11 @@ function DashboardView({ token, profile, setView, showToast }) {
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
-        plugins: { legend: { display: true, position: "top", labels: { color: "#6B6355", boxWidth: 12 } } },
+        plugins: { legend: { display: true, position: "top", labels: { color: "#B5AC98", boxWidth: 12 } } },
         scales: {
-          y: { position: "left", beginAtZero: true, title: { display: true, text: "Orders", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } },
-          y1: { position: "right", beginAtZero: true, title: { display: true, text: "Lead Time (hrs)", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { display: false } },
-          x: { ticks: { color: "#6B6355", maxRotation: 45, minRotation: 45 }, grid: { display: false } }
+          y: { position: "left", beginAtZero: true, title: { display: true, text: "Orders", color: "#B5AC98" }, ticks: { color: "#B5AC98" }, grid: { color: "rgba(255,255,255,0.07)" } },
+          y1: { position: "right", beginAtZero: true, title: { display: true, text: "Lead Time (hrs)", color: "#B5AC98" }, ticks: { color: "#B5AC98" }, grid: { display: false } },
+          x: { ticks: { color: "#B5AC98", maxRotation: 45, minRotation: 45 }, grid: { display: false } }
         }
       }
     });
@@ -984,11 +1019,11 @@ function DashboardView({ token, profile, setView, showToast }) {
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
-        plugins: { legend: { display: true, position: "top", labels: { color: "#6B6355", boxWidth: 12 } } },
+        plugins: { legend: { display: true, position: "top", labels: { color: "#B5AC98", boxWidth: 12 } } },
         scales: {
-          y: { position: "left", beginAtZero: true, title: { display: true, text: "Days", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { color: "#EFE8D8" } },
-          y1: { position: "right", beginAtZero: true, max: 100, title: { display: true, text: "Rate %", color: "#6B6355" }, ticks: { color: "#6B6355" }, grid: { display: false } },
-          x: { ticks: { color: "#6B6355" }, grid: { display: false } }
+          y: { position: "left", beginAtZero: true, title: { display: true, text: "Days", color: "#B5AC98" }, ticks: { color: "#B5AC98" }, grid: { color: "rgba(255,255,255,0.07)" } },
+          y1: { position: "right", beginAtZero: true, max: 100, title: { display: true, text: "Rate %", color: "#B5AC98" }, ticks: { color: "#B5AC98" }, grid: { display: false } },
+          x: { ticks: { color: "#B5AC98" }, grid: { display: false } }
         }
       }
     });
@@ -1096,26 +1131,97 @@ function DashboardView({ token, profile, setView, showToast }) {
 
   const initials = profile.full_name.split(" ").map(n => n[0]).slice(0, 2).join("").toUpperCase();
 
+  const CC = { TXT: "#F4EFE6", MUTED: "#8F8879", AMBER: "#F5A623", GREEN: "#4ADE80", RED: "#F87171", BLUE: "#60A5FA", PURPLE: "#C4A0FF" };
+  const ccCard = (label, value, sub, color, onClick, tip) => (
+    <div key={label} title={tip} onClick={onClick} style={{ background: "#1A1712", border: "1px solid rgba(255,255,255,0.08)", borderTop: `2px solid ${color}`, borderRadius: 12, padding: 16, cursor: onClick ? "pointer" : "default", position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: -24, right: -24, width: 80, height: 80, borderRadius: "50%", background: color, opacity: 0.08, filter: "blur(10px)" }} />
+      <div style={{ color: CC.MUTED, fontSize: 10, letterSpacing: 0.6, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color, marginTop: 6, textShadow: `0 0 22px ${color}33` }}>{value}</div>
+      {sub && <div style={{ color: CC.MUTED, fontSize: 11, marginTop: 3 }}>{sub}</div>}
+    </div>
+  );
+  const ccBars = (items) => {
+    const max = Math.max(1, ...items.map(i => i.value));
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {items.map(i => (
+          <div key={i.label} onClick={i.onClick} style={{ cursor: i.onClick ? "pointer" : "default" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, marginBottom: 3 }}><span style={{ color: CC.TXT }}>{i.label}</span><span style={{ color: CC.MUTED, fontFamily: "'IBM Plex Mono', monospace" }}>{i.value.toLocaleString()}{i.sub ? ` · ${i.sub}` : ""}</span></div>
+            <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 20, height: 10, overflow: "hidden" }}><div style={{ width: `${(i.value / max) * 100}%`, height: "100%", background: i.color, borderRadius: 20, transition: "width 0.4s" }} /></div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const ccTotals = courierSummary.reduce((t, c) => ({ d: t.d + c.dispatched, del: t.del + c.delivered, ret: t.ret + c.returned, syn: t.syn + c.synced }), { d: 0, del: 0, ret: 0, syn: 0 });
+  const ccPct = (n, d) => d > 0 ? `${((n / d) * 100).toFixed(1)}%` : "N/A";
+  const ccStale = lastUpdated && Date.now() - lastUpdated.getTime() > 120000;
+  const ccPipe = [
+    ["received", "New / Received", CC.MUTED], ["queued", "Queued for pick", CC.BLUE], ["picking", "Picked", CC.BLUE], ["rtd", "Packed / RTD", CC.PURPLE],
+    ["scanned", "Scanned for dispatch", CC.AMBER], ["incomplete", "Incomplete", CC.RED], ["dispatched", "Dispatched / Handed over", CC.GREEN]
+  ].map(([k, l, c]) => ({ label: l, value: pipeline[k] || 0, color: c, onClick: () => setView("orders") })).filter(i => i.value > 0 || ["received", "queued", "rtd", "dispatched"].includes(i.label));
+
   return (
-    <div>
-      <div style={{ background: "#A6472F", borderRadius: 12, padding: "18px 22px", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div style={{ background: "#0F0D0A", borderRadius: 14, padding: 20, color: "#F4EFE6", fontFamily: "'Space Grotesk', sans-serif" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
-          <div style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, letterSpacing: 0.5 }}>HABITT WAREHOUSE</div>
-          <div style={{ color: "rgba(255,255,255,0.75)", fontSize: 11, letterSpacing: 1, marginTop: 2 }}>{(ROLE_LABEL_GLOBAL[profile.role] || profile.role).toUpperCase()}</div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>E-commerce Command Center</div>
+          <div style={{ color: CC.MUTED, fontSize: 12.5, marginTop: 2 }}>Habitt Warehouse · {(ROLE_LABEL_GLOBAL[profile.role] || profile.role)} · auto-refresh every 30s</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <button onClick={() => setRefreshTick(t => t + 1)} title="Refresh now" style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", width: 34, height: 34, borderRadius: "50%", fontSize: 15, cursor: "pointer" }}>🔄</button>
-          <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 14 }}>{initials}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: ccStale ? "rgba(245,166,35,0.1)" : "rgba(74,222,128,0.1)", border: `1px solid ${ccStale ? CC.AMBER : CC.GREEN}55`, borderRadius: 20, padding: "5px 12px" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: ccStale ? CC.AMBER : CC.GREEN, boxShadow: `0 0 8px ${ccStale ? CC.AMBER : CC.GREEN}` }} />
+            <span style={{ color: ccStale ? CC.AMBER : CC.GREEN, fontSize: 11, fontWeight: 600 }}>{ccStale ? "STALE" : "LIVE"}</span>
+            <span style={{ color: CC.MUTED, fontSize: 11 }}>{lastUpdated ? lastUpdated.toLocaleTimeString() : "loading…"}</span>
+          </div>
+          <button onClick={() => setRefreshTick(t => t + 1)} title="Refresh now" style={{ background: "transparent", border: "1px solid rgba(255,255,255,0.15)", color: "#F4EFE6", borderRadius: 20, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>↻ Refresh</button>
+          <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#F5A623", display: "flex", alignItems: "center", justifyContent: "center", color: "#1A1206", fontWeight: 700, fontSize: 13 }}>{initials}</div>
         </div>
       </div>
-      <div style={{ color: "#8A8272", fontSize: 10, marginBottom: 16 }}>Auto-refreshes every 30s</div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Order Fulfillment KPIs</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12, marginBottom: 14 }}>
+        {ccCard("Orders today", todayStats.received.toLocaleString(), `${todayStats.dispatched} dispatched today`, CC.BLUE, () => setView("orders"), "Orders received / dispatched today")}
+        {ccCard("Pending orders", overall.ordersPending.toLocaleString(), `${overall.ordersPendingQty.toLocaleString()} pcs to fulfil`, CC.AMBER, () => setView("orders"), "Received, queued, picking, RTD, scanned or incomplete")}
+        {ccCard("Dispatched", overall.ordersCompleted.toLocaleString(), `${overall.ordersCompletedQty.toLocaleString()} pcs shipped`, CC.GREEN, () => setView("dispatch"))}
+        {ccCard("24h on-time rate", kpi24.rate != null ? `${kpi24.rate}%` : "—", `${kpi24.onTime} on time · ${kpi24.delayed} delayed`, kpi24.rate == null ? CC.MUTED : kpi24.rate >= 90 ? CC.GREEN : kpi24.rate >= 75 ? CC.AMBER : CC.RED, null, "Received → dispatched within 24h, Pakistan holidays excluded")}
+        {ccCard("Avg lead time", fulfillmentKpis.avgFulfillmentHrs != null ? `${fulfillmentKpis.avgFulfillmentHrs.toFixed(1)}h` : "—", `Target 24h · bucket ${fulfillmentKpis.avgBucketSize} units/order`, fulfillmentKpis.avgFulfillmentHrs != null && fulfillmentKpis.avgFulfillmentHrs > 24 ? CC.RED : CC.GREEN)}
+        {ccCard("Backlog > 1 day", fulfillmentVelocity ? fulfillmentVelocity.backlogCount.toLocaleString() : "—", "Received > 24h ago, not dispatched", fulfillmentVelocity && fulfillmentVelocity.backlogCount > 0 ? CC.RED : CC.GREEN, () => setView("orders"))}
+        {ccCard("Return in-transit", returnInTransit.length.toLocaleString(), Object.entries(returnInTransit.reduce((acc, o) => { acc[o.courier || "Other"] = (acc[o.courier || "Other"] || 0) + 1; return acc; }, {})).map(([c, n]) => `${c}: ${n}`).join(" · ") || "None coming back", returnInTransit.length ? CC.PURPLE : CC.GREEN, () => setView("returns"))}
+        {ccCard("Delivery success", ccPct(ccTotals.del, ccTotals.syn), `${ccTotals.del.toLocaleString()} delivered · returns ${ccPct(ccTotals.ret, ccTotals.syn)}`, CC.GREEN, null, "Of dispatched orders with a synced courier status (PostEx + M&P)")}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 14, marginBottom: 14 }}>
+        <div style={D.panel}>
+          <div style={D.panelTitle}>Order pipeline — now</div>
+          {ccBars(ccPipe)}
+        </div>
+        <div style={D.panel}>
+          <div style={D.panelTitle}>Courier performance — last mile</div>
+          <table>
+            <thead><tr>{["Courier", "Dispatched", "Delivered", "Returned", "In transit", "Success", "Return"].map(h => <th key={h} style={D.th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {courierSummary.map(c => (
+                <tr key={c.courier}>
+                  <td style={{ ...D.td, fontWeight: 600 }}>{c.courier}</td><td style={D.td}>{c.dispatched.toLocaleString()}</td>
+                  <td style={{ ...D.td, color: CC.GREEN }}>{c.delivered.toLocaleString()}</td><td style={{ ...D.td, color: CC.RED }}>{c.returned.toLocaleString()}</td>
+                  <td style={{ ...D.td, color: CC.MUTED }}>{(c.dispatched - c.delivered - c.returned).toLocaleString()}</td>
+                  <td style={{ ...D.td, color: CC.GREEN, fontWeight: 600 }}>{ccPct(c.delivered, c.synced)}</td><td style={{ ...D.td, color: CC.RED }}>{ccPct(c.returned, c.synced)}</td>
+                </tr>
+              ))}
+              {!courierSummary.length && <tr><td colSpan={7} style={{ ...D.td, color: CC.MUTED, textAlign: "center" }}>No dispatched orders yet</td></tr>}
+            </tbody>
+          </table>
+          <div style={{ color: CC.MUTED, fontSize: 10.5, marginTop: 8 }}>Rates use orders with a synced courier status. Other couriers show counts only.</div>
+        </div>
+      </div>
+
+
+      <div style={D.panel}>
+        <div style={D.panelTitle}>Order Fulfillment KPIs</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
-          <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("orders")}>
-            <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL ORDERS</div>
-            <div style={{ color: "#2B2620", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.totalOrders}</div>
+          <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer" }} onClick={() => setView("orders")}>
+            <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>TOTAL ORDERS</div>
+            <div style={{ color: "#F4EFE6", fontSize: 26, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentKpis.totalOrders}</div>
           </div>
           <div style={{ background: "#4CAF7D", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>DISPATCHED</div>
@@ -1136,40 +1242,40 @@ function DashboardView({ token, profile, setView, showToast }) {
             </div>
           </div>
         </div>
-        <div style={{ color: "#8A8272", fontSize: 10, marginTop: 10 }}>Target: received order dispatch within 24 hours, warna "Delayed" count hoga (Pakistan holidays exclude).</div>
+        <div style={{ color: "#8F8879", fontSize: 10, marginTop: 10 }}>Target: received order dispatch within 24 hours, warna "Delayed" count hoga (Pakistan holidays exclude).</div>
       </div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Daily Order Volume &amp; Same-Day Lead Time — Last 30 Days</div>
-        <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Bars = orders received that day; Line = average dispatch lead time for those orders.</div>
+      <div style={D.panel}>
+        <div style={D.panelTitle}>Daily Order Volume &amp; Same-Day Lead Time — Last 30 Days</div>
+        <div style={{ color: "#8F8879", fontSize: 11, marginBottom: 8 }}>Bars = orders received that day; Line = average dispatch lead time for those orders.</div>
         <div style={{ height: 280, position: "relative" }}>
           <canvas ref={trendChartRef}></canvas>
         </div>
       </div>
 
       {returnInTransit.length > 0 && (
-        <div style={{ ...S.panel, borderColor: "#E5484D" }}>
+        <div style={{ ...D.panel, borderColor: "#E5484D" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => setShowReturnInTransitDetail(v => !v)}>
             <div>
-              <div style={{ ...S.panelTitle, color: "#E5484D" }}>🔙 Return In-Transit — {returnInTransit.length} order(s) aa rahe hain</div>
-              <div style={{ color: "#8A8272", fontSize: 11, marginTop: 2 }}>
+              <div style={{ ...D.panelTitle, color: "#E5484D" }}>🔙 Return In-Transit — {returnInTransit.length} order(s) aa rahe hain</div>
+              <div style={{ color: "#8F8879", fontSize: 11, marginTop: 2 }}>
                 {Object.entries(returnInTransit.reduce((acc, o) => { acc[o.courier || "Other"] = (acc[o.courier || "Other"] || 0) + 1; return acc; }, {}))
                   .map(([c, n]) => `${c}: ${n}`).join("  ·  ")}
               </div>
             </div>
-            <span style={{ color: "#8A8272", fontSize: 12 }}>{showReturnInTransitDetail ? "▲ Hide" : "▼ Detail dekhein"}</span>
+            <span style={{ color: "#8F8879", fontSize: 12 }}>{showReturnInTransitDetail ? "▲ Hide" : "▼ Detail dekhein"}</span>
           </div>
           {showReturnInTransitDetail && (
             <table style={{ marginTop: 12 }}>
-              <thead><tr><th style={S.th}>Order #</th><th style={S.th}>Courier</th><th style={S.th}>City</th><th style={S.th}>Status</th><th style={S.th}>Last Synced</th></tr></thead>
+              <thead><tr><th style={D.th}>Order #</th><th style={D.th}>Courier</th><th style={D.th}>City</th><th style={D.th}>Status</th><th style={D.th}>Last Synced</th></tr></thead>
               <tbody>
                 {returnInTransit.map(o => (
                   <tr key={o.id}>
-                    <td style={{ ...S.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
-                    <td style={S.td}>{o.courier}</td>
-                    <td style={{ ...S.td, color: "#6B6355" }}>{o.delivery_city || "—"}</td>
-                    <td style={{ ...S.td, color: "#E5484D" }}>{o.courier_status || "—"}</td>
-                    <td style={{ ...S.td, color: "#6B6355", fontSize: 11 }}>{fmtTime(o.courier_last_synced_at)}</td>
+                    <td style={{ ...D.td, fontFamily: "'IBM Plex Mono', monospace", color: "#F5A623" }}>{o.external_order_id}</td>
+                    <td style={D.td}>{o.courier}</td>
+                    <td style={{ ...D.td, color: "#B5AC98" }}>{o.delivery_city || "—"}</td>
+                    <td style={{ ...D.td, color: "#E5484D" }}>{o.courier_status || "—"}</td>
+                    <td style={{ ...D.td, color: "#B5AC98", fontSize: 11 }}>{fmtTime(o.courier_last_synced_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1179,9 +1285,9 @@ function DashboardView({ token, profile, setView, showToast }) {
       )}
 
       {courierPerf.length > 0 && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>📍 Courier Last-Mile Performance — City-Wise</div>
-          <div style={{ color: "#8A8272", fontSize: 11, marginBottom: 8 }}>Top 10 cities by volume. Bars = average delivery time (days); Lines = success rate vs. return rate.</div>
+        <div style={D.panel}>
+          <div style={D.panelTitle}>📍 Courier Last-Mile Performance — City-Wise</div>
+          <div style={{ color: "#8F8879", fontSize: 11, marginBottom: 8 }}>Top 10 cities by volume. Bars = average delivery time (days); Lines = success rate vs. return rate.</div>
           <div style={{ height: 300, position: "relative" }}>
             <canvas ref={courierChartRef}></canvas>
           </div>
@@ -1189,35 +1295,35 @@ function DashboardView({ token, profile, setView, showToast }) {
       )}
 
       {fulfillmentVelocity && (
-        <div style={S.panel}>
+        <div style={D.panel}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-            <div style={S.panelTitle}>Fulfillment Velocity</div>
+            <div style={D.panelTitle}>Fulfillment Velocity</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={fvFrom} onChange={e => setFvFrom(e.target.value)} />
-              <span style={{ color: "#8A8272" }}>to</span>
-              <input type="date" style={{ ...S.input, maxWidth: 150 }} value={fvTo} onChange={e => setFvTo(e.target.value)} />
+              <input type="date" style={{ ...D.input, maxWidth: 150 }} value={fvFrom} onChange={e => setFvFrom(e.target.value)} />
+              <span style={{ color: "#8F8879" }}>to</span>
+              <input type="date" style={{ ...D.input, maxWidth: 150 }} value={fvTo} onChange={e => setFvTo(e.target.value)} />
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG QUEUE TIME</div>
-              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgQueueMin != null ? `${fulfillmentVelocity.avgQueueMin.toFixed(0)} min` : "—"}</div>
-              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Assign → Pick Start</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG QUEUE TIME</div>
+              <div style={{ color: "#F4EFE6", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgQueueMin != null ? `${fulfillmentVelocity.avgQueueMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8F8879", fontSize: 10, marginTop: 2 }}>Assign → Pick Start</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PICK TIME</div>
-              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPickMin != null ? `${fulfillmentVelocity.avgPickMin.toFixed(0)} min` : "—"}</div>
-              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Pick Start → Complete</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PICK TIME</div>
+              <div style={{ color: "#F4EFE6", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPickMin != null ? `${fulfillmentVelocity.avgPickMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8F8879", fontSize: 10, marginTop: 2 }}>Pick Start → Complete</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PACK TIME</div>
-              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPackMin != null ? `${fulfillmentVelocity.avgPackMin.toFixed(0)} min` : "—"}</div>
-              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Pack Start → Complete</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>AVG PACK TIME</div>
+              <div style={{ color: "#F4EFE6", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgPackMin != null ? `${fulfillmentVelocity.avgPackMin.toFixed(0)} min` : "—"}</div>
+              <div style={{ color: "#8F8879", fontSize: 10, marginTop: 2 }}>Pack Start → Complete</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ALLOCATED → PACKED</div>
-              <div style={{ color: "#2B2620", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgAllocToPackedHrs != null ? `${fulfillmentVelocity.avgAllocToPackedHrs.toFixed(1)} hrs` : "—"}</div>
-              <div style={{ color: "#8A8272", fontSize: 10, marginTop: 2 }}>Today's packed orders</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>ALLOCATED → PACKED</div>
+              <div style={{ color: "#F4EFE6", fontSize: 22, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{fulfillmentVelocity.avgAllocToPackedHrs != null ? `${fulfillmentVelocity.avgAllocToPackedHrs.toFixed(1)} hrs` : "—"}</div>
+              <div style={{ color: "#8F8879", fontSize: 10, marginTop: 2 }}>Today's packed orders</div>
             </div>
             <div style={{ background: fulfillmentVelocity.backlogCount > 0 ? "#E5484D" : "#4CAF7D", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("orders")}>
               <div style={{ color: "rgba(255,255,255,0.85)", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>FULFILLMENT BACKLOG &gt;1D</div>
@@ -1228,20 +1334,20 @@ function DashboardView({ token, profile, setView, showToast }) {
       )}
 
       {inboundOps && (
-        <div style={S.panel}>
-          <div style={S.panelTitle}>Inbound Ops</div>
+        <div style={D.panel}>
+          <div style={D.panelTitle}>Inbound Ops</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("receiving")}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING GRN #</div>
-              <div style={{ color: "#2B2620", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingStockOrders}</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer" }} onClick={() => setView("receiving")}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING GRN #</div>
+              <div style={{ color: "#F4EFE6", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingStockOrders}</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5", cursor: "pointer" }} onClick={() => setView("receiving")}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING RECEIVING LINES</div>
-              <div style={{ color: "#2B2620", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingReceivingLines}</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)", cursor: "pointer" }} onClick={() => setView("receiving")}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING RECEIVING LINES</div>
+              <div style={{ color: "#F4EFE6", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingReceivingLines}</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 10, padding: "14px 16px", border: "1px solid #E0D8C5" }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING RECEIVING UNITS</div>
-              <div style={{ color: "#2B2620", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingReceivingUnits}</div>
+            <div style={{ background: "#221E18", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ color: "#B5AC98", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>PENDING RECEIVING UNITS</div>
+              <div style={{ color: "#F4EFE6", fontSize: 24, fontWeight: 700, fontFamily: "'Space Grotesk', sans-serif", marginTop: 4 }}>{inboundOps.pendingReceivingUnits}</div>
             </div>
             <div style={{ background: "#D9A441", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("putaway")}>
               <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>LINES PENDING PUTAWAY</div>
@@ -1255,30 +1361,30 @@ function DashboardView({ token, profile, setView, showToast }) {
         </div>
       )}
 
-      <div style={S.panel}>
+      <div style={D.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-          <div style={S.panelTitle}>Picker &amp; Packer &amp; Put Away Leaderboard</div>
+          <div style={D.panelTitle}>Picker &amp; Packer &amp; Put Away Leaderboard</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={lbFrom} onChange={e => setLbFrom(e.target.value)} />
-            <span style={{ color: "#8A8272" }}>to</span>
-            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={lbTo} onChange={e => setLbTo(e.target.value)} />
+            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={lbFrom} onChange={e => setLbFrom(e.target.value)} />
+            <span style={{ color: "#8F8879" }}>to</span>
+            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={lbTo} onChange={e => setLbTo(e.target.value)} />
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
           <div>
-            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
+            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
             {pickerLeaderboard.length === 0 ? <EmptyNote text="No picking completed in this date range." /> : (
               <table>
-                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
+                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Orders</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Order</th></tr></thead>
                 <tbody>
                   {pickerLeaderboard.map((p, i) => (
                     <tr key={p.name}>
-                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={S.td}>{p.name}</td>
-                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...S.td, color: "#5B9EE8", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
+                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={D.td}>{p.name}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...D.td, color: "#5B9EE8", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1286,19 +1392,19 @@ function DashboardView({ token, profile, setView, showToast }) {
             )}
           </div>
           <div>
-            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
+            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
             {packerLeaderboard.length === 0 ? <EmptyNote text="No packing completed in this date range." /> : (
               <table>
-                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Orders</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Order</th></tr></thead>
+                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Orders</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Order</th></tr></thead>
                 <tbody>
                   {packerLeaderboard.map((p, i) => (
                     <tr key={p.name}>
-                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={S.td}>{p.name}</td>
-                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...S.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
+                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={D.td}>{p.name}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...D.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1306,19 +1412,19 @@ function DashboardView({ token, profile, setView, showToast }) {
             )}
           </div>
           <div>
-            <div style={{ color: "#6B6355", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📍 Put Away</div>
+            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📍 Put Away</div>
             {putawayLeaderboard.length === 0 ? <EmptyNote text="No putaway completed in this date range." /> : (
               <table>
-                <thead><tr><th style={S.th}>#</th><th style={S.th}>Staff</th><th style={S.th}>Lines</th><th style={S.th}>PCS</th><th style={S.th}>Time Taken</th><th style={S.th}>Avg/Line</th></tr></thead>
+                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Lines</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Line</th></tr></thead>
                 <tbody>
                   {putawayLeaderboard.map((p, i) => (
                     <tr key={p.name}>
-                      <td style={{ ...S.td, color: i === 0 ? "#F5A623" : "#6B6355" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={S.td}>{p.name}</td>
-                      <td style={{ ...S.td, color: "#2B2620", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...S.td, color: "#D9A441", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...S.td, color: "#2B2620" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...S.td, color: "#6B6355" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
+                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
+                      <td style={D.td}>{p.name}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
+                      <td style={{ ...D.td, color: "#D9A441", fontWeight: 600 }}>{p.pcs}</td>
+                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1328,8 +1434,8 @@ function DashboardView({ token, profile, setView, showToast }) {
         </div>
       </div>
 
-      <div style={S.panel}>
-        <div style={S.panelTitle}>Overall Snapshot — GRN to Dispatch</div>
+      <div style={D.panel}>
+        <div style={D.panelTitle}>Overall Snapshot — GRN to Dispatch</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }} className="depotos-statgrid">
           <div style={{ background: "#D9A441", borderRadius: 10, padding: "14px 16px", cursor: "pointer" }} onClick={() => setView("receiving")}>
             <div style={{ color: "#4A340C", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>GRN PENDING</div>
@@ -1362,74 +1468,74 @@ function DashboardView({ token, profile, setView, showToast }) {
         </div>
       </div>
 
-      <div style={S.panel}>
+      <div style={D.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div style={S.panelTitle}>24hr Dispatch KPI — Received → Dispatch (Pakistan holidays excluded)</div>
-          {isAdmin && <button style={S.secondaryBtnSm} onClick={() => setShowHolidayManager(s => !s)}>📅 Manage Holidays</button>}
+          <div style={D.panelTitle}>24hr Dispatch KPI — Received → Dispatch (Pakistan holidays excluded)</div>
+          {isAdmin && <button style={D.secondaryBtnSm} onClick={() => setShowHolidayManager(s => !s)}>📅 Manage Holidays</button>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 20, alignItems: "center" }} className="depotos-gauge-row">
           <div style={{ position: "relative", height: 130 }}>
             <canvas ref={gaugeChartRef}></canvas>
             <div style={{ position: "absolute", left: 0, right: 0, bottom: 6, textAlign: "center" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#2B2620" }}>{kpi24.rate != null ? `${kpi24.rate}%` : "—"}</div>
-              <div style={{ color: "#8A8272", fontSize: 10 }}>On-Time Rate</div>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#F4EFE6" }}>{kpi24.rate != null ? `${kpi24.rate}%` : "—"}</div>
+              <div style={{ color: "#8F8879", fontSize: 10 }}>On-Time Rate</div>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 14 }}>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#4CAF7D" }}>{kpi24.onTime}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>On-Time (within 24h)</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>On-Time (within 24h)</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 26, fontWeight: 700, color: "#E5484D" }}>{kpi24.delayed}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Delayed</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>Delayed</div>
             </div>
           </div>
         </div>
         {showHolidayManager && isAdmin && (
-          <div style={{ marginTop: 16, borderTop: "1px solid #E0D8C5", paddingTop: 14 }}>
+          <div style={{ marginTop: 16, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 14 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-              <input type="date" style={{ ...S.input, maxWidth: 160 }} value={newHolidayDate} onChange={e => setNewHolidayDate(e.target.value)} />
-              <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Holiday name (e.g. Eid-ul-Fitr)" value={newHolidayName} onChange={e => setNewHolidayName(e.target.value)} />
-              <button style={S.primaryBtnSm} onClick={addHoliday}>+ Add</button>
+              <input type="date" style={{ ...D.input, maxWidth: 160 }} value={newHolidayDate} onChange={e => setNewHolidayDate(e.target.value)} />
+              <input style={{ ...D.input, flex: 1, minWidth: 140 }} placeholder="Holiday name (e.g. Eid-ul-Fitr)" value={newHolidayName} onChange={e => setNewHolidayName(e.target.value)} />
+              <button style={D.primaryBtnSm} onClick={addHoliday}>+ Add</button>
             </div>
             {holidays.map(h => (
-              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #EFE8D8", fontSize: 12 }}>
-                <span style={{ color: "#2B2620" }}>{h.name || "Holiday"} <span style={{ color: "#8A8272", fontFamily: "'IBM Plex Mono', monospace" }}>— {h.holiday_date}</span></span>
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.07)", fontSize: 12 }}>
+                <span style={{ color: "#F4EFE6" }}>{h.name || "Holiday"} <span style={{ color: "#8F8879", fontFamily: "'IBM Plex Mono', monospace" }}>— {h.holiday_date}</span></span>
                 <span style={{ color: "#E5484D", cursor: "pointer" }} onClick={() => removeHoliday(h)}>✕ Remove</span>
               </div>
             ))}
-            <div style={{ color: "#8A8272", fontSize: 10, marginTop: 8 }}>⚠ Eid dates depend on moon sighting — must be added manually each year.</div>
+            <div style={{ color: "#8F8879", fontSize: 10, marginTop: 8 }}>⚠ Eid dates depend on moon sighting — must be added manually each year.</div>
           </div>
         )}
       </div>
 
-      <div style={S.panel}>
+      <div style={D.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-          <div style={S.panelTitle}>Today's Snapshot (filterable)</div>
+          <div style={D.panelTitle}>Today's Snapshot (filterable)</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-            <span style={{ color: "#8A8272" }}>to</span>
-            <input type="date" style={{ ...S.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+            <span style={{ color: "#8F8879" }}>to</span>
+            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={dateTo} onChange={e => setDateTo(e.target.value)} />
           </div>
         </div>
         {snapshot ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14 }}>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
-              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#2B2620" }}>{snapshot.count}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Orders Received</div>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
+              <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#F4EFE6" }}>{snapshot.count}</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>Orders Received</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#5B9EE8" }}>{snapshot.avgBucket}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Bucket Size (units/order)</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>Avg Bucket Size (units/order)</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#4CAF7D" }}>{snapshot.avgSaleValue.toLocaleString()}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Avg Sale Value/Order</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>Avg Sale Value/Order</div>
             </div>
-            <div style={{ background: "#F4EFE6", borderRadius: 8, padding: 14, border: "1px solid #E0D8C5" }}>
+            <div style={{ background: "#221E18", borderRadius: 8, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 24, fontWeight: 700, color: "#F5A623" }}>{snapshot.avgLead != null ? snapshot.avgLead.toFixed(1) + "h" : "—"}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 4 }}>Average Lead Time</div>
+              <div style={{ color: "#B5AC98", fontSize: 11, marginTop: 4 }}>Average Lead Time</div>
             </div>
           </div>
         ) : <EmptyNote text="Loading…" />}
@@ -1477,8 +1583,8 @@ function DashboardV2View({ token, profile, showToast }) {
       try {
         const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets, cTypes, cPOs] = await Promise.all([
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
-          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
+          sb(`/rest/v1/products?select=id,sales_price,department&limit=20000`, { token }),
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=product_id,on_hand&limit=50000`, { token }),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/pick_task_lines?select=product_id,qty_picked,pick_task_id`, { token }),
           sb(`/rest/v1/pick_tasks?status=eq.picked&select=id,completed_at`, { token }),
@@ -3643,7 +3749,7 @@ function InventoryView({ token, profile, showToast }) {
       const [inv, res, prods, binList, putaway, grnLinesAll, grnAll] = await Promise.all([
         sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=*&limit=20000`, { token }),
+        sb(`/rest/v1/products?select=id,barcode,name,sku,department&limit=20000`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
         sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -5394,7 +5500,7 @@ function PickingView({ token, profile, showToast }) {
     try {
       const [t, o, pk, b, tt] = await Promise.all([
         sb(`/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,external_order_id,courier,status,delivery_city,receiver_name`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
@@ -5422,7 +5528,7 @@ function PickingView({ token, profile, showToast }) {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (openTote) return; // don't poll while actively scanning inside a tote — avoid disrupting the picker
-    const interval = setInterval(load, 15000);
+    const interval = setInterval(load, 40000);
     return () => clearInterval(interval);
   }, [load, openTote]);
   useEffect(() => {
@@ -6156,7 +6262,7 @@ function PackingView({ token, profile, showToast }) {
     try {
       const [t, o, tt, b, s] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,external_order_id,courier,status,delivery_city,receiver_name`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token }),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
@@ -6171,7 +6277,7 @@ function PackingView({ token, profile, showToast }) {
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (openTote || openTask) return; // don't poll while actively packing — avoid disrupting scan flow
-    const interval = setInterval(load, 15000);
+    const interval = setInterval(load, 40000);
     return () => clearInterval(interval);
   }, [load, openTote, openTask]);
   useEffect(() => {
@@ -7851,7 +7957,7 @@ function ReportsView({ token, profile, showToast }) {
       if (key === "inventory_ledger") {
         const [inv, products, reserved, putaway, grnLinesAll, grnAll] = await Promise.all([
           sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
-          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
+          sb(`/rest/v1/products?select=id,barcode,name,sku,department,sales_price&limit=20000`, { token }),
           sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
           sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -7881,7 +7987,7 @@ function ReportsView({ token, profile, showToast }) {
       } else if (key === "inventory_bin_ledger") {
         const [inv, products, bins, putaway, grnLinesAll, grnAll] = await Promise.all([
           sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
-          sb(`/rest/v1/products?select=*&limit=20000`, { token }),
+          sb(`/rest/v1/products?select=id,barcode,name,sku,department,sales_price&limit=20000`, { token }),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
           sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -14137,6 +14243,381 @@ function StockingDashboardView({ token, profile }) {
   );
 }
 
+
+/* ================= STOCKING — INVENTORY & OUTBOUND DASHBOARD ================= */
+// Pages through a PostgREST list so tables larger than the API's per-request row cap
+// (1000 by default on Supabase) are fully loaded instead of silently truncated.
+async function sbAll(path, token, page = 1000) {
+  const out = []; const sep = path.includes("?") ? "&" : "?";
+  for (let off = 0; off < 1000000; off += page) {
+    const rows = (await sb(`${path}${sep}limit=${page}&offset=${off}`, { token })) || [];
+    out.push(...rows);
+    if (rows.length < page) break;
+  }
+  return out;
+}
+
+function StockingDashboardV2View({ token, profile }) {
+  const whId = useStkWarehouseId(token, profile);
+  const [tab, setTab] = useState("inventory");
+  const [preset, setPreset] = useState("mtd");
+  const [customFrom, setCustomFrom] = useState(""); const [customTo, setCustomTo] = useState("");
+  const [flt, setFlt] = useState({ destination: "", department: "", search: "" });
+  const [data, setData] = useState({ putaway: [], adj: [], strs: [], products: {}, grn: null });
+  const [loading, setLoading] = useState(true); const [err, setErr] = useState("");
+  const [loadMs, setLoadMs] = useState(null); const [lastUpdated, setLastUpdated] = useState(null);
+  const [drill, setDrill] = useState(null); const [nowTick, setNowTick] = useState(Date.now());
+
+  const BG = "#0F0D0A", CARD = "#1A1712", BORDER = "rgba(255,255,255,0.08)", TXT = "#F4EFE6", MUTED = "#8F8879", AMBER = "#F5A623", GREEN = "#4ADE80", RED = "#F87171", BLUE = "#60A5FA", PURPLE = "#C4A0FF", GREY = "#6B6355";
+  const panel = { background: CARD, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, marginBottom: 14, overflowX: "auto" };
+  const head = { color: TXT, fontSize: 13, fontWeight: 700, letterSpacing: 0.3 };
+  const basisTag = (t) => <span style={{ fontSize: 10, color: MUTED, border: `1px solid ${BORDER}`, borderRadius: 20, padding: "2px 8px", marginLeft: 8, fontFamily: "'IBM Plex Mono', monospace" }}>{t}</span>;
+  const th = { textAlign: "left", color: MUTED, fontSize: 10.5, padding: "7px 8px", borderBottom: `1px solid ${BORDER}`, fontFamily: "'IBM Plex Mono', monospace", whiteSpace: "nowrap" };
+  const td = { padding: "8px 8px", fontSize: 12.5, color: TXT, borderBottom: "1px solid rgba(255,255,255,0.05)", whiteSpace: "nowrap" };
+  const inp = { background: "rgba(255,255,255,0.05)", border: `1px solid ${BORDER}`, borderRadius: 6, color: TXT, padding: "7px 9px", fontSize: 12, fontFamily: "'Space Grotesk', sans-serif" };
+  const pill = (a, c = AMBER) => ({ background: a ? c : "transparent", color: a ? "#1A1206" : TXT, border: `1px solid ${a ? c : BORDER}`, borderRadius: 20, padding: "6px 13px", fontSize: 12, cursor: "pointer", fontWeight: a ? 700 : 400, fontFamily: "'Space Grotesk', sans-serif" });
+  const days = (ms) => ms == null ? null : ms / STK_DAY_MS;
+  const fmtD = (d) => d == null ? "—" : `${d.toFixed(1)}d`;
+
+  const load = async () => {
+    if (!whId) return;
+    const t0 = performance.now(); setErr("");
+    try {
+      const w = `warehouse_id=eq.${whId}&`;
+      const since = pkStart(pkMonthStart(pkYmd(new Date()), 13)).toISOString().split(".")[0] + "Z";
+      const [putaway, adj, strs, prods, grn] = await Promise.all([
+        sbAll(`/rest/v1/stk_putaway_queue?${w}status=eq.completed&select=id,product_barcode,product_name,qty,bin_id,completed_at&order=id.asc`, token),
+        sbAll(`/rest/v1/stk_inventory_adjustments?${w}select=id,product_barcode,product_name,bin_id,qty_delta,created_at&order=id.asc`, token),
+        sbAll(`/rest/v1/stk_str?${w}select=id,str_number,status,source,destination,product_barcode,product_name,qty,created_at,confirmed_at,picked_at,packed_at,dispatched_at,gatepass_number&order=id.asc`, token),
+        sbAll(`/rest/v1/stk_products?select=internal_barcode,display_name,department,sales_price&order=internal_barcode.asc`, token).catch(() => []),
+        sb(`/rest/v1/stk_v_receipt_cases?${w}grn_posted_at=gte.${since}&select=dc_id,grn_posted_at,accepted_qty&limit=10000`, { token }).catch(() => null)
+      ]);
+      setData({ putaway, adj, strs, products: Object.fromEntries((prods || []).map(p => [p.internal_barcode, p])), grn });
+      setLastUpdated(new Date()); setNowTick(Date.now()); setLoadMs(Math.round(performance.now() - t0));
+    } catch (e) { setErr(`Load fail: ${e.message}`); }
+    setLoading(false);
+  };
+  useEffect(() => { if (whId) load(); }, [whId]);
+  useEffect(() => {
+    const iv = setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+    return () => clearInterval(iv);
+  }, [whId]);
+
+  const period = useMemo(() => stkComputePeriod(preset, customFrom, customTo), [preset, customFrom, customTo, nowTick]);
+  const nowISO = new Date(nowTick).toISOString();
+  const inR = (iso, a = period.from, b = period.to) => { if (!iso) return false; const t = new Date(iso).getTime(); return t >= a && t < b; };
+  const priceOf = (bc) => Number(data.products[bc]?.sales_price || 0);
+  const deptOf = (bc) => data.products[bc]?.department || "Unassigned";
+  const nameOf = (bc, nm) => data.products[bc]?.display_name || nm || bc || "—";
+
+  // ---------- inventory snapshot (same formula as Stocking Inventory / Outbound screens) ----------
+  const inventory = useMemo(() => {
+    const perBin = {};
+    const add = (bc, nm, bin, q) => { const key = bc || nm; if (!key) return; const k = `${key}|${bin}`; const r = perBin[k] || (perBin[k] = { key, barcode: bc, name: nm, qty: 0 }); r.qty += Number(q || 0); if (!r.barcode && bc) r.barcode = bc; };
+    data.putaway.forEach(q => add(q.product_barcode, q.product_name, q.bin_id, q.qty));
+    data.adj.forEach(a => add(a.product_barcode, a.product_name, a.bin_id, a.qty_delta));
+    const reserved = {};
+    data.strs.filter(s => s.status === "reserved" && s.source !== "grn_distribution" && !s.picked_at).forEach(s => { const k = s.product_barcode || s.product_name; reserved[k] = (reserved[k] || 0) + Number(s.qty || 0); });
+    const perProd = {};
+    Object.values(perBin).filter(r => r.qty > 0).forEach(r => { const p = perProd[r.key] || (perProd[r.key] = { key: r.key, barcode: r.barcode, rawName: r.name, onHand: 0, bins: 0 }); p.onHand += r.qty; p.bins++; if (!p.barcode && r.barcode) p.barcode = r.barcode; });
+    return Object.values(perProd).map(p => {
+      const res = reserved[p.key] || 0; const price = priceOf(p.barcode); const net = Math.max(0, p.onHand - res);
+      return { ...p, name: nameOf(p.barcode, p.rawName), dept: deptOf(p.barcode), reserved: res, net, price, value: p.onHand * price, netValue: net * price, noPrice: !price };
+    });
+  }, [data]);
+
+  const invF = inventory.filter(r => (!flt.department || r.dept === flt.department) && (!flt.search || `${r.barcode} ${r.name}`.toLowerCase().includes(flt.search.toLowerCase())));
+  const departments = [...new Set(inventory.map(r => r.dept))].sort();
+
+  // ---------- STRs ----------
+  const strs = useMemo(() => data.strs.map(s => {
+    const stage = stkStrStage(s);
+    const price = priceOf(s.product_barcode);
+    const rtdToDisp = s.packed_at && s.dispatched_at ? days(stkWorkingMs(s.packed_at, s.dispatched_at)) : null;
+    const rtdAge = stage === "RTD" && s.packed_at ? days(stkWorkingMs(s.packed_at, nowISO)) : null;
+    const pickStart = s.confirmed_at;
+    const clkConfirmPick = s.confirmed_at && s.picked_at ? days(stkWorkingMs(s.confirmed_at, s.picked_at)) : null;
+    const clkToPack = (s.picked_at || s.confirmed_at) && s.packed_at ? days(stkWorkingMs(s.picked_at || s.confirmed_at, s.packed_at)) : null;
+    const cycle = pickStart && s.dispatched_at ? days(stkWorkingMs(pickStart, s.dispatched_at)) : null;
+    return { ...s, stage, dest: s.destination || "Unassigned", doc: s.str_number || s.id, name: nameOf(s.product_barcode, s.product_name), value: Number(s.qty || 0) * price, rtdToDisp, rtdAge, clkConfirmPick, clkToPack, cycle };
+  }), [data, nowTick]);
+  const strF = strs.filter(s => (!flt.destination || s.dest === flt.destination) && (!flt.department || deptOf(s.product_barcode) === flt.department) && (!flt.search || `${s.str_number} ${s.product_barcode} ${s.name} ${s.gatepass_number || ""}`.toLowerCase().includes(flt.search.toLowerCase())));
+  const destinations = [...new Set(strs.map(s => s.dest))].sort();
+  const shipped = strF.filter(s => (s.status === "dispatched" || s.status === "received") && inR(s.dispatched_at));
+  const prevShipped = strF.filter(s => (s.status === "dispatched" || s.status === "received") && inR(s.dispatched_at, period.pFrom, period.pTo));
+  const atRtd = strF.filter(s => s.stage === "RTD");
+  const docs = (arr) => new Set(arr.map(s => s.doc)).size;
+  const sumK = (arr, k) => arr.reduce((t, r) => t + Number(r[k] || 0), 0);
+  const leadArr = shipped.map(s => s.rtdToDisp).filter(v => v != null);
+  const grnQty = data.grn ? data.grn.filter(g => inR(g.grn_posted_at)).reduce((t, g) => t + Number(g.accepted_qty || 0), 0) : null;
+  const putawayQty = data.putaway.filter(q => inR(q.completed_at)).reduce((t, q) => t + Number(q.qty || 0), 0);
+  const strCreatedQty = strF.filter(s => inR(s.created_at)).reduce((t, s) => t + Number(s.qty || 0), 0);
+  const oldestRtd = [...atRtd].sort((a, b) => (b.rtdAge || 0) - (a.rtdAge || 0))[0];
+  const deltaTxt = (cur, prev) => { if (!prev) return null; const d = ((cur - prev) / prev) * 100; return `${d >= 0 ? "▲" : "▼"} ${Math.abs(d).toFixed(0)}% vs ${period.prevLabel}`; };
+  const leadColor = (d) => d == null ? GREY : d <= 3 ? GREEN : d <= 7 ? AMBER : RED;
+
+  const openDrill = (title, basis, kind, rows) => setDrill({ title, basis, kind, rows });
+  const invCols = [["Barcode", r => r.barcode || "—"], ["Product", r => r.name], ["Department", r => r.dept], ["On-hand", r => r.onHand], ["Reserved (STR)", r => r.reserved], ["Net available", r => r.net], ["Bins", r => r.bins], ["Sales price", r => r.price || "—"], ["Value", r => Math.round(r.value)]];
+  const strCols = [["STR#", s => s.str_number || "—"], ["Destination", s => s.dest], ["Product", s => s.name], ["Qty", s => s.qty], ["Value", s => Math.round(s.value)], ["Stage", s => s.stage], ["Confirmed", s => s.confirmed_at ? fmtTime(s.confirmed_at) : "—"], ["RTD (packed)", s => s.packed_at ? fmtTime(s.packed_at) : "—"], ["Dispatched", s => s.dispatched_at ? fmtTime(s.dispatched_at) : "—"], ["RTD→Dispatch", s => fmtD(s.rtdToDisp)], ["Waiting at RTD", s => fmtD(s.rtdAge)], ["Gatepass", s => s.gatepass_number || "—"]];
+
+  const Card = ({ label, value, sub, sub2, color = TXT, tip, onClick, deltaText }) => (
+    <div title={tip} onClick={onClick} style={{ ...panel, marginBottom: 0, cursor: onClick ? "pointer" : "default", position: "relative", overflow: "hidden", borderTop: `2px solid ${color}` }}>
+      <div style={{ position: "absolute", top: -24, right: -24, width: 80, height: 80, borderRadius: "50%", background: color, opacity: 0.08, filter: "blur(10px)" }} />
+      <div style={{ color: MUTED, fontSize: 10, letterSpacing: 0.6, fontFamily: "'IBM Plex Mono', monospace" }}>{label.toUpperCase()} {tip && <span style={{ opacity: 0.6 }}>ⓘ</span>}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 25, fontWeight: 700, color, marginTop: 6, textShadow: `0 0 22px ${color}33` }}>{value}</div>
+      {sub && <div style={{ color: MUTED, fontSize: 11, marginTop: 3 }}>{sub}</div>}
+      {sub2 && <div style={{ color: MUTED, fontSize: 11, marginTop: 1 }}>{sub2}</div>}
+      {deltaText && <div style={{ color: deltaText.startsWith("▲") ? GREEN : RED, fontSize: 10.5, marginTop: 4 }}>{deltaText}</div>}
+    </div>
+  );
+  const HBars = ({ items, fmt = stkN }) => {
+    const max = Math.max(1, ...items.map(i => i.value || 0));
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        {items.map((i, k) => (
+          <div key={k} onClick={i.onClick} style={{ cursor: i.onClick ? "pointer" : "default" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, marginBottom: 3, gap: 8 }}>
+              <span style={{ color: TXT }}>{i.label}</span><span style={{ color: MUTED, fontFamily: "'IBM Plex Mono', monospace", textAlign: "right" }}>{fmt(i.value)}{i.sub ? ` · ${i.sub}` : ""}</span>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 20, height: 10, overflow: "hidden" }}>
+              <div style={{ width: `${((i.value || 0) / max) * 100}%`, height: "100%", background: i.color || AMBER, borderRadius: 20, transition: "width 0.4s" }} />
+            </div>
+          </div>
+        ))}
+        {!items.length && <div style={{ color: MUTED, fontSize: 12, textAlign: "center", padding: 12 }}>No data for this selection</div>}
+      </div>
+    );
+  };
+  const Table = ({ cols, rows, limit }) => (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead><tr>{cols.map(([h]) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+      <tbody>
+        {(limit ? rows.slice(0, limit) : rows).map((r, i) => <tr key={r.id || r.key || i}>{cols.map(([h, fn]) => <td key={h} style={{ ...td, ...(h === "STR#" || h === "Barcode" ? { fontFamily: "'IBM Plex Mono', monospace", color: AMBER } : {}), ...(h === "RTD→Dispatch" ? { color: leadColor(r.rtdToDisp), fontWeight: 600 } : {}), ...(h === "Waiting at RTD" && r.rtdAge != null ? { color: leadColor(r.rtdAge), fontWeight: 600 } : {}) }}>{typeof fn(r) === "number" ? stkN(fn(r)) : fn(r)}</td>)}</tr>)}
+        {!rows.length && <tr><td colSpan={cols.length} style={{ ...td, color: MUTED, textAlign: "center" }}>No records</td></tr>}
+      </tbody>
+    </table>
+  );
+
+  if (loading) return <div style={{ padding: 60, textAlign: "center", color: MUTED, background: BG, borderRadius: 12 }}>Loading Inventory &amp; Outbound…</div>;
+
+  const totOnHand = sumK(invF, "onHand"), totNet = sumK(invF, "net"), totRes = sumK(invF, "reserved"), totVal = sumK(invF, "value"), totNetVal = sumK(invF, "netValue");
+  const noPriceSkus = invF.filter(r => r.noPrice).length;
+  const stale = lastUpdated && Date.now() - lastUpdated.getTime() > 180000;
+
+  // destination aggregates for the period
+  const destAgg = {};
+  shipped.forEach(s => { const d = destAgg[s.dest] || (destAgg[s.dest] = { dest: s.dest, rows: [], lead: [] }); d.rows.push(s); if (s.rtdToDisp != null) d.lead.push(s.rtdToDisp); });
+  const destRows = Object.values(destAgg).map(d => ({ ...d, docs: docs(d.rows), lines: d.rows.length, qty: sumK(d.rows, "qty"), value: sumK(d.rows, "value"), avg: stkAvg(d.lead), p90: stkP90(d.lead), max: d.lead.length ? Math.max(...d.lead) : null, n: d.lead.length, waiting: atRtd.filter(s => s.dest === d.dest) })).sort((a, b) => b.qty - a.qty);
+  destinations.forEach(dn => { if (!destAgg[dn] && atRtd.some(s => s.dest === dn)) destRows.push({ dest: dn, rows: [], lead: [], docs: 0, lines: 0, qty: 0, value: 0, avg: null, p90: null, max: null, n: 0, waiting: atRtd.filter(s => s.dest === dn) }); });
+
+  return (
+    <div style={{ background: BG, borderRadius: 14, padding: 20, color: TXT, fontFamily: "'Space Grotesk', sans-serif" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>Inventory &amp; Outbound</div>
+          <div style={{ color: MUTED, fontSize: 12.5, marginTop: 2 }}>Stocking Warehouse · Value at sales price · Lead times in working days (Sunday off, Asia/Karachi)</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: stale ? "rgba(245,166,35,0.1)" : "rgba(74,222,128,0.1)", border: `1px solid ${stale ? AMBER : GREEN}55`, borderRadius: 20, padding: "5px 12px" }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: stale ? AMBER : GREEN, boxShadow: `0 0 8px ${stale ? AMBER : GREEN}` }} />
+            <span style={{ color: stale ? AMBER : GREEN, fontSize: 11, fontWeight: 600 }}>{stale ? "STALE" : "LIVE"}</span>
+            <span style={{ color: MUTED, fontSize: 11 }}>Updated {lastUpdated ? lastUpdated.toLocaleTimeString() : "—"} · {loadMs ?? "—"} ms</span>
+          </div>
+          <button style={pill(false)} onClick={load}>↻ Refresh</button>
+        </div>
+      </div>
+      {err && <div style={{ ...panel, borderColor: RED, color: RED }}>{err}</div>}
+
+      <div style={{ ...panel, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {[["today", "Today"], ["yesterday", "Yesterday"], ["week", "This Week"], ["mtd", "Month to Date"], ["prev", "Previous Month"], ["custom", "Custom"]].map(([k, l]) => <button key={k} style={pill(preset === k)} onClick={() => setPreset(k)}>{l}</button>)}
+          {preset === "custom" && <><input type="date" style={inp} value={customFrom} onChange={e => setCustomFrom(e.target.value)} /><span style={{ color: MUTED }}>→</span><input type="date" style={inp} value={customTo} onChange={e => setCustomTo(e.target.value)} /></>}
+          <span style={{ color: MUTED, fontSize: 11, marginLeft: "auto" }}>{period.fromYmd} → {period.toYmd}</span>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select style={inp} value={flt.destination} onChange={e => setFlt({ ...flt, destination: e.target.value })}><option value="">All destinations</option>{destinations.map(d => <option key={d} value={d}>{d}</option>)}</select>
+          <select style={inp} value={flt.department} onChange={e => setFlt({ ...flt, department: e.target.value })}><option value="">All departments</option>{departments.map(d => <option key={d} value={d}>{d}</option>)}</select>
+          <input style={{ ...inp, minWidth: 220, flex: 1 }} placeholder="🔍 Barcode, product, STR# or gatepass…" value={flt.search} onChange={e => setFlt({ ...flt, search: e.target.value })} />
+          {Object.values(flt).some(Boolean) && <button style={pill(false)} onClick={() => setFlt({ destination: "", department: "", search: "" })}>Clear</button>}
+        </div>
+      </div>
+
+      {/* inward → outward flow */}
+      <div style={{ ...panel }}>
+        <div style={{ ...head, marginBottom: 12 }}>Inward → Outward flow {basisTag(period.label)}</div>
+        <div style={{ display: "flex", alignItems: "stretch", gap: 6, flexWrap: "wrap" }}>
+          {[
+            ["GRN posted", grnQty == null ? "—" : stkN(grnQty), grnQty == null ? "run GRN dashboard SQL" : "accepted qty", BLUE],
+            ["Put away", stkN(putawayQty), "into bins", BLUE],
+            ["STR created", stkN(strCreatedQty), "qty", PURPLE],
+            ["Dispatched", stkN(sumK(shipped, "qty")), `${docs(shipped)} STRs`, GREEN],
+            null,
+            ["Net available", stkN(totNet), "now", GREEN],
+            ["Reserved", stkN(totRes), "STRs not picked", AMBER],
+            ["Waiting at RTD", stkN(sumK(atRtd, "qty")), `${docs(atRtd)} STRs now`, atRtd.length ? RED : GREEN]
+          ].map((x, i) => x === null
+            ? <div key={i} style={{ width: 1, background: BORDER, margin: "0 6px" }} />
+            : (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, flex: "1 1 120px" }}>
+                <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "10px 12px", borderLeft: `3px solid ${x[3]}` }}>
+                  <div style={{ color: MUTED, fontSize: 9.5, fontFamily: "'IBM Plex Mono', monospace" }}>{x[0].toUpperCase()}</div>
+                  <div style={{ fontSize: 19, fontWeight: 700, color: x[3], marginTop: 2 }}>{x[1]}</div>
+                  <div style={{ color: MUTED, fontSize: 10 }}>{x[2]}</div>
+                </div>
+                {i < 3 && <span style={{ color: MUTED }}>→</span>}
+              </div>
+            ))}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginBottom: 14 }}>
+        <Card label="Net available qty" value={stkN(totNet)} sub={`On-hand ${stkN(totOnHand)} · reserved ${stkN(totRes)}`} color={GREEN} tip="On-hand (put away + adjustments, per bin) minus STRs reserved but not yet picked. Same formula as the Stocking Inventory / Outbound screens." onClick={() => openDrill("Net available inventory", "Current snapshot", "inv", invF)} />
+        <Card label="Active SKUs" value={stkN(invF.length)} sub={`${departments.length} departments`} color={BLUE} tip="Distinct products with on-hand > 0." onClick={() => openDrill("Active SKUs", "Current snapshot", "inv", invF)} />
+        <Card label="Inventory value" value={stkN(Math.round(totVal))} sub={`Net available ${stkN(Math.round(totNetVal))}`} sub2={noPriceSkus ? `${noPriceSkus} SKUs without sales price` : null} color={AMBER} tip="On-hand qty × sales price from the Stocking Catalogue." onClick={() => openDrill("Inventory value", "Current snapshot", "inv", [...invF].sort((a, b) => b.value - a.value))} />
+        <Card label="STRs shipped" value={stkN(docs(shipped))} sub={`${stkN(sumK(shipped, "qty"))} qty · ${stkN(Math.round(sumK(shipped, "value")))} value`} color={GREEN} deltaText={deltaTxt(sumK(shipped, "qty"), sumK(prevShipped, "qty"))} tip="STRs dispatched (gatepass) in the period, by dispatch date." onClick={() => openDrill("STRs shipped", "Dispatch date", "str", shipped)} />
+        <Card label="Avg RTD → Dispatch" value={fmtD(stkAvg(leadArr))} sub={`P90 ${fmtD(stkP90(leadArr))} · n=${leadArr.length}`} color={leadColor(stkAvg(leadArr))} tip="Working days (Sunday off) from packed/RTD to gatepass dispatch, for STRs dispatched in the period." onClick={() => openDrill("RTD → Dispatch lead time", "Dispatch date", "str", [...shipped].sort((a, b) => (b.rtdToDisp || 0) - (a.rtdToDisp || 0)))} />
+        <Card label="Waiting at RTD" value={stkN(docs(atRtd))} sub={`${stkN(sumK(atRtd, "qty"))} qty`} sub2={oldestRtd ? `Oldest: ${oldestRtd.dest} · ${fmtD(oldestRtd.rtdAge)}` : null} color={atRtd.length ? RED : GREEN} tip="Packed and ready, not yet dispatched — current backlog awaiting vehicles." onClick={() => openDrill("Waiting at RTD", "Current backlog", "str", [...atRtd].sort((a, b) => (b.rtdAge || 0) - (a.rtdAge || 0)))} />
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {[["inventory", "Inventory"], ["outbound", "Outbound & Lead Time"], ["trends", "Monthly Trends"]].map(([k, l]) => <button key={k} style={pill(tab === k)} onClick={() => setTab(k)}>{l}</button>)}
+      </div>
+
+      {tab === "inventory" && (() => {
+        const dg = {};
+        invF.forEach(r => { const d = dg[r.dept] || (dg[r.dept] = { dept: r.dept, rows: [], onHand: 0, net: 0, reserved: 0, value: 0, netValue: 0 }); d.rows.push(r); d.onHand += r.onHand; d.net += r.net; d.reserved += r.reserved; d.value += r.value; d.netValue += r.netValue; });
+        const drows = Object.values(dg).sort((a, b) => b.onHand - a.onHand);
+        const colors = [AMBER, BLUE, GREEN, PURPLE, RED, "#F0C868", "#5EC9C9", "#8F8879"];
+        const topVal = [...invF].sort((a, b) => b.value - a.value).slice(0, 10);
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 14 }}>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Net available by department {basisTag("now")}</div>
+                <HBars items={drows.map((d, i) => ({ label: d.dept, value: d.net, sub: `${d.rows.length} SKUs · on-hand ${stkN(d.onHand)}`, color: colors[i % colors.length], onClick: () => openDrill(`Department — ${d.dept}`, "Current snapshot", "inv", d.rows) }))} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Value by department {basisTag("sales price")}</div>
+                <HBars items={[...drows].sort((a, b) => b.value - a.value).map((d, i) => ({ label: d.dept, value: Math.round(d.value), sub: stkPct(d.value, totVal), color: colors[i % colors.length], onClick: () => openDrill(`Department — ${d.dept}`, "Current snapshot", "inv", d.rows) }))} /></div>
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}><div style={head}>Department summary</div>
+                <button style={pill(false)} onClick={() => exportCSV(`stocking-inventory-by-department-${pkYmd(new Date())}.csv`, ["Department", "Active SKUs", "On-hand", "Reserved", "Net available", "Value", "Net available value"], drows.map(d => [d.dept, d.rows.length, d.onHand, d.reserved, d.net, Math.round(d.value), Math.round(d.netValue)]))}>⬇ CSV</button></div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Department", "Active SKUs", "On-hand", "Reserved", "Net available", "Value", "Net avail. value", "Share"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {drows.map(d => <tr key={d.dept} style={{ cursor: "pointer" }} onClick={() => openDrill(`Department — ${d.dept}`, "Current snapshot", "inv", d.rows)}>
+                    <td style={td}>{d.dept}</td><td style={td}>{stkN(d.rows.length)}</td><td style={td}>{stkN(d.onHand)}</td><td style={{ ...td, color: d.reserved ? AMBER : MUTED }}>{stkN(d.reserved)}</td><td style={{ ...td, color: GREEN, fontWeight: 600 }}>{stkN(d.net)}</td><td style={td}>{stkN(Math.round(d.value))}</td><td style={td}>{stkN(Math.round(d.netValue))}</td><td style={{ ...td, color: MUTED }}>{stkPct(d.onHand, totOnHand)}</td></tr>)}
+                  <tr><td style={{ ...td, fontWeight: 700, color: AMBER }}>Total</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(invF.length)}</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(totOnHand)}</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(totRes)}</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(totNet)}</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(Math.round(totVal))}</td><td style={{ ...td, fontWeight: 700, color: AMBER }}>{stkN(Math.round(totNetVal))}</td><td style={td}></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Top 10 SKUs by value</div>
+              <HBars items={topVal.map(r => ({ label: `${r.name}`, value: Math.round(r.value), sub: `${stkN(r.onHand)} pcs · ${r.dept}`, color: AMBER }))} /></div>
+          </>
+        );
+      })()}
+
+      {tab === "outbound" && (() => {
+        const stageRows = ["Total Creation", "In Process", "Packing Process", "RTD"].map(st => { const rs = strF.filter(s => s.stage === st); return { label: st, value: sumK(rs, "qty"), sub: `${docs(rs)} STRs · ${stkN(Math.round(sumK(rs, "value")))} value`, color: stkStrStageColor(st) === "#4CAF7D" ? GREEN : stkStrStageColor(st), onClick: () => openDrill(`Pipeline — ${st}`, "Current status", "str", rs) }; });
+        const B = [["0–2 d", 0, 3], ["3–7 d", 3, 8], ["8–14 d", 8, 15], ["15–30 d", 15, 31], [">30 d", 31, 1e9]];
+        const rtdBuckets = B.map(([l, a, b]) => { const rs = atRtd.filter(s => s.rtdAge != null && s.rtdAge >= a && s.rtdAge < b); return { label: l, value: docs(rs), sub: `${stkN(sumK(rs, "qty"))} qty`, color: a >= 15 ? RED : a >= 8 ? AMBER : GREEN, onClick: () => openDrill(`Waiting at RTD ${l}`, "Current backlog", "str", rs) }; });
+        const stageClk = [["Confirm → Pick", shipped.map(s => s.clkConfirmPick)], ["Pick/Confirm → Pack (RTD)", shipped.map(s => s.clkToPack)], ["RTD → Dispatch", shipped.map(s => s.rtdToDisp)]].map(([l, a]) => { const v = a.filter(x => x != null); return { label: l, value: v.length ? +stkAvg(v).toFixed(1) : 0, sub: `P90 ${fmtD(stkP90(v))} · n=${v.length}`, color: leadColor(stkAvg(v)) }; });
+        return (
+          <>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                <div style={head}>Destination-wise shipments &amp; RTD → Dispatch lead time {basisTag(`dispatched ${period.label}`)}</div>
+                <button style={pill(false)} onClick={() => exportCSV(`str-destination-leadtime-${period.fromYmd}-${period.toYmd}.csv`, ["Destination", "STRs shipped", "Lines", "Qty", "Value", "Avg RTD→Dispatch (days)", "P90", "Max", "Sample", "Waiting at RTD (STRs)", "Waiting qty", "Oldest waiting (days)"], destRows.map(d => [d.dest, d.docs, d.lines, d.qty, Math.round(d.value), d.avg?.toFixed(1) ?? "", d.p90?.toFixed(1) ?? "", d.max?.toFixed(1) ?? "", d.n, docs(d.waiting), sumK(d.waiting, "qty"), d.waiting.length ? Math.max(...d.waiting.map(s => s.rtdAge || 0)).toFixed(1) : ""]))}>⬇ CSV</button>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Destination", "STRs shipped", "Qty", "Value", "Avg RTD→Dispatch", "P90", "Max", "n", "Waiting at RTD", "Oldest waiting"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {destRows.map(d => { const oldest = d.waiting.length ? Math.max(...d.waiting.map(s => s.rtdAge || 0)) : null; return (
+                    <tr key={d.dest} style={{ cursor: "pointer" }} onClick={() => openDrill(`Destination — ${d.dest}`, "Shipped in period + waiting at RTD", "str", [...d.waiting, ...d.rows])}>
+                      <td style={{ ...td, fontWeight: 600 }}>{d.dest}</td><td style={td}>{stkN(d.docs)}</td><td style={td}>{stkN(d.qty)}</td><td style={td}>{stkN(Math.round(d.value))}</td>
+                      <td style={{ ...td, color: leadColor(d.avg), fontWeight: 700 }}>{fmtD(d.avg)}</td><td style={{ ...td, color: leadColor(d.p90) }}>{fmtD(d.p90)}</td><td style={{ ...td, color: leadColor(d.max) }}>{fmtD(d.max)}</td><td style={{ ...td, color: MUTED }}>{d.n}</td>
+                      <td style={{ ...td, color: d.waiting.length ? RED : MUTED }}>{d.waiting.length ? `${docs(d.waiting)} STRs · ${stkN(sumK(d.waiting, "qty"))}` : "—"}</td><td style={{ ...td, color: leadColor(oldest), fontWeight: 600 }}>{fmtD(oldest)}</td>
+                    </tr>); })}
+                  {!destRows.length && <tr><td colSpan={10} style={{ ...td, color: MUTED, textAlign: "center" }}>No dispatches in this period</td></tr>}
+                </tbody>
+              </table>
+              <div style={{ color: MUTED, fontSize: 10.5, marginTop: 8 }}>Green ≤ 3 days · Amber 4–7 · Red &gt; 7 working days. STRs without a packed (RTD) time are excluded from lead time but counted in quantities.</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))", gap: 14 }}>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Avg RTD → Dispatch by destination {basisTag("working days")}</div>
+                <HBars fmt={v => `${Number(v).toFixed(1)}d`} items={destRows.filter(d => d.avg != null).sort((a, b) => b.avg - a.avg).map(d => ({ label: d.dest, value: +d.avg.toFixed(1), sub: `P90 ${fmtD(d.p90)} · n=${d.n}`, color: leadColor(d.avg), onClick: () => openDrill(`Lead time — ${d.dest}`, "Dispatch date", "str", [...d.rows].sort((a, b) => (b.rtdToDisp || 0) - (a.rtdToDisp || 0))) }))} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Shipped qty by destination {basisTag("dispatch date")}</div>
+                <HBars items={destRows.filter(d => d.qty > 0).map(d => ({ label: d.dest, value: d.qty, sub: `${d.docs} STRs · ${stkN(Math.round(d.value))}`, color: BLUE, onClick: () => openDrill(`Shipped — ${d.dest}`, "Dispatch date", "str", d.rows) }))} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Waiting at RTD — ageing {basisTag("now")}</div><HBars items={rtdBuckets} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Open STR pipeline {basisTag("now")}</div><HBars items={stageRows} /></div>
+              <div style={panel}><div style={{ ...head, marginBottom: 12 }}>Where does outbound time go? {basisTag("dispatched in period")}</div>
+                <HBars fmt={v => `${Number(v).toFixed(1)}d`} items={stageClk} />
+                <div style={{ color: MUTED, fontSize: 10.5, marginTop: 8 }}>Average working days per step. GRN-distribution STRs have no pick step.</div></div>
+            </div>
+          </>
+        );
+      })()}
+
+      {tab === "trends" && (() => {
+        const months = []; for (let i = 11; i >= 0; i--) months.push(pkMonthStart(pkYmd(new Date()), i).slice(0, 7));
+        const T = months.map(m => {
+          const sh = strF.filter(s => (s.status === "dispatched" || s.status === "received") && pkMonthKey(s.dispatched_at) === m);
+          const lt = sh.map(s => s.rtdToDisp).filter(v => v != null);
+          return { m, docs: docs(sh), qty: sumK(sh, "qty"), value: sumK(sh, "value"), avg: stkAvg(lt), p90: stkP90(lt), n: lt.length, created: sumK(strF.filter(s => pkMonthKey(s.created_at) === m), "qty"), putaway: data.putaway.filter(q => pkMonthKey(q.completed_at) === m).reduce((t, q) => t + Number(q.qty || 0), 0), grn: data.grn ? data.grn.filter(g => pkMonthKey(g.grn_posted_at) === m).reduce((t, g) => t + Number(g.accepted_qty || 0), 0) : null };
+        });
+        const maxQ = Math.max(1, ...T.map(t => t.qty));
+        const curM = months[months.length - 1];
+        const pivot = {}; strF.filter(s => (s.status === "dispatched" || s.status === "received") && months.includes(pkMonthKey(s.dispatched_at))).forEach(s => { const m = pkMonthKey(s.dispatched_at); const o = pivot[s.dest] || (pivot[s.dest] = {}); o[m] = o[m] || { lt: [] }; if (s.rtdToDisp != null) o[m].lt.push(s.rtdToDisp); });
+        return (
+          <>
+            <div style={panel}>
+              <div style={{ ...head, marginBottom: 12 }}>Shipped qty per month {basisTag("dispatch month")}</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 160 }}>
+                {T.map(t => <div key={t.m} title={`${t.m}: ${t.qty} qty · avg RTD→Dispatch ${fmtD(t.avg)}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  <div style={{ fontSize: 9, color: leadColor(t.avg), marginBottom: 1 }}>{t.avg != null ? fmtD(t.avg) : ""}</div>
+                  <div style={{ fontSize: 9, color: MUTED, marginBottom: 2 }}>{t.qty ? stkN(t.qty) : ""}</div>
+                  <div style={{ width: "70%", height: `${(t.qty / maxQ) * 110}px`, background: t.m === curM ? AMBER : GREEN, borderRadius: "4px 4px 0 0" }} />
+                  <div style={{ fontSize: 9, color: MUTED, marginTop: 3 }}>{t.m.slice(2)}</div></div>)}
+              </div>
+              <div style={{ color: MUTED, fontSize: 10.5, marginTop: 6 }}>Bar = shipped qty · coloured label on top = avg RTD → Dispatch (working days).</div>
+            </div>
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}><div style={head}>Monthly table</div>
+                <button style={pill(false)} onClick={() => exportCSV("stocking-outbound-monthly.csv", ["Month", "GRN posted qty", "Put away qty", "STR created qty", "STRs shipped", "Shipped qty", "Shipped value", "Avg RTD→Dispatch", "P90", "Sample"], T.map(t => [t.m, t.grn ?? "", t.putaway, t.created, t.docs, t.qty, Math.round(t.value), t.avg?.toFixed(1) ?? "", t.p90?.toFixed(1) ?? "", t.n]))}>⬇ CSV</button></div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr>{["Month", "GRN posted", "Put away", "STR created", "STRs shipped", "Shipped qty", "Shipped value", "Avg RTD→Dispatch", "P90"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                <tbody>{T.map(t => <tr key={t.m} style={{ background: t.m === curM ? "rgba(245,166,35,0.06)" : "transparent" }}>
+                  <td style={td}>{t.m}</td><td style={td}>{t.grn == null ? "—" : stkN(t.grn)}</td><td style={td}>{stkN(t.putaway)}</td><td style={td}>{stkN(t.created)}</td><td style={td}>{stkN(t.docs)}</td><td style={td}>{stkN(t.qty)}</td><td style={td}>{stkN(Math.round(t.value))}</td><td style={{ ...td, color: leadColor(t.avg), fontWeight: 600 }}>{fmtD(t.avg)}</td><td style={{ ...td, color: leadColor(t.p90) }}>{fmtD(t.p90)}</td></tr>)}</tbody>
+              </table>
+            </div>
+            <div style={panel}>
+              <div style={{ ...head, marginBottom: 10 }}>Avg RTD → Dispatch — destination × month {basisTag("working days")}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr><th style={th}>Destination</th>{months.map(m => <th key={m} style={th}>{m.slice(2)}</th>)}</tr></thead>
+                <tbody>{Object.entries(pivot).sort().map(([d, o]) => <tr key={d}><td style={{ ...td, fontWeight: 600 }}>{d}</td>{months.map(m => { const v = o[m] && o[m].lt.length ? stkAvg(o[m].lt) : null; return <td key={m} style={{ ...td, color: v == null ? MUTED : leadColor(v), fontWeight: v == null ? 400 : 600 }}>{v == null ? "—" : fmtD(v)}</td>; })}</tr>)}
+                  {!Object.keys(pivot).length && <tr><td colSpan={13} style={{ ...td, color: MUTED, textAlign: "center" }}>No dispatches in the last 12 months</td></tr>}</tbody>
+              </table>
+            </div>
+          </>
+        );
+      })()}
+
+      {drill && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setDrill(null)}>
+          <div style={{ background: BG, border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18, width: "100%", maxWidth: 1300, maxHeight: "85vh", overflow: "auto" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+              <div><div style={{ ...head, fontSize: 15 }}>{drill.title} <span style={{ color: MUTED, fontWeight: 400 }}>({drill.rows.length})</span></div><div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>Basis: {drill.basis} · {period.label}</div></div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={pill(false)} onClick={() => { const cols = drill.kind === "inv" ? invCols : strCols; exportCSV(`${drill.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`, cols.map(c => c[0]), drill.rows.map(r => cols.map(([, fn]) => fn(r)))); }}>⬇ CSV</button>
+                <button style={pill(true)} onClick={() => setDrill(null)}>Close</button>
+              </div>
+            </div>
+            <Table cols={drill.kind === "inv" ? invCols : strCols} rows={drill.rows} limit={500} />
+            {drill.rows.length > 500 && <div style={{ color: MUTED, fontSize: 11, marginTop: 8 }}>Showing first 500 — export CSV for all {drill.rows.length}.</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const S = {
   scanOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
