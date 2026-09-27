@@ -282,6 +282,22 @@ function App() {
   const effectiveProfile = profile && needsWarehouseSelect ? { ...profile, warehouse_id: activeWarehouseId } : profile;
 
   const changeView = (v) => { setView(v); setSidebarOpen(false); };
+  // Dashboards are management screens (and the heaviest pages in the app). Only Admin /
+  // Warehouse Lead see them; every other role lands directly on its own work screen.
+  const isManager = !!profile && ["admin", "warehouse_lead"].includes(profile.role);
+  const DASHBOARD_VIEWS = ["dashboard", "dashboardv2", "stkdashboard", "stkdashboardv2"];
+  const roleHomeView = (role, whType) => {
+    if (whType === "stocking") {
+      return ({ inbound_executive: "stkreceiving", outbound_executive: "stkoutbound", physical_receiver: "stkreceiving", inspection_officer: "stkreceiving",
+        putaway_officer: "stkoutbound", picker: "stkpicking", packer: "stkpacking", logistics_officer: "stklogistics", rtv_officer: "stkrtv" })[role] || "stkinventory";
+    }
+    return ({ picker: "picking", packer: "packing", putaway_officer: "putaway", dispatcher: "dispatch", returns_agent: "returns",
+      compliance_officer: "complaints", supervisor: "orders" })[role] || "orders";
+  };
+  useEffect(() => {
+    if (!profile || !warehouseType) return;
+    if (!isManager && DASHBOARD_VIEWS.includes(view)) setView(roleHomeView(profile.role, warehouseType));
+  }, [profile, warehouseType, view, isManager]);
 
   // Task notifications: polls this user's unseen notifications every 20s and, on a new one,
   // beeps + vibrates the device and shows a toast — so a picker/packer whose phone is idle
@@ -380,8 +396,8 @@ function App() {
       <div style={S.main}>
         <TopBar profile={effectiveProfile} onMenuClick={() => setSidebarOpen(true)} activeWarehouseName={activeWarehouse?.name} />
         <div style={S.content} className="depotos-content">
-          {view === "dashboard" && <DashboardView token={session.token} profile={effectiveProfile} setView={setView} showToast={showToast} />}
-          {view === "dashboardv2" && <DashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "dashboard" && isManager && <DashboardView token={session.token} profile={effectiveProfile} setView={setView} showToast={showToast} />}
+          {view === "dashboardv2" && isManager && <DashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "products" && <ProductsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "receiving" && <ReceivingView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "putaway" && <PutawayView token={session.token} profile={effectiveProfile} showToast={showToast} />}
@@ -411,8 +427,8 @@ function App() {
           {view === "stklogistics" && <StockingLogisticsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkinventory" && <StockingInventoryView token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "stkreports" && <StockingReportsView token={session.token} profile={effectiveProfile} showToast={showToast} />}
-          {view === "stkdashboard" && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
-          {view === "stkdashboardv2" && <StockingDashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkdashboard" && isManager && <StockingDashboardView token={session.token} profile={effectiveProfile} showToast={showToast} />}
+          {view === "stkdashboardv2" && isManager && <StockingDashboardV2View token={session.token} profile={effectiveProfile} showToast={showToast} />}
           {view === "changepassword" && <ChangePasswordView token={session.token} showToast={showToast} />}
         </div>
       </div>
@@ -629,11 +645,14 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
     }
     visibleItems = ALL_NAV_IDS.filter(id => baseIds.has(id)).map(id => ({ id, ...ALL_NAV_META[id] }));
   }
+  if (!["admin", "warehouse_lead"].includes(profile.role)) {
+    visibleItems = visibleItems.filter(i => !["dashboard", "dashboardv2", "stkdashboard", "stkdashboardv2"].includes(i.id));
+  }
   return (
     <div style={S.sidebar} className={`depotos-sidebar${sidebarOpen ? " open" : ""}`}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "20px 16px 24px" }}>
         <span style={{ fontSize: 16 }}>📦</span>
-        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>MUGHAL<br /><span style={{ color: "#F5A623" }}>FULFILLMENT WAREHOUSE</span></span>
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: "#E8E6E1", fontSize: 13, lineHeight: 1.2 }}>HABITT<br /><span style={{ color: "#F5A623" }}>WAREHOUSE</span></span>
       </div>
       {activeWarehouseName && <div style={{ margin: "0 16px 14px", fontSize: 10.5, color: "#F5A623", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: 0.5 }}>{activeWarehouseName.toUpperCase()}</div>}
       <div style={{ flex: 1, overflowY: "auto" }}>
@@ -720,8 +739,9 @@ function DashboardView({ token, profile, setView, showToast }) {
   const [pickerLeaderboard, setPickerLeaderboard] = useState([]);
   const [packerLeaderboard, setPackerLeaderboard] = useState([]);
   const [putawayLeaderboard, setPutawayLeaderboard] = useState([]);
-  const [lbFrom, setLbFrom] = useState(new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10));
-  const [lbTo, setLbTo] = useState(new Date().toISOString().slice(0, 10));
+  const localToday = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+  const [lbDay, setLbDay] = useState(localToday());
+  const [lbExporting, setLbExporting] = useState(false);
   const [inboundOps, setInboundOps] = useState(null);
   const [fulfillmentVelocity, setFulfillmentVelocity] = useState(null);
   const [fvFrom, setFvFrom] = useState(new Date().toISOString().slice(0, 10));
@@ -1032,61 +1052,96 @@ function DashboardView({ token, profile, setView, showToast }) {
 
 
 
+  // ---------- Staff productivity (WMS standard: per-day Active Time + UPH) ----------
+  // Active time = engaged time on the selected day only. Built from each user's completion
+  // timestamps: consecutive gaps up to IDLE_MIN count as working, longer gaps are idle and
+  // excluded. A task assigned yesterday and finished today only contributes today's working
+  // time, and 25 orders picked together in one tote are NOT counted as 25 separate hours.
+  const IDLE_MIN = 20;
+  const activeHours = (events, dayStart) => {
+    // events: [{ start, end }] (Date objects), same user, same day
+    if (!events.length) return 0;
+    const ends = events.map(e => e.end).sort((a, b) => a - b);
+    const firstStart = events.reduce((m, e) => (e.start && e.start > dayStart && e.start < m ? e.start : m), ends[0]);
+    let ms = Math.min(ends[0] - firstStart, IDLE_MIN * 60000);
+    for (let i = 1; i < ends.length; i++) {
+      const gap = ends[i] - ends[i - 1];
+      if (gap <= IDLE_MIN * 60000) ms += gap;
+    }
+    return Math.max(ms, 0) / 3600000;
+  };
+  const loadDayProductivity = async (dayStr) => {
+    const dayStart = new Date(dayStr + "T00:00:00");
+    const fromISO = dayStart.toISOString();
+    const toISO = new Date(dayStart.getTime() + 86400000).toISOString();
+    const [pickTasksLb, packTasksLb, putawayLb, profsLb] = await Promise.all([
+      sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=id,order_id,assigned_to,started_at,completed_at`, { token }),
+      sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=id,order_id,assigned_to,started_at,completed_at,scans`, { token }),
+      sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=id,product_id,assigned_to,started_at,completed_at,qty_completed`, { token }),
+      sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=id,full_name`, { token })
+    ]);
+    const profLbMap = Object.fromEntries((profsLb || []).map(p => [p.id, p]));
+    const mine = (rows) => (rows || []).filter(t => t.assigned_to && profLbMap[t.assigned_to]); // this warehouse's staff only
+    const picks = mine(pickTasksLb), packs = mine(packTasksLb), puts = mine(putawayLb);
+    // Pick lines ONLY for this day's tasks (was: the entire table, every warehouse, all time).
+    const pcsByPickTask = {};
+    const ids = picks.map(t => t.id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const rows = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${ids.slice(i, i + 100).join(",")})&select=pick_task_id,qty_picked`, { token });
+      for (const l of rows || []) pcsByPickTask[l.pick_task_id] = (pcsByPickTask[l.pick_task_id] || 0) + (l.qty_picked || 0);
+    }
+    const packPcs = (t) => { try { return Object.values(JSON.parse(t.scans || "{}")).reduce((s, v) => s + v, 0); } catch (e) { return 0; } };
+    const build = (rows, pcsOf) => {
+      const by = {};
+      for (const t of rows) {
+        const u = by[t.assigned_to] || (by[t.assigned_to] = { orders: 0, pcs: 0, events: [], first: null, last: null });
+        u.orders += 1; u.pcs += pcsOf(t);
+        const end = new Date(t.completed_at);
+        u.events.push({ start: t.started_at ? new Date(t.started_at) : null, end });
+        if (!u.first || end < u.first) u.first = end;
+        if (!u.last || end > u.last) u.last = end;
+      }
+      return Object.entries(by).map(([uid, d]) => {
+        const hrs = activeHours(d.events, dayStart);
+        return { uid, name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs, uph: hrs > 0 ? d.pcs / hrs : null, first: d.first, last: d.last };
+      }).sort((a, b) => b.pcs - a.pcs);
+    };
+    return {
+      picks, packs, puts, profLbMap, pcsByPickTask, packPcs,
+      pickers: build(picks, t => pcsByPickTask[t.id] || 0),
+      packers: build(packs, packPcs),
+      putaway: build(puts, t => t.qty_completed || 0)
+    };
+  };
   useEffect(() => {
     (async () => {
       try {
-        const fromISO = new Date(lbFrom + "T00:00:00").toISOString();
-        const toISO = new Date(new Date(lbTo + "T00:00:00").getTime() + 86400000).toISOString();
-        const [pickTasksLb, pickLinesLb, packTasksLb, putawayLb, profsLb] = await Promise.all([
-          sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
-          sb(`/rest/v1/pick_task_lines?select=*`, { token }),
-          sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${fromISO}&completed_at=lt.${toISO}&select=*`, { token }),
-          sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
-        ]);
-        const profLbMap = Object.fromEntries((profsLb || []).map(p => [p.id, p]));
-        const pickTaskIdsLb = (pickTasksLb || []).map(t => t.id);
-        const pickByUser = {};
-        for (const t of pickTasksLb || []) {
-          if (!t.assigned_to) continue;
-          const pcs = (pickLinesLb || []).filter(l => l.pick_task_id === t.id).reduce((s, l) => s + (l.qty_picked || 0), 0);
-          if (!pickByUser[t.assigned_to]) pickByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
-          pickByUser[t.assigned_to].orders += 1;
-          pickByUser[t.assigned_to].pcs += pcs;
-          if (t.started_at && t.completed_at) pickByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
-        }
-        setPickerLeaderboard(Object.entries(pickByUser)
-          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
-          .sort((a, b) => b.orders - a.orders));
-
-        const packByUser = {};
-        for (const t of packTasksLb || []) {
-          if (!t.assigned_to) continue;
-          let pcs = 0;
-          try { const scans = JSON.parse(t.scans || "{}"); pcs = Object.values(scans).reduce((s, v) => s + v, 0); } catch (e) {}
-          if (!packByUser[t.assigned_to]) packByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
-          packByUser[t.assigned_to].orders += 1;
-          packByUser[t.assigned_to].pcs += pcs;
-          if (t.started_at && t.completed_at) packByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
-        }
-        setPackerLeaderboard(Object.entries(packByUser)
-          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
-          .sort((a, b) => b.orders - a.orders));
-
-        const putawayByUser = {};
-        for (const t of putawayLb || []) {
-          if (!t.assigned_to) continue;
-          if (!putawayByUser[t.assigned_to]) putawayByUser[t.assigned_to] = { orders: 0, pcs: 0, hrs: 0 };
-          putawayByUser[t.assigned_to].orders += 1;
-          putawayByUser[t.assigned_to].pcs += (t.qty_completed || 0);
-          if (t.started_at && t.completed_at) putawayByUser[t.assigned_to].hrs += (new Date(t.completed_at) - new Date(t.started_at)) / 3600000;
-        }
-        setPutawayLeaderboard(Object.entries(putawayByUser)
-          .map(([uid, d]) => ({ name: profLbMap[uid]?.full_name || "Unknown", orders: d.orders, pcs: d.pcs, hrs: d.hrs }))
-          .sort((a, b) => b.orders - a.orders));
+        const r = await loadDayProductivity(lbDay);
+        setPickerLeaderboard(r.pickers); setPackerLeaderboard(r.packers); setPutawayLeaderboard(r.putaway);
       } catch (e) {}
     })();
-  }, [token, profile.warehouse_id, lbFrom, lbTo, refreshTick]);
+  }, [token, profile.warehouse_id, lbDay, refreshTick]);
+
+  // Detail (every task, with timestamps) is NOT rendered on screen — it's an on-demand export.
+  const exportProductivityDetail = async () => {
+    setLbExporting(true);
+    try {
+      const r = await loadDayProductivity(lbDay);
+      const fmt = (d) => d ? new Date(d).toLocaleString() : "";
+      const rows = [["Role", "Staff", "Task ID", "Reference", "PCS", "Started", "Completed"]];
+      for (const t of r.picks) rows.push(["Picker", r.profLbMap[t.assigned_to]?.full_name || "", t.id, t.order_id, r.pcsByPickTask[t.id] || 0, fmt(t.started_at), fmt(t.completed_at)]);
+      for (const t of r.packs) rows.push(["Packer", r.profLbMap[t.assigned_to]?.full_name || "", t.id, t.order_id, r.packPcs(t), fmt(t.started_at), fmt(t.completed_at)]);
+      for (const t of r.puts) rows.push(["Putaway", r.profLbMap[t.assigned_to]?.full_name || "", t.id, t.product_id, t.qty_completed || 0, fmt(t.started_at), fmt(t.completed_at)]);
+      rows.push([]); rows.push(["SUMMARY", "Staff", "Orders/Lines", "PCS", "Active hrs", "UPH", "First-Last"]);
+      for (const [role, list] of [["Picker", r.pickers], ["Packer", r.packers], ["Putaway", r.putaway]]) {
+        for (const x of list) rows.push([role, x.name, x.orders, x.pcs, x.hrs.toFixed(2), x.uph ? x.uph.toFixed(1) : "", `${fmt(x.first)} - ${fmt(x.last)}`]);
+      }
+      const csv = rows.map(r2 => r2.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `staff_productivity_${lbDay}.csv`; a.click();
+    } catch (e) { showToast("Export fail: " + e.message, "err"); }
+    setLbExporting(false);
+  };
 
   useEffect(() => {
     (async () => {
@@ -1363,74 +1418,38 @@ function DashboardView({ token, profile, setView, showToast }) {
 
       <div style={D.panel}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
-          <div style={D.panelTitle}>Picker &amp; Packer &amp; Put Away Leaderboard</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={lbFrom} onChange={e => setLbFrom(e.target.value)} />
-            <span style={{ color: "#8F8879" }}>to</span>
-            <input type="date" style={{ ...D.input, maxWidth: 150 }} value={lbTo} onChange={e => setLbTo(e.target.value)} />
+          <div style={D.panelTitle}>Staff Productivity — {lbDay === localToday() ? "Today" : new Date(lbDay + "T00:00:00").toLocaleDateString()}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="date" style={{ ...D.input, maxWidth: 160 }} value={lbDay} max={localToday()} onChange={e => setLbDay(e.target.value || localToday())} />
+            {lbDay !== localToday() && <button style={S.secondaryBtnSm} onClick={() => setLbDay(localToday())}>Today</button>}
+            <button style={S.secondaryBtnSm} onClick={exportProductivityDetail} disabled={lbExporting}>{lbExporting ? "…" : "⬇ Export detail (CSV)"}</button>
           </div>
         </div>
+        <div style={{ color: "#8F8879", fontSize: 11, marginBottom: 12 }}>Active time = us din ka asal kaam ka waqt ({IDLE_MIN} min se lamba idle gap shamil nahi). UPH = pieces per active hour. Task-level detail sirf export mein.</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-          <div>
-            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🚶 Pickers</div>
-            {pickerLeaderboard.length === 0 ? <EmptyNote text="No picking completed in this date range." /> : (
-              <table>
-                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Orders</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Order</th></tr></thead>
-                <tbody>
-                  {pickerLeaderboard.map((p, i) => (
-                    <tr key={p.name}>
-                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={D.td}>{p.name}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...D.td, color: "#5B9EE8", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-          <div>
-            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>🏷 Packers</div>
-            {packerLeaderboard.length === 0 ? <EmptyNote text="No packing completed in this date range." /> : (
-              <table>
-                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Orders</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Order</th></tr></thead>
-                <tbody>
-                  {packerLeaderboard.map((p, i) => (
-                    <tr key={p.name}>
-                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={D.td}>{p.name}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...D.td, color: "#4CAF7D", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-          <div>
-            <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>📍 Put Away</div>
-            {putawayLeaderboard.length === 0 ? <EmptyNote text="No putaway completed in this date range." /> : (
-              <table>
-                <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>Lines</th><th style={D.th}>PCS</th><th style={D.th}>Time Taken</th><th style={D.th}>Avg/Line</th></tr></thead>
-                <tbody>
-                  {putawayLeaderboard.map((p, i) => (
-                    <tr key={p.name}>
-                      <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
-                      <td style={D.td}>{p.name}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
-                      <td style={{ ...D.td, color: "#D9A441", fontWeight: 600 }}>{p.pcs}</td>
-                      <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
-                      <td style={{ ...D.td, color: "#B5AC98" }}>{p.orders > 0 && p.hrs > 0 ? `${Math.round((p.hrs * 60) / p.orders)}m` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          {[["🚶 Pickers", pickerLeaderboard, "Orders", "#5B9EE8"], ["🏷 Packers", packerLeaderboard, "Orders", "#4CAF7D"], ["📍 Put Away", putawayLeaderboard, "Lines", "#D9A441"]].map(([title, list, unit, col]) => (
+            <div key={title}>
+              <div style={{ color: "#B5AC98", fontSize: 12, fontWeight: 600, marginBottom: 8 }}>{title}</div>
+              {list.length === 0 ? <EmptyNote text="Is din koi kaam complete nahi hua." /> : (
+                <table>
+                  <thead><tr><th style={D.th}>#</th><th style={D.th}>Staff</th><th style={D.th}>{unit}</th><th style={D.th}>PCS</th><th style={D.th}>Active</th><th style={D.th}>UPH</th><th style={D.th}>First–Last</th></tr></thead>
+                  <tbody>
+                    {list.map((p, i) => (
+                      <tr key={p.uid}>
+                        <td style={{ ...D.td, color: i === 0 ? "#F5A623" : "#B5AC98" }}>{i === 0 ? "🏆" : i + 1}</td>
+                        <td style={D.td}>{p.name}</td>
+                        <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.orders}</td>
+                        <td style={{ ...D.td, color: col, fontWeight: 600 }}>{p.pcs}</td>
+                        <td style={{ ...D.td, color: "#F4EFE6" }}>{p.hrs > 0 ? (p.hrs < 1 ? `${Math.round(p.hrs * 60)}m` : `${p.hrs.toFixed(1)}h`) : "—"}</td>
+                        <td style={{ ...D.td, color: "#F4EFE6", fontWeight: 600 }}>{p.uph ? Math.round(p.uph) : "—"}</td>
+                        <td style={{ ...D.td, color: "#B5AC98", fontSize: 11 }}>{p.first ? `${p.first.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${p.last.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -1570,58 +1589,20 @@ function DashboardV2View({ token, profile, showToast }) {
   const [products, setProducts] = useState({});
   const [sortMode, setSortMode] = useState("chrono");
 
-  const categoryChartRef = useRef(null);
-  const categoryChartInstance = useRef(null);
-  const monthlyChartRef = useRef(null);
-  const monthlyChartInstance = useRef(null);
-  const ageingChartRef = useRef(null);
-  const ageingChartInstance = useRef(null);
-
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      try {
-        const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets, cTypes, cPOs] = await Promise.all([
-          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
-          sb(`/rest/v1/products?select=id,sales_price,department&limit=20000`, { token }),
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=product_id,on_hand&limit=50000`, { token }),
-          sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/pick_task_lines?select=product_id,qty_picked,pick_task_id`, { token }),
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=id,completed_at`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.desc&limit=15`, { token }),
-          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=grn_number,created_at&order=created_at.desc&limit=10`, { token }),
-          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=load_sheet_number,created_at,order_ids&order=created_at.desc&limit=10`, { token }),
-          sb(`/rest/v1/carton_types?warehouse_id=eq.${profile.warehouse_id}&select=*&order=sort_order.asc`, { token }),
-          sb(`/rest/v1/carton_purchase_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
-        ]);
-        setCartonTypes(cTypes || []);
-        setCartonPOs(cPOs || []);
-
-        const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
-        setProducts(prodMap);
-        const now = new Date();
-
-        // ---- Monthly order volume (last 4 months incl. current) ----
-        const monthBuckets = {};
-        for (let i = 3; i >= 0; i--) {
-          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          const key = `${d.getFullYear()}-${d.getMonth()}`;
-          monthBuckets[key] = { label: d.toLocaleString("default", { month: "short", year: "2-digit" }), count: 0, year: d.getFullYear(), month: d.getMonth(), isCurrent: i === 0 };
-        }
-        for (const o of orders || []) {
-          if (!o.received_at) continue;
-          const d = new Date(o.received_at);
-          const key = `${d.getFullYear()}-${d.getMonth()}`;
-          if (monthBuckets[key]) monthBuckets[key].count++;
-        }
-        const monthArr = Object.values(monthBuckets);
-        setMonthly(monthArr);
-
+  // Carton Forecasting is the single heaviest calculation on this page (every order line for
+  // the last 4 months). It now runs ONLY when an Admin/Lead asks for it, not on every visit.
+  const ordersForForecastRef = useRef([]);
+  const [forecastLoaded, setForecastLoaded] = useState(false);
+  const [forecastLoading, setForecastLoading] = useState(false);
+  const loadCartonForecast = async () => {
+    setForecastLoading(true);
+    const orders = ordersForForecastRef.current;
+    const now = new Date();
         // ---- Order composition (last 4 calendar months) — for monthly history + carton forecasting ----
         // Wrapped in its own try/catch so a failure here never blocks the rest of the dashboard.
         try {
           const classifySize = (qty) => {
-            for (const ct of (cTypes || [])) {
+            for (const ct of (cartonTypes || [])) {
               if (qty >= ct.min_qty && (ct.max_qty == null || qty <= ct.max_qty)) return ct.name;
             }
             return "Unclassified";
@@ -1629,20 +1610,32 @@ function DashboardV2View({ token, profile, showToast }) {
           const histStart = new Date(now.getFullYear(), now.getMonth() - 3, 1).toISOString();
           const histOrders = (orders || []).filter(o => o.received_at >= histStart);
           const histOrderIds = histOrders.map(o => o.id);
-          const compLines = [];
-          const CHUNK = 60;
-          for (let i = 0; i < histOrderIds.length; i += CHUNK) {
-            const idsChunk = histOrderIds.slice(i, i + CHUNK);
-            const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
-            compLines.push(...(rows || []));
-          }
+          // Preferred: ONE server-side aggregate call (order_composition RPC) instead of dozens of
+          // chunked line fetches. Falls back to the old client-side path if the RPC isn't installed.
           const byOrder = {};
-          for (const l of compLines) {
-            if (!byOrder[l.order_id]) byOrder[l.order_id] = { products: new Set(), totalQty: 0 };
-            byOrder[l.order_id].products.add(l.product_id);
-            byOrder[l.order_id].totalQty += l.qty;
+          let usedRpc = false;
+          try {
+            const agg = await sb(`/rest/v1/rpc/order_composition`, { method: "POST", token, body: { p_warehouse: profile.warehouse_id, p_from: histStart } });
+            if (Array.isArray(agg)) {
+              for (const r of agg) byOrder[r.order_id] = { skuCount: Number(r.sku_count || 0), totalQty: Number(r.total_qty || 0) };
+              usedRpc = true;
+            }
+          } catch (e) { usedRpc = false; }
+          if (!usedRpc) {
+            const CHUNK = 60;
+            const tmp = {};
+            for (let i = 0; i < histOrderIds.length; i += CHUNK) {
+              const idsChunk = histOrderIds.slice(i, i + CHUNK);
+              const rows = await sb(`/rest/v1/sales_order_lines?order_id=in.(${idsChunk.join(",")})&select=order_id,product_id,qty`, { token });
+              for (const l of rows || []) {
+                if (!tmp[l.order_id]) tmp[l.order_id] = { products: new Set(), totalQty: 0 };
+                tmp[l.order_id].products.add(l.product_id);
+                tmp[l.order_id].totalQty += l.qty;
+              }
+            }
+            for (const [k, d] of Object.entries(tmp)) byOrder[k] = { skuCount: d.products.size, totalQty: d.totalQty };
           }
-          const compArr = Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.products.size, totalQty: d.totalQty }));
+          const compArr = Object.entries(byOrder).map(([orderId, d]) => ({ orderId, skuCount: d.skuCount, totalQty: d.totalQty }));
           setOrderComposition(compArr);
 
           // Build monthly history buckets (last 4 months, oldest first)
@@ -1680,6 +1673,58 @@ function DashboardV2View({ token, profile, showToast }) {
             ordersPerDay: Math.round((h.orders / (h.isCurrent ? todayDate : h.daysInMonth)) * 10) / 10
           })));
         } catch (e) { /* carton forecasting is best-effort — rest of dashboard still loads */ }
+    setForecastLoaded(true);
+    setForecastLoading(false);
+  };
+
+  const categoryChartRef = useRef(null);
+  const categoryChartInstance = useRef(null);
+  const monthlyChartRef = useRef(null);
+  const monthlyChartInstance = useRef(null);
+  const ageingChartRef = useRef(null);
+  const ageingChartInstance = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets, cTypes, cPOs] = await Promise.all([
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
+          sb(`/rest/v1/products?select=id,sales_price,department&limit=20000`, { token }),
+          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=product_id,bin_id,on_hand&limit=50000`, { token }),
+          sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=id`, { token }),
+          Promise.resolve([]), // pick lines now fetched below, scoped to THIS warehouse + last 30 days
+          sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${new Date(Date.now() - 30 * 86400000).toISOString()}&select=id,completed_at,order_id`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at&order=completed_at.desc&limit=15`, { token }),
+          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=grn_number,created_at&order=created_at.desc&limit=10`, { token }),
+          sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=load_sheet_number,created_at,order_ids&order=created_at.desc&limit=10`, { token }),
+          sb(`/rest/v1/carton_types?warehouse_id=eq.${profile.warehouse_id}&select=*&order=sort_order.asc`, { token }),
+          sb(`/rest/v1/carton_purchase_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token })
+        ]);
+        setCartonTypes(cTypes || []);
+        setCartonPOs(cPOs || []);
+
+        const prodMap = Object.fromEntries((products || []).map(p => [p.id, p]));
+        setProducts(prodMap);
+        const now = new Date();
+
+        // ---- Monthly order volume (last 4 months incl. current) ----
+        const monthBuckets = {};
+        for (let i = 3; i >= 0; i--) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          monthBuckets[key] = { label: d.toLocaleString("default", { month: "short", year: "2-digit" }), count: 0, year: d.getFullYear(), month: d.getMonth(), isCurrent: i === 0 };
+        }
+        for (const o of orders || []) {
+          if (!o.received_at) continue;
+          const d = new Date(o.received_at);
+          const key = `${d.getFullYear()}-${d.getMonth()}`;
+          if (monthBuckets[key]) monthBuckets[key].count++;
+        }
+        const monthArr = Object.values(monthBuckets);
+        setMonthly(monthArr);
+
+        ordersForForecastRef.current = orders || [];
 
         // ---- Inventory value + SKU count + total qty + department breakdown ----
         let totalValue = 0;
@@ -1706,7 +1751,16 @@ function DashboardV2View({ token, profile, showToast }) {
         setBinUtil({ used: occupiedBinIds.size, total: (bins || []).length });
 
         // ---- Fast / Slow moving (last 30 days pick velocity) ----
-        const taskCompletedMap = Object.fromEntries((pickTasks || []).map(t => [t.id, t.completed_at]));
+        // Previously pick_task_lines + pick_tasks were fetched for ALL warehouses and ALL time.
+        // Now: only this warehouse's orders, only tasks completed in the last 30 days.
+        const whOrderIds = new Set((orders || []).map(o => o.id));
+        const scopedTasks = (pickTasks || []).filter(t => whOrderIds.has(t.order_id));
+        const taskCompletedMap = Object.fromEntries(scopedTasks.map(t => [t.id, t.completed_at]));
+        const scopedTaskIds = scopedTasks.map(t => t.id);
+        for (let i = 0; i < scopedTaskIds.length; i += 100) {
+          const rows = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${scopedTaskIds.slice(i, i + 100).join(",")})&select=product_id,qty_picked,pick_task_id`, { token });
+          pickLines.push(...(rows || []));
+        }
         const cutoff = new Date(now.getTime() - 30 * 86400000);
         const velocity = {};
         for (const l of pickLines || []) {
@@ -2073,6 +2127,12 @@ function DashboardV2View({ token, profile, showToast }) {
       <div style={{ marginBottom: 4 }}>
         <div style={{ ...dHead, fontSize: 16 }}>📦 Material Forecasting — Carton Ordering Intelligence</div>
       </div>
+      {!forecastLoaded && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 14px", marginBottom: 14, border: "1px dashed #F5A623", borderRadius: 10 }}>
+          <span style={{ fontSize: 12, color: "#C9BFA8" }}>Carton forecast bhari calculation hai (pichle 4 mahine ki order lines) — isliye sirf zaroorat par load hota hai.</span>
+          <button style={S.primaryBtnSm} onClick={loadCartonForecast} disabled={forecastLoading}>{forecastLoading ? "Calculate ho raha…" : "📦 Load Carton Forecast"}</button>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }} className="depotos-statgrid">
         {[
@@ -10863,7 +10923,10 @@ function StockingReceivingView({ token, profile, showToast }) {
     if (!grnNumberInput.trim()) { showToast("Odoo GRN# enter karein", "err"); return; }
     setLoading(true);
     try {
-      await sb(`/rest/v1/stk_dc_arrivals?id=eq.${grnDc.id}`, { method: "PATCH", token, body: { status: "grn_posted", grn_number: grnNumberInput.trim(), grn_posted_by: profile.id, grn_posted_at: new Date().toISOString() } });
+      // ATOMIC CLAIM: a DC's GRN can be posted exactly once — a double-click or a second user
+      // would otherwise create duplicate putaway + RTV rows (= duplicate stock).
+      const grnClaim = await sb(`/rest/v1/stk_dc_arrivals?id=eq.${grnDc.id}&status=neq.grn_posted`, { method: "PATCH", token, prefer: "return=representation", body: { status: "grn_posted", grn_number: grnNumberInput.trim(), grn_posted_by: profile.id, grn_posted_at: new Date().toISOString() } });
+      if (!grnClaim || !grnClaim.length) { showToast("Is DC ka GRN pehle hi post ho chuka hai", "err"); setLoading(false); setGrnDc(null); loadAll(); return; }
       const supplierName = (pos.find(p => p.id === grnDc.po_id) || {}).supplier || "";
       for (const l of grnLines) {
         if (Number(l.ok_qty || 0) > 0) {
@@ -11612,13 +11675,16 @@ function StockingOutboundView({ token, profile, showToast }) {
     if (!f.destination?.trim()) { showToast("Destination shop zaroori hai", "err"); return; }
     setLoading(true);
     try {
+      // ATOMIC: reduce the putaway line ONLY if its qty is still what this screen saw — a
+      // double-click / second user can't carve the same units into two STRs.
+      const remaining = Number(q.qty) - qty;
+      const taken = await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}&qty=eq.${q.qty}`, { method: "PATCH", token, prefer: "return=representation", body: { qty: remaining } });
+      if (!taken || !taken.length) { showToast("Yeh line abhi update ho chuki hai — screen refresh ho rahi hai", "err"); setLoading(false); load(); return; }
       const alloc = await sb(`/rest/v1/stk_grn_allocations`, { method: "POST", token, prefer: "return=representation", body: { dc_line_id: q.dc_line_id, dc_id: q.dc_id, po_id: q.po_id, warehouse_id: whId, product_name: q.product_name, product_barcode: q.product_barcode, qty, destination: f.destination.trim(), status: "pending_str", created_by: profile.id } });
       // System reference now, so this is traceable the instant inventory is set aside —
       // Outbound Executive's Odoo STR# later REPLACES this same field, never leaving it blank.
       const sysRef = await nextSysStrRef(token);
       await sb(`/rest/v1/stk_str`, { method: "POST", token, body: { warehouse_id: whId, source: "grn_distribution", grn_allocation_id: alloc[0].id, destination: f.destination.trim(), product_barcode: q.product_barcode, product_name: q.product_name, qty, status: "draft", str_number: sysRef, created_by: profile.id } });
-      const remaining = Number(q.qty) - qty;
-      await sb(`/rest/v1/stk_putaway_queue?id=eq.${q.id}`, { method: "PATCH", token, body: { qty: remaining } });
       showToast(`${qty} units — ${f.destination} k liye STR ${sysRef} ban gaya (Outbound Executive isay Odoo STR# se replace karega)`);
       setAllocForm(af => ({ ...af, [q.id]: {} }));
       load();
@@ -12480,7 +12546,10 @@ function StockingLogisticsView({ token, profile, showToast }) {
     try {
       const gatepassNumber = await nextGatepassNumber();
       const now = new Date().toISOString();
-      await sb(`/rest/v1/stk_vehicle_trips?id=eq.${trip.id}`, { method: "PATCH", token, body: { status: "shipped", vehicle_number: vehicleNumber.trim(), driver_name: driverName.trim(), shipped_by: profile.id, shipped_at: now, gatepass_number: gatepassNumber } });
+      // ATOMIC CLAIM: a trip ships exactly once — otherwise a double-click issues two gatepasses
+      // and forwards the same STR into E-commerce putaway twice (duplicate stock there).
+      const tripClaim = await sb(`/rest/v1/stk_vehicle_trips?id=eq.${trip.id}&status=neq.shipped`, { method: "PATCH", token, prefer: "return=representation", body: { status: "shipped", vehicle_number: vehicleNumber.trim(), driver_name: driverName.trim(), shipped_by: profile.id, shipped_at: now, gatepass_number: gatepassNumber } });
+      if (!tripClaim || !tripClaim.length) { showToast("Yeh vehicle pehle hi ship ho chuki hai", "err"); setShippingTripId(null); load(); return; }
       for (const c of loadedCartons) {
         await sb(`/rest/v1/stk_str_cartons?id=eq.${c.id}`, { method: "PATCH", token, body: { status: "shipped" } });
       }
@@ -12787,10 +12856,21 @@ function StockingPickingView({ token, profile, showToast }) {
     const binId = match.binId;
     const qty = f.qty !== undefined ? Number(f.qty) : str.qty;
     if (!qty || qty <= 0 || qty > match.avail) { showToast(`Valid qty enter karein (max ${match.avail} is bin mein)`, "err"); return; }
+    if (qty > Number(str.qty)) { showToast(`STR qty ${str.qty} se zyada pick nahi ho sakti`, "err"); return; }
     try {
+      // ATOMIC CLAIM first: only one pick can ever be recorded for this STR line (blocks
+      // double-click / two devices from deducting stock twice).
+      const claimed = await sb(`/rest/v1/stk_str?id=eq.${str.id}&picked_at=is.null`, { method: "PATCH", token, prefer: "return=representation", body: { picked_by: profile.id, picked_at: new Date().toISOString(), picked_bin_id: binId, qty } });
+      if (!claimed || !claimed.length) { showToast("Yeh STR line pehle hi pick ho chuki hai", "err"); load(); return; }
       await sb(`/rest/v1/stk_inventory_adjustments`, { method: "POST", token, body: { warehouse_id: whId, product_barcode: str.product_barcode, product_name: str.product_name, bin_id: binId, qty_delta: -qty, reason: `Picked for STR ${str.str_number || ""}`, source: "manual", created_by: profile.id } });
-      await sb(`/rest/v1/stk_str?id=eq.${str.id}`, { method: "PATCH", token, body: { picked_by: profile.id, picked_at: new Date().toISOString(), picked_bin_id: binId, qty } });
-      showToast(`✓ ${str.product_name} — ${qty} pick ho gayi ${binCode(binId)} se, Logistics tab mein ready hai`);
+      // Partial pick from this bin: the remainder stays on the SAME STR# as a new open line
+      // (still reserved, same destination) so it can be picked from another bin — it no longer
+      // silently disappears.
+      const remainder = Number(str.qty) - qty;
+      if (remainder > 0) {
+        await sb(`/rest/v1/stk_str`, { method: "POST", token, body: { warehouse_id: whId, source: str.source, str_number: str.str_number, destination: str.destination, product_barcode: str.product_barcode, product_name: str.product_name, qty: remainder, status: "reserved", customer_order_ref: str.customer_order_ref || null, assigned_picker: str.assigned_picker || null, created_by: str.created_by || profile.id, confirmed_by: str.confirmed_by || null, confirmed_at: str.confirmed_at || null } });
+      }
+      showToast(`✓ ${str.product_name} — ${qty} pick ho gayi ${binCode(binId)} se${remainder > 0 ? ` · baqi ${remainder} doosre bin se pick hongi` : ""}`);
       setPickForm(pf => ({ ...pf, [str.id]: {} }));
       load();
     } catch (e) { showToast("Pick fail: " + e.message, "err"); }
