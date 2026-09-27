@@ -9829,26 +9829,50 @@ function KPIView({ token, profile, showToast }) {
     (async () => {
       setLoading(true);
       try {
-        const [tg, profs, pickTasksAll, pickLinesAll, packTasksAll, putawayAll, pnaAll, shortageAll,
-          returnsAll, returnLinesAll, loadSheetsAll, ordersAll, holidayRows, grnAll, grnLinesAll, rtvAll, manualAll] = await Promise.all([
+        // KPIs are a review-period metric, not a "since day one" one — this was previously the
+        // single heaviest screen in the app: every row of nine tables, every warehouse, all
+        // time, on every visit by every picker/packer/putaway officer. Bounding it to the last
+        // 180 days (covers any quarterly review) cuts both the rows scanned and the response
+        // size dramatically, with no change to how recent performance is judged.
+        const KPI_WINDOW_DAYS = 180;
+        const kpiFromISO = new Date(Date.now() - KPI_WINDOW_DAYS * 86400000).toISOString();
+        const [tg, profs, pickTasksAll, packTasksAll, putawayAll, pnaAll, shortageAll,
+          returnsAll, loadSheetsAll, ordersAll, holidayRows, grnAll, rtvAll, manualAll] = await Promise.all([
           sb(`/rest/v1/kpi_targets?select=*`, { token }),
           sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/pick_tasks?status=eq.picked&select=*`, { token }),
-          sb(`/rest/v1/pick_task_lines?select=*`, { token }),
-          sb(`/rest/v1/pack_tasks?status=eq.labeled&select=*`, { token }),
-          sb(`/rest/v1/putaway_tasks?status=eq.completed&select=*`, { token }),
-          sb(`/rest/v1/pna_records?select=*`, { token }),
+          sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${kpiFromISO}&select=*`, { token }),
+          sb(`/rest/v1/pack_tasks?status=eq.labeled&completed_at=gte.${kpiFromISO}&select=*`, { token }),
+          sb(`/rest/v1/putaway_tasks?status=eq.completed&completed_at=gte.${kpiFromISO}&select=*`, { token }),
+          sb(`/rest/v1/pna_records?reported_at=gte.${kpiFromISO}&select=*`, { token }),
           sb(`/rest/v1/order_shortage_lines?select=*`, { token }),
-          sb(`/rest/v1/returns?select=*`, { token }),
-          sb(`/rest/v1/return_lines?select=*`, { token }),
+          sb(`/rest/v1/returns?received_at=gte.${kpiFromISO}&select=*`, { token }),
           sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+          sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&received_at=gte.${kpiFromISO}&select=*`, { token }),
           sb(`/rest/v1/holidays?select=*`, { token }),
-          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-          sb(`/rest/v1/grn_lines?select=*`, { token }),
-          sb(`/rest/v1/rtv_returns?select=*`, { token }),
+          sb(`/rest/v1/grn?warehouse_id=eq.${profile.warehouse_id}&created_at=gte.${kpiFromISO}&select=*`, { token }),
+          sb(`/rest/v1/rtv_returns?created_at=gte.${kpiFromISO}&select=*`, { token }),
           sb(`/rest/v1/kpi_manual_entries?review_period=eq.${reviewPeriod}&select=*`, { token })
         ]);
+        // These three have no date/warehouse column of their own — scope them via the IDs of
+        // the (already date-bounded) rows fetched above, chunked so no single request is huge.
+        const pickIdsK = (pickTasksAll || []).map(t => t.id);
+        const pickLinesAll = [];
+        for (let i = 0; i < pickIdsK.length; i += 100) {
+          const rows = await sb(`/rest/v1/pick_task_lines?pick_task_id=in.(${pickIdsK.slice(i, i + 100).join(",")})&select=*`, { token });
+          pickLinesAll.push(...(rows || []));
+        }
+        const returnIdsK = (returnsAll || []).map(r => r.id);
+        const returnLinesAll = [];
+        for (let i = 0; i < returnIdsK.length; i += 100) {
+          const rows = await sb(`/rest/v1/return_lines?return_id=in.(${returnIdsK.slice(i, i + 100).join(",")})&select=*`, { token });
+          returnLinesAll.push(...(rows || []));
+        }
+        const grnIdsK = (grnAll || []).map(g => g.id);
+        const grnLinesAll = [];
+        for (let i = 0; i < grnIdsK.length; i += 100) {
+          const rows = await sb(`/rest/v1/grn_lines?grn_id=in.(${grnIdsK.slice(i, i + 100).join(",")})&select=*`, { token });
+          grnLinesAll.push(...(rows || []));
+        }
         const manualMap = Object.fromEntries((manualAll || []).map(m => [`${m.user_id}|${m.metric_key}`, m]));
         setManualEntries(manualMap);
         const profMap = Object.fromEntries((profs || []).map(p => [p.id, p]));
