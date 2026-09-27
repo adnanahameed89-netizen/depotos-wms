@@ -3476,6 +3476,33 @@ function computeAgingDays(onHand, putawayRowsAsc) {
   return { days: Math.floor((Date.now() - new Date(putawayRowsAsc[0].grnDate)) / 86400000), grnNumber: putawayRowsAsc[0].grnNumber };
 }
 
+// Reusable page-size control: keeps a table's DOM small (default 100 rows) instead of
+// rendering thousands of <tr> at once. Full detail is still one click of "Export" away
+// wherever that's offered — this only limits what's drawn on screen.
+function Pager({ page, setPage, pageSize, setPageSize, total }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const clamped = Math.min(page, pages);
+  const from = total === 0 ? 0 : (clamped - 1) * pageSize + 1;
+  const to = Math.min(clamped * pageSize, total);
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, margin: "10px 0" }}>
+      <div style={{ fontSize: 12, color: "#8A8272" }}>{total === 0 ? "0 rows" : `${from}–${to} of ${total}`}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <select style={{ ...S.input, width: 90, padding: "5px 8px" }} value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}>
+          <option value={50}>50 / page</option>
+          <option value={100}>100 / page</option>
+          <option value={200}>200 / page</option>
+        </select>
+        <button style={S.secondaryBtnSm} disabled={clamped <= 1} onClick={() => setPage(1)}>«</button>
+        <button style={S.secondaryBtnSm} disabled={clamped <= 1} onClick={() => setPage(clamped - 1)}>‹ Prev</button>
+        <span style={{ fontSize: 12, color: "#6B6355" }}>Page {clamped} / {pages}</span>
+        <button style={S.secondaryBtnSm} disabled={clamped >= pages} onClick={() => setPage(clamped + 1)}>Next ›</button>
+        <button style={S.secondaryBtnSm} disabled={clamped >= pages} onClick={() => setPage(pages)}>»</button>
+      </div>
+    </div>
+  );
+}
+
 function InventoryView({ token, profile, showToast }) {
   const [tab, setTab] = useState("ledger");
   const [rows, setRows] = useState([]);
@@ -3964,6 +3991,12 @@ function InventoryView({ token, profile, showToast }) {
     return (p?.barcode || "").toLowerCase().includes(q) || (p?.name || "").toLowerCase().includes(q) || (bin?.code || "").toLowerCase().includes(q);
   });
 
+  const [ledgerPage, setLedgerPage] = useState(1);
+  const [ledgerPageSize, setLedgerPageSize] = useState(100);
+  const [binsPage, setBinsPage] = useState(1);
+  const [binsPageSize, setBinsPageSize] = useState(100);
+  useEffect(() => { setLedgerPage(1); setBinsPage(1); }, [query, tab]);
+
   const [transferRow, setTransferRow] = useState(null); // { product_id, pnaBinId, maxQty }
   const [transferDestBin, setTransferDestBin] = useState("");
   const [transferQty, setTransferQty] = useState("");
@@ -4046,10 +4079,11 @@ function InventoryView({ token, profile, showToast }) {
               <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Already allocated to open orders</div>
             </div>
           </div>
+          <Pager page={ledgerPage} setPage={setLedgerPage} pageSize={ledgerPageSize} setPageSize={setLedgerPageSize} total={ledger.length} />
           <table>
             <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>On Hand</th><th style={S.th}>Reserved</th><th style={S.th}>Net Available</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th></tr></thead>
             <tbody>
-              {ledger.map(r => {
+              {ledger.slice((ledgerPage - 1) * ledgerPageSize, ledgerPage * ledgerPageSize).map(r => {
                 const p = products[r.productId];
                 const aging = computeAgingDays(r.onHand, putawayHistory[r.productId]);
                 const days = aging?.days;
@@ -4086,10 +4120,11 @@ function InventoryView({ token, profile, showToast }) {
               <button style={S.secondaryBtnSm} onClick={() => { setTransferRow(null); setTransferDestBin(""); setTransferQty(""); }}>Cancel</button>
             </div>
           )}
+          <Pager page={binsPage} setPage={setBinsPage} pageSize={binsPageSize} setPageSize={setBinsPageSize} total={binRows.length} />
           <table>
             <thead><tr><th style={S.th}>Barcode</th><th style={S.th}>Product</th><th style={S.th}>Bin</th><th style={S.th}>On Hand (this bin)</th><th style={S.th}>Aging (days)</th><th style={S.th}>Oldest Batch (GRN)</th><th style={S.th}>Last Activity</th><th style={S.th}>Reserved against order?</th><th style={S.th}></th></tr></thead>
             <tbody>
-              {binRows.map((r, i) => {
+              {binRows.slice((binsPage - 1) * binsPageSize, binsPage * binsPageSize).map((r, i) => {
                 const p = products[r.product_id];
                 const bin = bins[r.bin_id];
                 const productReserved = reserved[r.product_id] || 0;
@@ -6948,8 +6983,10 @@ function DispatchView({ token, profile, showToast }) {
     try {
       const [o, ls, pf] = await Promise.all([
         sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(rtd,scanned)&select=*`, { token }),
-        sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token }),
-        sb(`/rest/v1/profiles?select=*`, { token })
+        // Only what's still actionable (not handed over) or recent (last 14 days) — this screen
+        // is not the history; the full detail is in Reports → Load Sheet History.
+        sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&or=(handover_status.neq.handed_over,created_at.gte.${new Date(Date.now() - 14 * 86400000).toISOString()})&select=*&order=created_at.desc&limit=100`, { token }),
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=id,full_name`, { token })
       ]);
       setOrders(o || []); setLoadSheets(ls || []);
       setProfiles(Object.fromEntries((pf || []).map(p => [p.id, p])));
@@ -7087,6 +7124,7 @@ function DispatchView({ token, profile, showToast }) {
       </div>
       <div style={S.panel}>
         <div style={S.panelTitle}>Recent load sheets</div>
+        <div style={{ fontSize: 11, color: "#8A8272", marginBottom: 10 }}>Sirf pending/last 14 din yahan dikhte hain — poori history Reports → Load Sheet History se export karein.</div>
         {loadSheets.map(ls => {
           const handedOver = ls.handover_status === "handed_over";
           const cancelled = ls.status === "cancelled";
@@ -7509,6 +7547,8 @@ function ReturnsView({ token, profile, showToast }) {
   const [exporting, setExporting] = useState(false);
   const [reopenAdd, setReopenAdd] = useState(false);
   const [searchTracking, setSearchTracking] = useState("");
+  const [returnsPage, setReturnsPage] = useState(1);
+  const [returnsPageSize, setReturnsPageSize] = useState(100);
 
   const exportReturnsCSV = async () => {
     setExporting(true);
@@ -7555,11 +7595,14 @@ function ReturnsView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
+      // Full history now lives in Reports → Return Processing Detail (on-demand export). This
+      // screen only needs recent returns to search/process — bounded to last 90 days.
+      const returnsFromISO = new Date(Date.now() - 90 * 86400000).toISOString();
       const [r, o, allLines, staff] = await Promise.all([
-        sb(`/rest/v1/returns?select=*&order=received_at.desc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sb(`/rest/v1/returns?received_at=gte.${returnsFromISO}&select=*&order=received_at.desc`, { token }),
+        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,external_order_id,courier,delivery_city`, { token }),
         sb(`/rest/v1/return_lines?select=return_id,qty,bin_id`, { token }),
-        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
+        sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=id,full_name`, { token })
       ]);
       setReturns(r || []); setOrders(o || []);
       setStaffList(staff || []);
@@ -8028,11 +8071,18 @@ function ReturnsView({ token, profile, showToast }) {
         </div>
       )}
       <div style={S.panel}>
-        <input style={{ ...S.input, maxWidth: 260, marginBottom: 14 }} placeholder="🔍 Search tracking # (full ya last 5 digits)" value={searchTracking} onChange={e => setSearchTracking(e.target.value)} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 6 }}>
+          <input style={{ ...S.input, maxWidth: 260 }} placeholder="🔍 Search tracking # (full ya last 5 digits)" value={searchTracking} onChange={e => { setSearchTracking(e.target.value); setReturnsPage(1); }} />
+          <span style={{ fontSize: 11, color: "#8A8272" }}>Sirf pichle 90 din yahan dikhte hain — poori history Reports → Return Processing Detail se export karein.</span>
+        </div>
+        {(() => {
+          const filteredReturns = returns.filter(r => !searchTracking.trim() || (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase()));
+          return <>
+        <Pager page={returnsPage} setPage={setReturnsPage} pageSize={returnsPageSize} setPageSize={setReturnsPageSize} total={filteredReturns.length} />
         <table>
           <thead><tr><th style={S.th}>Tracking</th><th style={S.th}>Courier</th><th style={S.th}>Order #</th><th style={S.th}>Qty</th><th style={S.th}>Location</th><th style={S.th}>Status</th><th style={S.th}>Receiving Timestamp</th><th style={S.th}>User Name</th></tr></thead>
           <tbody>
-            {returns.filter(r => !searchTracking.trim() || (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).map(r => {
+            {filteredReturns.slice((returnsPage - 1) * returnsPageSize, returnsPage * returnsPageSize).map(r => {
               const order = orders.find(o => o.id === r.order_id);
               const agg = returnLineAgg[r.id];
               return (
@@ -8048,10 +8098,11 @@ function ReturnsView({ token, profile, showToast }) {
                 </tr>
               );
             })}
-            {returns.length === 0 && <tr><td colSpan={8}><EmptyNote text="No returns logged yet." /></td></tr>}
-            {returns.length > 0 && searchTracking.trim() && !returns.filter(r => (r.tracking_number || "").toLowerCase().includes(searchTracking.trim().toLowerCase())).length && <tr><td colSpan={8}><EmptyNote text="Is search se koi return nahi mila." /></td></tr>}
+            {filteredReturns.length === 0 && <tr><td colSpan={8}><EmptyNote text="Is search/range mein koi return nahi mila." /></td></tr>}
           </tbody>
         </table>
+        </>;
+        })()}
       </div>
     </div>
   );
@@ -8091,7 +8142,9 @@ function ReportsView({ token, profile, showToast }) {
     { key: "order_dump", label: "Order Dump Report" },
     { key: "grn_report", label: "GRN Report" },
     { key: "user_productivity", label: "User-wise Productivity Report" },
-    { key: "courier_performance", label: "Courier Performance (City-wise)" }
+    { key: "courier_performance", label: "Courier Performance (City-wise)" },
+    { key: "load_sheet", label: "Load Sheet History (full detail)" },
+    { key: "returns_detail", label: "Return Processing Detail" }
   ];
   const [reportType, setReportType] = useState("inventory_ledger");
   const [rows, setRows] = useState([]);
@@ -8286,6 +8339,59 @@ function ReportsView({ token, profile, showToast }) {
           "Success Rate %": b.total > 0 ? ((b.delivered / b.total) * 100).toFixed(1) : "0",
           "Avg Delivery Time (hrs)": b.deliveryHours.length > 0 ? (b.deliveryHours.reduce((s, h) => s + h, 0) / b.deliveryHours.length).toFixed(1) : "—"
         })).sort((a, b) => b["Total Dispatched"] - a["Total Dispatched"]));
+      } else if (key === "load_sheet") {
+        // Moved out of the Dispatch screen (which now only shows recent/actionable sheets) —
+        // full history, one row per order, lives here so it's an on-demand export, not something
+        // fetched on every Dispatch visit.
+        const sheets = await sb(`/rest/v1/load_sheets?warehouse_id=eq.${profile.warehouse_id}&select=*&order=created_at.desc`, { token });
+        const allOrderIds = [...new Set((sheets || []).flatMap(s => s.order_ids || []))];
+        const orderMap = {};
+        const CH = 100;
+        for (let i = 0; i < allOrderIds.length; i += CH) {
+          const chunk = allOrderIds.slice(i, i + CH);
+          const os = await sb(`/rest/v1/sales_orders?id=in.(${chunk.join(",")})&select=id,external_order_id,delivery_city,receiver_name,courier_status`, { token });
+          for (const o of os || []) orderMap[o.id] = o;
+        }
+        const out = [];
+        for (const ls of sheets || []) {
+          for (const oid of ls.order_ids || []) {
+            const o = orderMap[oid];
+            out.push({
+              "Load Sheet #": ls.load_sheet_number, "Courier": ls.courier, "Status": ls.status === "cancelled" ? "Cancelled" : (ls.handover_status === "handed_over" ? "Handed Over" : "Ready for Handover"),
+              "Created At": fmtTime(ls.created_at), "Handed Over At": ls.handover_at ? fmtTime(ls.handover_at) : "—",
+              "Order #": o?.external_order_id || "—", "City": o?.delivery_city || "—", "Receiver": o?.receiver_name || "—", "Last-Mile Status": o?.courier_status || "—"
+            });
+          }
+          if (!(ls.order_ids || []).length) out.push({ "Load Sheet #": ls.load_sheet_number, "Courier": ls.courier, "Status": ls.status, "Created At": fmtTime(ls.created_at), "Handed Over At": "—", "Order #": "—", "City": "—", "Receiver": "—", "Last-Mile Status": "—" });
+        }
+        setRows(out);
+      } else if (key === "returns_detail") {
+        // Full return-parcel processing detail — moved here for the same reason: the Returns
+        // screen itself only needs to be searched by tracking/Order ID, not scrolled.
+        const [returnsAll, profs] = await Promise.all([
+          sb(`/rest/v1/returns?select=*&order=received_at.desc`, { token }),
+          sb(`/rest/v1/profiles?select=id,full_name`, { token })
+        ]);
+        const profMap = Object.fromEntries((profs || []).map(p => [p.id, p.full_name]));
+        const returnIds = (returnsAll || []).map(r => r.id);
+        const linesByReturn = {};
+        for (let i = 0; i < returnIds.length; i += 100) {
+          const chunk = returnIds.slice(i, i + 100);
+          const rls = await sb(`/rest/v1/return_lines?return_id=in.(${chunk.join(",")})&select=*`, { token });
+          for (const l of rls || []) { if (!linesByReturn[l.return_id]) linesByReturn[l.return_id] = []; linesByReturn[l.return_id].push(l); }
+        }
+        const productIds = [...new Set(Object.values(linesByReturn).flat().map(l => l.product_id))];
+        const prodMap = productIds.length ? await fetchProductsByIds(token, productIds) : {};
+        const out = [];
+        for (const r of returnsAll || []) {
+          const lines = linesByReturn[r.id] || [];
+          if (!lines.length) { out.push({ "Tracking #": r.tracking_number || "—", "Order ID": r.order_id_entered || "—", "Courier": r.courier || "—", "Status": r.status, "Product": "—", "Barcode": "—", "Qty": "—", "Condition": "—", "Received At": fmtTime(r.received_at), "Received By": profMap[r.received_by] || "—" }); continue; }
+          for (const l of lines) {
+            const p = prodMap[l.product_id];
+            out.push({ "Tracking #": r.tracking_number || "—", "Order ID": r.order_id_entered || "—", "Courier": r.courier || "—", "Status": r.status, "Product": p?.name || "—", "Barcode": p?.barcode || "—", "Qty": l.qty, "Condition": l.condition, "Received At": fmtTime(r.received_at), "Received By": profMap[r.received_by] || "—" });
+          }
+        }
+        setRows(out);
       }
     } catch (e) { showToast("Load failed", "err"); }
     setLoading(false);
