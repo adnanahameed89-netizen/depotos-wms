@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
 <title>Habitt Warehouse</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -65,6 +67,7 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
+const APP_BUILD = "2026-09-28.8";
 
 /* ---------- Supabase connection ---------- */
 const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
@@ -676,6 +679,7 @@ function Sidebar({ view, setView, profile, onLogout, sidebarOpen, warehouseType,
       <button onClick={onLogout} style={{ ...S.navItem, marginBottom: 12 }}>
         <span>⏻</span><span style={{ color: "#9098A8" }}>Sign out</span>
       </button>
+      <div style={{ fontSize: 10, color: "#5F6675", padding: "0 14px 10px", fontFamily: "'IBM Plex Mono', monospace" }}>build {APP_BUILD}</div>
     </div>
   );
 }
@@ -5637,6 +5641,9 @@ function PickingView({ token, profile, showToast }) {
   const [consolidated, setConsolidated] = useState([]);
   const finalizingRef = useRef({});
   const serialRef = useRef(Promise.resolve());
+  const errRef = useRef({ msg: "", t: 0 });
+  // Same error within 15s => shown once (a 13-order trolley used to raise 13 identical toasts).
+  const toastOnce = (msg, key) => { const now = Date.now(); if (errRef.current.msg === key && now - errRef.current.t < 15000) return; errRef.current = { msg: key, t: now }; showToast(msg, "err"); };
   // Every finalize (normal or Incomplete) is queued: the last-scan auto-finalize and
   // "Complete tote picking" used to run in parallel and fought over the same stock rows.
   const runSerial = (fn) => { const p = serialRef.current.then(fn, fn); serialRef.current = p.catch(() => {}); return p; };
@@ -5821,7 +5828,9 @@ function PickingView({ token, profile, showToast }) {
       return true;
     } catch (e) {
       const order = orders[orderId];
-      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed: ${(e.message || "").slice(0, 240)}`, "err");
+      const em = (e.message || "").slice(0, 240);
+      errRef.current = { msg: em, t: 0 }; // remembered for the summary in "Complete tote picking"
+      toastOnce(`⚠ Order ${order?.external_order_id || ""} finalize failed: ${em}`, em);
       return false;
     }
   };
@@ -6045,9 +6054,10 @@ function PickingView({ token, profile, showToast }) {
         if (completedOrderIds[t.order_id]) continue; // already finalized as it completed early
         const ok = await finalizeOrderPicking(t.order_id, lineStatus);
         if (ok === false) failedOrders.push(orders[t.order_id]?.external_order_id || t.order_id);
+        if (failedOrders.length >= 2) break; // same cause almost always — stop and report once
       }
       if (failedOrders.length > 0) {
-        showToast(`⚠ ${failedOrders.length} order(s) finalize NAHI ho paye (${failedOrders.join(", ")}) — dobara "Complete tote picking" try karein, ya Admin ko batayein`, "err");
+        showToast(`⚠ Finalize ruk gaya (${failedOrders.join(", ")}). Wajah: ${errRef.current.msg || "unknown"} — trolley band nahi hui, Admin ko screenshot bhejein`, "err");
         return; // don't close out the tote — keep it actionable until these are resolved
       }
       await sb(`/rest/v1/totes?id=eq.${openTote.id}`, { method: "PATCH", token, body: { status: "picked", completed_at: new Date().toISOString() } });
@@ -10855,13 +10865,24 @@ async function binOnHand(token, warehouseId, productId, binId) {
 // Moves a pick line's picked qty from its source bin into PACK-STAGING — EXACTLY ONCE. The
 // conditional PATCH (staged_qty IS NULL) is an atomic claim: a double-click, a retry, or two
 // devices finalizing the same order can never move the same units twice.
+// If the database doesn't have the staged_qty column yet (SQL not run), staging is simply skipped
+// instead of blocking every picker: dispatch already handles un-staged lines by deducting from the
+// exact bin they were picked from. Run schema_completeness.sql to switch staging on.
+let _stagingUnavailable = false;
 async function stagePickedLine(token, warehouseId, line, qty, userId) {
+  if (_stagingUnavailable) return 0;
   if (!qty || qty <= 0 || !line.bin_id) return 0;
   const staging = await getSpecialBin(token, warehouseId, STAGING_BIN_CODE);
   if (line.bin_id === staging.id) return 0;
   const src = await binOnHand(token, warehouseId, line.product_id, line.bin_id);
   const move = Math.min(qty, src); // never create stock that the source bin didn't hold
-  const claimed = await sb(`/rest/v1/pick_task_lines?id=eq.${line.id}&staged_qty=is.null`, { method: "PATCH", token, prefer: "return=representation", body: { staged_qty: move } });
+  let claimed;
+  try {
+    claimed = await sb(`/rest/v1/pick_task_lines?id=eq.${line.id}&staged_qty=is.null`, { method: "PATCH", token, prefer: "return=representation", body: { staged_qty: move } });
+  } catch (e) {
+    if (/staged_qty|PGRST204|42703/i.test(String(e.message || ""))) { _stagingUnavailable = true; console.warn("staged_qty column missing — staging skipped until schema_completeness.sql is run"); return 0; }
+    throw e;
+  }
   if (!claimed || !claimed.length) return 0; // already staged by an earlier/parallel call
   if (move > 0) {
     // All-or-nothing: if anything fails half-way, put the units back and release the claim, so the
