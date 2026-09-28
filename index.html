@@ -67,7 +67,7 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
-const APP_BUILD = "2026-09-28.8";
+const APP_BUILD = "2026-09-28.11";
 
 /* ---------- Supabase connection ---------- */
 const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
@@ -1694,8 +1694,8 @@ function DashboardV2View({ token, profile, showToast }) {
       try {
         const [orders, products, invRows, bins, pickLines, pickTasks, putawayTasks, grnRows, loadSheets, cTypes, cPOs] = await Promise.all([
           sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,received_at,status`, { token }),
-          sb(`/rest/v1/products?select=id,sales_price,department&limit=20000`, { token }),
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=product_id,bin_id,on_hand&limit=50000`, { token }),
+          sbPaged(token, `/rest/v1/products?select=id,sales_price,department&order=id`),
+          sbPaged(token, `/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=product_id,bin_id,on_hand&order=id`),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=id`, { token }),
           Promise.resolve([]), // pick lines now fetched below, scoped to THIS warehouse + last 30 days
           sb(`/rest/v1/pick_tasks?status=eq.picked&completed_at=gte.${new Date(Date.now() - 30 * 86400000).toISOString()}&select=id,completed_at,order_id`, { token }),
@@ -3853,9 +3853,9 @@ function InventoryView({ token, profile, showToast }) {
 
   const loadAll = useCallback(async () => {
       const [inv, res, prods, binList, putaway, grnLinesAll, grnAll] = await Promise.all([
-        sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
+        sbPaged(token, `/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&order=id`),
         sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/products?select=id,barcode,name,sku,department&limit=20000`, { token }),
+        sbPaged(token, `/rest/v1/products?select=id,barcode,name,sku,department&order=id`),
         sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
         sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
         sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -4636,7 +4636,14 @@ function OrdersView({ token, profile, showToast, setView }) {
 
   const load = useCallback(async () => {
     try {
-      const o = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=*&order=received_at.desc`, { token });
+      // Every order that is still in play (any status except finished shipping) + finished ones
+      // from the last 14 days. Older finished orders stay reachable through the history search.
+      const recentFrom = new Date(Date.now() - 14 * 86400000).toISOString();
+      const [activeOrders, recentDone] = await Promise.all([
+        sbPaged(token, `/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=not.in.(dispatched,handed_over)&select=*&order=received_at.desc,id.asc`),
+        sbPaged(token, `/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=in.(dispatched,handed_over)&received_at=gte.${recentFrom}&select=*&order=received_at.desc,id.asc`)
+      ]);
+      const o = [...activeOrders, ...recentDone].sort((a, b) => new Date(b.received_at) - new Date(a.received_at));
       setOrders(o || []);
       const profs = await sb(`/rest/v1/profiles?select=*`, { token }) || [];
       setProfiles(Object.fromEntries(profs.map(u => [u.id, u])));
@@ -5651,6 +5658,7 @@ function PickingView({ token, profile, showToast }) {
   const [barcodeInput, setBarcodeInput] = useState("");
   const [lastScannedProduct, setLastScannedProduct] = useState(null);
   const [lastScanInfo, setLastScanInfo] = useState(null);
+  const [pickQty, setPickQty] = useState("1"); // pieces this scan counts for (bulk picking)
   const [pickViewMode, setPickViewMode] = useState("location");
   const [showDamageInput, setShowDamageInput] = useState(false);
   const [damageQtyInput, setDamageQtyInput] = useState("");
@@ -5658,13 +5666,14 @@ function PickingView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [t, o, pk, b, tt] = await Promise.all([
+      const [t, pk, b, tt] = await Promise.all([
         sb(`/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,external_order_id,courier,status,delivery_city,receiver_name`, { token }),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
-        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sbPaged(token, `/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*&order=id`),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
+      // Only the orders these tasks belong to (a whole-warehouse read silently loses orders past 1000).
+      const o = await fetchByIds(token, "sales_orders", (t || []).map(x => x.order_id), "id,external_order_id,courier,status,delivery_city,receiver_name");
       setTasks(t || []);
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
       setPickers((pk || []).filter(u => ["picker", "packer"].includes(u.role)));
@@ -5897,47 +5906,79 @@ function PickingView({ token, profile, showToast }) {
       pickBarcodeInputRef.current?.focus();
       return;
     }
-    const ref = activeGroup.refs.find(r => r.allocated < r.qty_required);
-    if (!ref) { showToast("Allocation error — dobara try karein", "err"); pickBarcodeInputRef.current?.focus(); return; }
-
-    // Persist FIRST, and wait for confirmation, before updating the screen — this is what
-    // guarantees "jahan tak scan ho chuka wahi se continue" is actually true after a reload.
-    // A scan is only shown as counted once the server has genuinely confirmed it.
-    const newAllocated = ref.allocated + 1;
-    try {
-      await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: newAllocated } });
-    } catch (e) {
-      showToast("⚠ Scan save nahi hui (network issue) — please dobara try karein. Kuch bhi record nahi hua, wapas se scan karein.", "err");
+    // Bulk picking: ONE scan verifies the product, the quantity box says how many pieces were
+    // taken (default 1). The pieces are shared out across the orders waiting at this location, in
+    // route order, exactly as one-by-one scanning would have done.
+    const qtyWanted = Math.max(1, parseInt(pickQty, 10) || 1);
+    const stopRemaining = activeGroup.required - activeGroup.scanned;
+    if (qtyWanted > stopRemaining) {
+      showToast(`Is location par sirf ${stopRemaining} pcs baqi hain — qty ${stopRemaining} ya kam rakhein`, "err");
       pickBarcodeInputRef.current?.focus();
       return;
     }
 
-    ref.allocated = newAllocated;
-    activeGroup.scanned += 1;
+    // Persist FIRST, and wait for confirmation, before updating the screen — this is what
+    // guarantees "jahan tak scan ho chuka wahi se continue" is actually true after a reload.
+    // Every order's share is saved separately; what is confirmed stays counted even if a later
+    // one fails.
+    const applied = [];
+    let left = qtyWanted;
+    let saveFailed = false;
+    for (const ref of activeGroup.refs) {
+      if (left <= 0) break;
+      const room = ref.qty_required - ref.allocated;
+      if (room <= 0) continue;
+      const take = Math.min(left, room);
+      const newAllocated = ref.allocated + take;
+      try {
+        await sb(`/rest/v1/pick_task_lines?id=eq.${ref.line_id}`, { method: "PATCH", token, body: { qty_picked: newAllocated } });
+      } catch (e) { saveFailed = true; break; }
+      ref.allocated = newAllocated;
+      activeGroup.scanned += take;
+      applied.push({ ref, take });
+      left -= take;
+    }
+    if (!applied.length) {
+      showToast(saveFailed ? "⚠ Scan save nahi hui (network issue) — please dobara try karein. Kuch bhi record nahi hua, wapas se scan karein." : "Allocation error — dobara try karein", "err");
+      pickBarcodeInputRef.current?.focus();
+      return;
+    }
+    const done = qtyWanted - left;
+    if (saveFailed) showToast(`⚠ ${done} pcs save hue, baqi ${left} nahi (network) — baqi ${left} dobara scan karein`, "err");
+    setPickQty("1"); // never let a big quantity leak into the next scan
     setConsolidated([...consolidated]);
     setLastScannedProduct(p);
-    const order = orders[ref.order_id];
-    setLastScanInfo({ product: p, toteBin: ref.toteBin, orderRef: order?.external_order_id });
-    showToast(`✓ ${p.barcode} → Tote Bin #${ref.toteBin || "?"} (Order ${order?.external_order_id || ""})`);
+    const firstOrder = orders[applied[0].ref.order_id];
+    setLastScanInfo({
+      product: p, toteBin: applied[0].ref.toteBin, orderRef: firstOrder?.external_order_id, qty: done,
+      parts: applied.map(a => ({ toteBin: a.ref.toteBin, qty: a.take, orderRef: orders[a.ref.order_id]?.external_order_id }))
+    });
+    if (!saveFailed) {
+      showToast(applied.length === 1
+        ? `✓ ${done > 1 ? done + " pcs " : ""}${p.barcode} → Tote Bin #${applied[0].ref.toteBin || "?"} (Order ${firstOrder?.external_order_id || ""})`
+        : `✓ ${done} pcs ${p.barcode} — ${applied.length} orders mein baant diye (neeche dekhein)`);
+    }
     pickBarcodeInputRef.current?.focus();
 
     // Server-authoritative: only sets started_at if it's still NULL in the DB right now.
     // Best-effort — a failure here doesn't affect pick progress, only a display timestamp.
-    const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
-    if (startTask) {
-      sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}&started_at=is.null`, { method: "PATCH", token, body: { started_at: new Date().toISOString() } }).catch(() => {});
+    const orderIdsTouched = [...new Set(applied.map(a => a.ref.order_id))];
+    for (const oid of orderIdsTouched) {
+      const startTask = tasks.find(t => t.tote_id === openTote.id && t.order_id === oid);
+      if (startTask) sb(`/rest/v1/pick_tasks?id=eq.${startTask.id}&started_at=is.null`, { method: "PATCH", token, body: { started_at: new Date().toISOString() } }).catch(() => {});
     }
 
-    // Check if THIS order's picking is now fully done — if so, send it to Packing right away
-    const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === ref.order_id);
-    if (task) {
+    // Check if any order's picking is now fully done — if so, send it to Packing right away
+    const lineStatus = buildLineStatus();
+    for (const oid of orderIdsTouched) {
+      const task = tasks.find(t => t.tote_id === openTote.id && t.order_id === oid);
+      if (!task) continue;
       const lines = taskLines[task.id] || [];
-      const lineStatus = buildLineStatus();
       const orderDone = lines.length > 0 && lines.every(l => {
         const st = lineStatus[l.id];
         return st && (st.allocated >= st.qty_required || st.resolved);
       });
-      if (orderDone) finalizeOrderPicking(ref.order_id, lineStatus);
+      if (orderDone) finalizeOrderPicking(oid, lineStatus);
     }
   };
 
@@ -6099,8 +6140,17 @@ function PickingView({ token, profile, showToast }) {
             <input autoFocus ref={pickBarcodeInputRef} style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && scanToteBarcode()} />
+            <input type="number" inputMode="numeric" min={1} title="Is scan se kitne pcs uthaye" style={{ ...S.input, width: 76, textAlign: "center", fontWeight: 700, fontSize: 16 }}
+              value={pickQty} onChange={e => setPickQty(e.target.value)} onFocus={e => e.target.select()}
+              onKeyDown={e => e.key === "Enter" && scanToteBarcode()} />
             <CameraScanButton onScan={(text) => scanToteBarcode(text)} />
             <button style={S.primaryBtnSm} onClick={() => scanToteBarcode()}>Scan</button>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>
+            <span style={{ fontSize: 11, color: "#8A8272" }}>Qty box = is ek scan se kitne pcs. Bulk ke liye qty likhein ya 'Sab' dabayein, phir barcode scan karein.</span>
+            {activeGroup && (activeGroup.required - activeGroup.scanned) > 1 && (
+              <button type="button" style={S.secondaryBtnSm} onClick={() => { setPickQty(String(activeGroup.required - activeGroup.scanned)); pickBarcodeInputRef.current?.focus(); }}>Sab ({activeGroup.required - activeGroup.scanned})</button>
+            )}
           </div>
         </div>
 
@@ -6185,9 +6235,17 @@ function PickingView({ token, profile, showToast }) {
               <div style={{ width: 56, height: 56, borderRadius: 8, border: "1px dashed #E0D8C5", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8272", fontSize: 18, flexShrink: 0 }}>📦</div>
             )}
             <div style={{ flex: 1, minWidth: 140 }}>
-              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>✓ SCANNED — YAHAN RAKHEIN</div>
+              <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>✓ SCANNED{lastScanInfo.qty > 1 ? ` — ${lastScanInfo.qty} PCS` : ""} — YAHAN RAKHEIN</div>
               <div style={{ color: "#2B2620", fontSize: 13, marginTop: 2 }}>{lastScanInfo.product.barcode} — {lastScanInfo.product.name}</div>
-              <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Order {lastScanInfo.orderRef}</div>
+              {(lastScanInfo.parts || []).length > 1 ? (
+                <div style={{ marginTop: 4 }}>
+                  {lastScanInfo.parts.map((pt, i) => (
+                    <div key={i} style={{ color: "#2B2620", fontSize: 12, fontFamily: "'IBM Plex Mono', monospace" }}>Bin <strong style={{ color: "#4CAF7D" }}>#{pt.toteBin || "?"}</strong> · {pt.qty} pcs · Order {pt.orderRef}</div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: "#6B6355", fontSize: 11, marginTop: 2 }}>Order {lastScanInfo.orderRef}</div>
+              )}
             </div>
             <div style={{ textAlign: "center" }}>
               <div style={{ color: "#6B6355", fontSize: 10, letterSpacing: 1 }}>TOTE BIN</div>
@@ -6264,7 +6322,9 @@ function PickingView({ token, profile, showToast }) {
     );
   }
 
-  const myTotes = totes.filter(t => t.assigned_to === profile.id && t.status === "picking");
+  // A trolley is the picker's whenever it has open picking tasks — whatever its status says. (Its
+  // status can be changed by other screens; the work itself must never disappear from the picker.)
+  const myTotes = totes.filter(t => t.assigned_to === profile.id && (t.status === "picking" || tasks.some(x => x.tote_id === t.id)));
 
   return (
     <div>
@@ -6288,7 +6348,7 @@ function PickingView({ token, profile, showToast }) {
       </div>
 
       {canBatch && (() => {
-        const pickingTotes = totes.filter(t => t.status === "picking");
+        const pickingTotes = totes.filter(t => t.status === "picking" || tasks.some(x => x.tote_id === t.id));
         const rows = pickingTotes.map(tt => {
           const remainingTasks = tasks.filter(t => t.tote_id === tt.id);
           const anyStarted = remainingTasks.some(t => t.started_at);
@@ -6437,13 +6497,13 @@ function PackingView({ token, profile, showToast }) {
 
   const load = useCallback(async () => {
     try {
-      const [t, o, tt, b, s] = await Promise.all([
+      const [t, tt, b, s] = await Promise.all([
         sb(`/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc`, { token }),
-        sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&select=id,external_order_id,courier,status,delivery_city,receiver_name`, { token }),
         sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=*`, { token }),
-        sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
+        sbPaged(token, `/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*&order=id`),
         sb(`/rest/v1/profiles?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token })
       ]);
+      const o = await fetchByIds(token, "sales_orders", (t || []).map(x => x.order_id), "id,external_order_id,courier,status,delivery_city,receiver_name");
       setStaff(s || []);
       // One card per order: legacy duplicate pack_tasks (created by the old finalize race) must
       // never show as two parcels. The DB unique index prevents new ones.
@@ -7672,7 +7732,13 @@ function ReturnsView({ token, profile, showToast }) {
     }
 
     // Match on the Order ID the officer typed (mandatory), falling back to tracking match.
-    const order = orders.find(o => o.external_order_id === orderIdEntered) || orders.find(o => o.external_order_id === code);
+    let order = orders.find(o => o.external_order_id === orderIdEntered) || orders.find(o => o.external_order_id === code);
+    if (!order) {
+      try {
+        const found = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&external_order_id=in.(${[orderIdEntered, code].map(encodeURIComponent).join(",")})&select=id,external_order_id,courier,delivery_city&limit=1`, { token });
+        if (found && found[0]) order = found[0];
+      } catch (e) { /* stays unlinked */ }
+    }
     let courierGuess = order?.courier || "Other";
     let courierInfo = null;
 
@@ -8193,8 +8259,8 @@ function ReportsView({ token, profile, showToast }) {
     try {
       if (key === "inventory_ledger") {
         const [inv, products, reserved, putaway, grnLinesAll, grnAll] = await Promise.all([
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
-          sb(`/rest/v1/products?select=id,barcode,name,sku,department,sales_price&limit=20000`, { token }),
+          sbPaged(token, `/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&order=id`),
+          sbPaged(token, `/rest/v1/products?select=id,barcode,name,sku,department,sales_price&order=id`),
           sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
           sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -8223,8 +8289,8 @@ function ReportsView({ token, profile, showToast }) {
         }));
       } else if (key === "inventory_bin_ledger") {
         const [inv, products, bins, putaway, grnLinesAll, grnAll] = await Promise.all([
-          sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&limit=50000`, { token }),
-          sb(`/rest/v1/products?select=id,barcode,name,sku,department,sales_price&limit=20000`, { token }),
+          sbPaged(token, `/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&select=*&order=id`),
+          sbPaged(token, `/rest/v1/products?select=id,barcode,name,sku,department,sales_price&order=id`),
           sb(`/rest/v1/bins?warehouse_id=eq.${profile.warehouse_id}&select=*`, { token }),
           sb(`/rest/v1/putaway_tasks?status=eq.completed&select=product_id,bin_id,qty_completed,completed_at,grn_line_id&order=completed_at.asc`, { token }),
           sb(`/rest/v1/grn_lines?select=id,grn_id`, { token }),
@@ -8634,6 +8700,36 @@ async function dropOrderLine(token, lineId) {
   await sb(`/rest/v1/sales_order_lines?id=eq.${lineId}`, { method: "PATCH", token, body: { qty: 0 } });
   return "zeroed";
 }
+// Supabase returns at most ~1000 rows per request, silently. Anything bigger has to be read page by
+// page — otherwise the OLDEST/LAST rows just vanish from the screen (orders, bins, stock, products).
+async function sbPaged(token, path) {
+  const out = [];
+  const sep = path.includes("?") ? "&" : "?";
+  let offset = 0;
+  for (let guard = 0; guard < 400; guard++) {
+    const rows = await sb(`${path}${sep}limit=1000&offset=${offset}`, { token });
+    if (!rows || !rows.length) break;
+    out.push(...rows);
+    offset += rows.length;
+  }
+  return out;
+}
+// Reads exactly the rows for a list of ids (chunked) instead of "everything in the warehouse".
+async function fetchByIds(token, table, ids, select, idCol) {
+  const uniq = [...new Set((ids || []).filter(Boolean))];
+  const out = [];
+  for (let i = 0; i < uniq.length; i += 80) {
+    const rows = await sb(`/rest/v1/${table}?${idCol || "id"}=in.(${uniq.slice(i, i + 80).join(",")})&select=${select}`, { token });
+    out.push(...(rows || []));
+  }
+  return out;
+}
+// A trolley whose picking is still open must never be flipped to "picked" / handed to a packer.
+async function toteHasOpenPicking(token, toteId) {
+  if (!toteId) return false;
+  const r = await sb(`/rest/v1/pick_tasks?tote_id=eq.${toteId}&status=neq.picked&select=id&limit=1`, { token });
+  return !!(r && r.length);
+}
 async function notifyUser(token, userId, message, meta) {
   if (!userId) return;
   try {
@@ -9012,6 +9108,10 @@ function ToteMasterView({ token, profile, showToast }) {
     try {
       const prevPacker = tote.assigned_to ? profiles[tote.assigned_to]?.full_name : "—";
       const newStatus = f.status || tote.status;
+      if (newStatus === "picked" && await toteHasOpenPicking(token, tote.id)) {
+        showToast("⛔ Is trolley mein picking abhi complete nahi — 'Picked' set nahi ho sakta. Picker ko Complete tote picking karne dein.", "err");
+        return;
+      }
       await sb(`/rest/v1/totes?id=eq.${tote.id}`, {
         method: "PATCH", token,
         body: { assigned_to: f.packerId, status: newStatus, last_reassign_reason: f.reason || "Reassigned via Tote Master", last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() }
@@ -9051,7 +9151,7 @@ function ToteMasterView({ token, profile, showToast }) {
   const runStuckDoctor = async () => {
     if (!window.confirm("Stuck Orders Doctor chalayein? Yeh missing pack-tasks banata hai, chhupi hui totes packer ko dikhata hai, aur purane (galat) split wale orders ko theek karta hai — koi order dispatch/delete nahi hota.")) return;
     setDoctoring(true);
-    const rep = { packTasksCreated: 0, relinked: 0, totesReleased: 0, unitsStaged: 0, orders: [], splitRepaired: [], splitSkipped: [] };
+    const rep = { packTasksCreated: 0, relinked: 0, totesReleased: 0, unitsStaged: 0, orders: [], splitRepaired: [], splitSkipped: [], totesRestored: [] };
     try {
       const picking = await sb(`/rest/v1/sales_orders?warehouse_id=eq.${profile.warehouse_id}&status=eq.picking&select=id,external_order_id`, { token }) || [];
       const CH = 80;
@@ -9155,6 +9255,7 @@ function ToteMasterView({ token, profile, showToast }) {
           }
           if (parentPt.tote_id) {
             await sb(`/rest/v1/pack_tasks?order_id=eq.${kid.id}&tote_id=is.null&status=eq.pending`, { method: "PATCH", token, body: { tote_id: parentPt.tote_id } });
+            if (await toteHasOpenPicking(token, parentPt.tote_id)) { rep.splitRepaired.push(`${kid.external_order_id} ← ${parent.external_order_id} (trolley abhi picking mein hai — usay chheda nahi)`); continue; }
             const rq = await sb(`/rest/v1/tracking_split_requests?order_id=eq.${parent.id}&select=requested_by&order=requested_at.desc&limit=1`, { token });
             const toteRow = (await sb(`/rest/v1/totes?id=eq.${parentPt.tote_id}&select=id,status,locked_by`, { token }))?.[0];
             if (toteRow) {
@@ -9177,9 +9278,17 @@ function ToteMasterView({ token, profile, showToast }) {
         await sb(`/rest/v1/totes?id=eq.${tid}`, { method: "PATCH", token, body: { status: "picked", last_reassign_reason: "Doctor: had packable orders but was hidden from packer", last_reassigned_by: profile.id, last_reassigned_at: new Date().toISOString() } });
         rep.totesReleased++;
       }
+      // ---- Trolleys marked "picked" although some of their picking is still open ----
+      // Nothing is changed here any more: such a trolley stays with the packer for its finished
+      // orders AND stays with the picker for the open ones (the picker list looks at open tasks,
+      // not at the trolley status). Reported only, so you can see them.
+      const pickedTotes = await sb(`/rest/v1/totes?warehouse_id=eq.${profile.warehouse_id}&status=eq.picked&select=id,tote_number,assigned_to`, { token }) || [];
+      for (const pt of pickedTotes) {
+        if (await toteHasOpenPicking(token, pt.id)) rep.totesRestored.push(pt.assigned_to ? pt.tote_number : `${pt.tote_number} (picker assign karein)`);
+      }
       await sb(`/rest/v1/event_log`, { method: "POST", token, body: { entity_type: "system", entity_id: profile.warehouse_id, user_id: profile.id, action: "stuck_doctor", metadata: rep } });
       setDoctorReport(rep);
-      showToast(`🩺 ${rep.packTasksCreated} orders packer ko bheje, ${rep.totesReleased} totes dikhayi, ${rep.relinked} re-link, ${rep.splitRepaired.length} split theek${rep.splitSkipped.length ? `, ${rep.splitSkipped.length} skip` : ""}`);
+      showToast(`🩺 ${rep.packTasksCreated} orders packer ko bheje, ${rep.totesReleased} totes dikhayi, ${rep.relinked} re-link, ${rep.splitRepaired.length} split theek${rep.splitSkipped.length ? `, ${rep.splitSkipped.length} skip` : ""}${rep.totesRestored.length ? `, ${rep.totesRestored.length} trolley mein picking abhi open` : ""}`);
       load();
     } catch (e) { showToast("Doctor fail: " + e.message, "err"); }
     setDoctoring(false);
@@ -9250,6 +9359,7 @@ function ToteMasterView({ token, profile, showToast }) {
           {doctorReport && (
             <div style={{ marginTop: 10, fontSize: 12, color: "#2B2620" }}>
               Packer ko bheje: <strong>{doctorReport.packTasksCreated}</strong> · Totes packer ko dikhayi: <strong>{doctorReport.totesReleased}</strong> · Re-link: <strong>{doctorReport.relinked}</strong> · Staging mein move: <strong>{doctorReport.unitsStaged} pcs</strong>
+              {(doctorReport.totesRestored || []).length > 0 && <div style={{ marginTop: 4, color: "#B0362E" }}>Picking abhi open (picker ko dikhengi, packer ko finished orders): <strong>{doctorReport.totesRestored.join(", ")}</strong></div>}
               {(doctorReport.splitRepaired || []).length > 0 && <div style={{ marginTop: 4 }}>Split theek hue: <strong>{doctorReport.splitRepaired.join(", ")}</strong></div>}
               {(doctorReport.splitSkipped || []).length > 0 && <div style={{ marginTop: 4, color: "#B0362E" }}>Split skip (manual dekhna hai): {doctorReport.splitSkipped.join(" · ")}</div>}
               {doctorReport.orders.length > 0 && <div style={{ color: "#8A8272", marginTop: 4 }}>{doctorReport.orders.join(", ")}</div>}
@@ -9295,7 +9405,7 @@ function ToteMasterView({ token, profile, showToast }) {
               </select>
               <select style={{ ...S.input, fontSize: 12, marginBottom: 6, width: "100%" }} value={reassignForm[t.id]?.status || t.status} onChange={e => setReassignForm(rf => ({ ...rf, [t.id]: { ...rf[t.id], status: e.target.value } }))}>
                 <option value="open">Status: Open</option>
-                <option value="assigned">Status: Assigned (picking in progress)</option>
+                <option value="picking">Status: Picking in progress</option>
                 <option value="picked">Status: Picked (ready for packing)</option>
               </select>
               <button style={{ ...S.secondaryBtnSm, width: "100%", justifyContent: "center", color: "#4CAF7D", borderColor: "#4CAF7D" }} onClick={() => reassignTote(t)}>↻ Reassign (keeps its progress)</button>
@@ -9568,6 +9678,9 @@ function TrackingSplitView({ token, profile, showToast }) {
   // order sat on Split Hold, restore it (and its packer = whoever raised the split request).
   const ensureToteVisible = async (toteId) => {
     if (!toteId) return;
+    // The trolley may have been reused for a NEW picking round — then it belongs to that picker
+    // and must not be pulled away. (The split order shows up when that round is finished.)
+    if (await toteHasOpenPicking(token, toteId)) return;
     const rows = await sb(`/rest/v1/totes?id=eq.${toteId}&select=id,status,locked_by`, { token });
     const t = rows && rows[0];
     if (!t) return;
