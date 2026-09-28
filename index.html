@@ -8568,8 +8568,10 @@ async function nextSysStrRef(token) {
 // treated as "already exists" instead of creating a duplicate parcel on the packer's screen.
 async function ensurePackTask(token, orderId, toteId, extra) {
   try {
-    const r = await sb(`/rest/v1/pack_tasks`, { method: "POST", token, prefer: "return=representation", body: { order_id: orderId, status: "pending", tote_id: toteId || null, ...(extra || {}) } });
-    return { created: true, row: r && r[0] };
+    // NO "return=representation": a picker may write pack_tasks but not read them back, and asking
+    // the database to return the new row makes it re-check READ permission (=> RLS error 42501).
+    await sb(`/rest/v1/pack_tasks`, { method: "POST", token, body: { order_id: orderId, status: "pending", tote_id: toteId || null, ...(extra || {}) } });
+    return { created: true };
   } catch (e) {
     if (/23505|duplicate key/i.test(String(e.message || ""))) {
       // A live pack task already exists. Normally that is just the twin of a double-click and is
