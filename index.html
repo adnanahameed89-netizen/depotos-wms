@@ -67,7 +67,7 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
-const APP_BUILD = "2026-09-28.12";
+const APP_BUILD = "2026-09-28.13";
 
 /* ---------- Supabase connection ---------- */
 const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
@@ -6472,6 +6472,8 @@ function PackingView({ token, profile, showToast }) {
   const [requiredLines, setRequiredLines] = useState([]);
   const [scans, setScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
+  const [packQty, setPackQty] = useState("1"); // pieces this scan counts for (bulk packing)
+  const [packAll, setPackAll] = useState(false); // next scan = the whole remaining qty of that item
   const [orderScanInput, setOrderScanInput] = useState("");
   const [toteScanInput, setToteScanInput] = useState("");
   const [binNumMap, setBinNumMap] = useState({});
@@ -6666,10 +6668,15 @@ function PackingView({ token, profile, showToast }) {
     if (!line) { showToast("Yeh product is order mein nahi hai — WRONG ITEM", "err"); packBarcodeInputRef.current?.focus(); return; }
     const current = scans[p.id] || 0;
     if (current >= line.qty) { showToast("Is product ki required qty already scan ho chuki", "err"); packBarcodeInputRef.current?.focus(); return; }
-    const newScans = { ...scans, [p.id]: current + 1 };
+    // Bulk packing: ONE scan verifies the item, the qty box (or "Sab") says how many pieces.
+    const remaining = line.qty - current;
+    const add = packAll ? remaining : Math.max(1, parseInt(packQty, 10) || 1);
+    if (add > remaining) { showToast(`Is item ki sirf ${remaining} pcs baqi hain — qty ${remaining} ya kam rakhein`, "err"); packBarcodeInputRef.current?.focus(); return; }
+    const newScans = { ...scans, [p.id]: current + add };
     setScans(newScans);
+    setPackQty("1"); setPackAll(false); // never let a big quantity leak into the next scan
     setLastScannedProduct(p);
-    showToast(`Scanned: ${p.barcode}`);
+    showToast(`Scanned: ${add > 1 ? add + " pcs " : ""}${p.barcode}`);
     packBarcodeInputRef.current?.focus();
     try {
       await sb(`/rest/v1/pack_tasks?id=eq.${openTask.id}`, { method: "PATCH", token, body: { scans: JSON.stringify(newScans) } });
@@ -6828,9 +6835,15 @@ function PackingView({ token, profile, showToast }) {
             <input autoFocus ref={packBarcodeInputRef} style={{ ...S.input, fontFamily: "'IBM Plex Mono', monospace" }} placeholder="Scan or type barcode / SKU, then Enter"
               value={barcodeInput} onChange={e => setBarcodeInput(e.target.value)}
               onKeyDown={e => e.key === "Enter" && scanBarcode()} />
+            <input type="number" inputMode="numeric" min={1} title="Is scan se kitne pcs" disabled={packAll} placeholder={packAll ? "Sab" : ""}
+              style={{ ...S.input, width: 76, textAlign: "center", fontWeight: 700, fontSize: 16, ...(packAll ? { opacity: 0.45 } : {}) }}
+              value={packAll ? "" : packQty} onChange={e => setPackQty(e.target.value)} onFocus={e => e.target.select()}
+              onKeyDown={e => e.key === "Enter" && scanBarcode()} />
+            <button type="button" style={packAll ? S.primaryBtnSm : S.secondaryBtnSm} onClick={() => { setPackAll(v => !v); packBarcodeInputRef.current?.focus(); }}>{packAll ? "✓ Sab" : "Sab"}</button>
             <CameraScanButton onScan={(text) => scanBarcode(text)} />
             <button style={S.primaryBtnSm} onClick={() => scanBarcode()}>Scan</button>
           </div>
+          <div style={{ fontSize: 11, color: "#8A8272", marginTop: 8 }}>Qty box = is ek scan se kitne pcs. Bulk order ke liye qty likhein, ya 'Sab' dabayein (agla scan us item ki poori baqi qty ginega), phir item ka barcode scan karein.</div>
         </div>
         {lastScannedProduct && (
           <div style={S.panel}>
