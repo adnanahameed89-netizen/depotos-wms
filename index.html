@@ -5636,6 +5636,10 @@ function PickingView({ token, profile, showToast }) {
   const [openTote, setOpenTote] = useState(null);
   const [consolidated, setConsolidated] = useState([]);
   const finalizingRef = useRef({});
+  const serialRef = useRef(Promise.resolve());
+  // Every finalize (normal or Incomplete) is queued: the last-scan auto-finalize and
+  // "Complete tote picking" used to run in parallel and fought over the same stock rows.
+  const runSerial = (fn) => { const p = serialRef.current.then(fn, fn); serialRef.current = p.catch(() => {}); return p; };
   const [toteScans, setToteScans] = useState({});
   const [barcodeInput, setBarcodeInput] = useState("");
   const [lastScannedProduct, setLastScannedProduct] = useState(null);
@@ -5771,15 +5775,18 @@ function PickingView({ token, profile, showToast }) {
     return lineStatus;
   };
 
-  const finalizeOrderPicking = async (orderId, lineStatus) => {
+  const finalizeOrderPicking = (orderId, lineStatus) => {
+    if (finalizingRef.current[orderId]) return finalizingRef.current[orderId]; // same order → share the one run
+    const p = runSerial(() => finalizeOrderPickingInner(orderId, lineStatus));
+    finalizingRef.current[orderId] = p;
+    p.then(ok => { if (!ok) delete finalizingRef.current[orderId]; }, () => { delete finalizingRef.current[orderId]; });
+    return p;
+  };
+  const finalizeOrderPickingInner = async (orderId, lineStatus) => {
     const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
     const task = toteTasks.find(t => t.order_id === orderId);
     if (!task) return true;
     if (completedOrderIds[orderId]) return true;
-    // In-flight guard: the last-scan auto-finalize is not awaited, so "Complete tote picking"
-    // (or a double scan) could otherwise run this same order a second time in parallel.
-    if (finalizingRef.current[orderId]) return true;
-    finalizingRef.current[orderId] = true;
     try {
       // Order of operations matters: the pick_task is marked "picked" LAST. Previously it was
       // marked first, so any later failure (e.g. pack_task insert error) made the order vanish
@@ -5813,9 +5820,8 @@ function PickingView({ token, profile, showToast }) {
       showToast(`✅ Order ${order?.external_order_id || ""} — picking complete, Packing ke liye chala gaya`);
       return true;
     } catch (e) {
-      finalizingRef.current[orderId] = false;
       const order = orders[orderId];
-      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed: ${(e.message || "").slice(0, 80)}`, "err");
+      showToast(`⚠ Order ${order?.external_order_id || ""} finalize failed: ${(e.message || "").slice(0, 240)}`, "err");
       return false;
     }
   };
@@ -5825,7 +5831,8 @@ function PickingView({ token, profile, showToast }) {
   // created (flagged is_incomplete_transfer) so the Packer sees it and can hand off whatever
   // was ALREADY physically picked into a dedicated Incomplete-Hold location — instead of that
   // stock just sitting untracked in a tote that can never be freed.
-  const finalizeOrderAsIncomplete = async (orderId, lineStatus) => {
+  const finalizeOrderAsIncomplete = (orderId, lineStatus) => runSerial(() => finalizeOrderAsIncompleteInner(orderId, lineStatus));
+  const finalizeOrderAsIncompleteInner = async (orderId, lineStatus) => {
     const toteTasks = tasks.filter(t => t.tote_id === openTote.id);
     const task = toteTasks.find(t => t.order_id === orderId);
     if (!task) return true;
@@ -10781,23 +10788,44 @@ function exportCSV(filename, headers, rows) {
 // Add/subtract on-hand qty at a SPECIFIC bin (or the "unassigned" row when binId is null).
 // activity is optional { type, userId } — when passed, stamps last_activity_type/by/at on the
 // row so the Inventory Ledger can show who last touched a bin and with what kind of movement.
+// Stock movement. Preferred path = ONE atomic database call (inventory_add) that locks the
+// (warehouse, product, bin) row while it changes it, so two people / two orders moving the same
+// product at the same moment can neither create a duplicate row (23505) nor overwrite each
+// other's quantity. If the function isn't installed yet, the older read-then-write path is used —
+// now made duplicate-safe as well.
+let _invRpcMissing = false;
 async function addOnHand(token, warehouseId, productId, binId, qtyDelta, activity) {
+  if (!_invRpcMissing) {
+    try {
+      await sb(`/rest/v1/rpc/inventory_add`, { method: "POST", token, body: { p_warehouse: warehouseId, p_product: productId, p_bin: binId || null, p_delta: qtyDelta, p_type: activity?.type || null, p_user: activity?.userId || null } });
+      return;
+    } catch (e) {
+      if (!/PGRST202|find the function/i.test(String(e.message || ""))) throw e;
+      _invRpcMissing = true; // not installed — fall through to the legacy path
+    }
+  }
   const filter = binId
     ? `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=eq.${binId}`
     : `warehouse_id=eq.${warehouseId}&product_id=eq.${productId}&bin_id=is.null`;
-  const existing = await sb(`/rest/v1/inventory?${filter}&select=*`, { token });
   const stamp = activity ? { last_activity_type: activity.type, last_activity_by: activity.userId || null, last_activity_at: new Date().toISOString() } : {};
-  if (existing && existing.length > 0) {
-    const row = existing[0];
-    const newQty = row.on_hand + qtyDelta;
-    if (newQty <= 0) {
-      await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: 0, ...stamp } });
-    } else {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const existing = await sb(`/rest/v1/inventory?${filter}&select=*`, { token });
+    if (existing && existing.length > 0) {
+      const row = existing[0];
+      const newQty = Math.max(0, row.on_hand + qtyDelta);
       await sb(`/rest/v1/inventory?id=eq.${row.id}`, { method: "PATCH", token, body: { on_hand: newQty, ...stamp } });
+      return;
     }
-  } else if (qtyDelta > 0) {
-    await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, bin_id: binId, on_hand: qtyDelta, ...stamp } });
+    if (!(qtyDelta > 0)) return;
+    try {
+      await sb(`/rest/v1/inventory`, { method: "POST", token, body: { warehouse_id: warehouseId, product_id: productId, bin_id: binId, on_hand: qtyDelta, ...stamp } });
+      return;
+    } catch (e) {
+      if (!/23505|duplicate key/i.test(String(e.message || ""))) throw e;
+      // someone created the row a moment ago — loop and add to it instead
+    }
   }
+  throw new Error("Inventory update conflict — dobara try karein");
 }
 // Adjust the reservation counter for a product (independent of any specific bin).
 // ====================== INVENTORY MOVEMENT (WMS standard) ======================
@@ -10834,8 +10862,18 @@ async function stagePickedLine(token, warehouseId, line, qty, userId) {
   const claimed = await sb(`/rest/v1/pick_task_lines?id=eq.${line.id}&staged_qty=is.null`, { method: "PATCH", token, prefer: "return=representation", body: { staged_qty: move } });
   if (!claimed || !claimed.length) return 0; // already staged by an earlier/parallel call
   if (move > 0) {
-    await addOnHand(token, warehouseId, line.product_id, line.bin_id, -move, { type: "pick", userId });
-    await addOnHand(token, warehouseId, line.product_id, staging.id, move, { type: "pick", userId });
+    // All-or-nothing: if anything fails half-way, put the units back and release the claim, so the
+    // stock is never "gone from the bin but not in staging" and a retry starts clean.
+    let srcTaken = false;
+    try {
+      await addOnHand(token, warehouseId, line.product_id, line.bin_id, -move, { type: "pick", userId });
+      srcTaken = true;
+      await addOnHand(token, warehouseId, line.product_id, staging.id, move, { type: "pick", userId });
+    } catch (e) {
+      try { if (srcTaken) await addOnHand(token, warehouseId, line.product_id, line.bin_id, move, { type: "pick_rollback", userId }); } catch (e2) { /* surfaced by the original error */ }
+      try { await sb(`/rest/v1/pick_task_lines?id=eq.${line.id}`, { method: "PATCH", token, body: { staged_qty: null } }); } catch (e2) { /* */ }
+      throw e;
+    }
   }
   return move;
 }
