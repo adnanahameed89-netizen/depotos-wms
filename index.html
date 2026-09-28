@@ -67,7 +67,7 @@
 
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
-const APP_BUILD = "2026-09-28.11";
+const APP_BUILD = "2026-09-28.12";
 
 /* ---------- Supabase connection ---------- */
 const SUPABASE_URL = "https://bjqpisuhvawzixgrzpqd.supabase.co";
@@ -5182,6 +5182,8 @@ function OrdersView({ token, profile, showToast, setView }) {
   };
 
   const retryReserve = async () => {
+    // The order is being sent for a fresh pick: its old "Incomplete — transfer only" packing card is now obsolete.
+    try { await sb(`/rest/v1/pack_tasks?order_id=eq.${openOrder.id}&is_incomplete_transfer=eq.true&status=eq.pending`, { method: "PATCH", token, body: { status: "superseded" } }); } catch (e) { /* best-effort */ }
     await sb(`/rest/v1/sales_orders?id=eq.${openOrder.id}`, { method: "PATCH", token, body: { status: "received" } });
     await reserveAndQueue({ ...openOrder, status: "received" });
     setOpenOrder(null);
@@ -6507,8 +6509,14 @@ function PackingView({ token, profile, showToast }) {
       setStaff(s || []);
       // One card per order: legacy duplicate pack_tasks (created by the old finalize race) must
       // never show as two parcels. The DB unique index prevents new ones.
+      // A "Transfer only" card belongs to an order that is INCOMPLETE. Once that order has been
+      // corrected and picked again its status is no longer "incomplete" — the old card is stale:
+      // hide it and retire it (a packer may update pack tasks; a picker could not).
+      const ordNow = Object.fromEntries((o || []).map(x => [x.id, x]));
+      const staleInc = (t || []).filter(x => x.is_incomplete_transfer && ordNow[x.order_id] && ordNow[x.order_id].status !== "incomplete");
+      for (const x of staleInc) sb(`/rest/v1/pack_tasks?id=eq.${x.id}&status=eq.pending`, { method: "PATCH", token, body: { status: "superseded" } }).catch(() => {});
       const seenOrders = new Set();
-      setTasks((t || []).filter(x => { const k = x.order_id + (x.is_incomplete_transfer ? "|inc" : ""); if (seenOrders.has(k)) return false; seenOrders.add(k); return true; }));
+      setTasks((t || []).filter(x => !staleInc.includes(x)).filter(x => { const k = x.order_id + (x.is_incomplete_transfer ? "|inc" : ""); if (seenOrders.has(k)) return false; seenOrders.add(k); return true; }));
       setOrders(Object.fromEntries((o || []).map(x => [x.id, x])));
       setTotes(tt || []);
       setBins(b || []);
@@ -6720,7 +6728,14 @@ function PackingView({ token, profile, showToast }) {
   const transferToIncompleteHold = async (task) => {
     setTransferring(true);
     try {
-      const pickTasks = await sb(`/rest/v1/pick_tasks?order_id=eq.${task.order_id}&select=*&order=id.desc&limit=1`, { token });
+      const ordNow = await sb(`/rest/v1/sales_orders?id=eq.${task.order_id}&select=status`, { token });
+      if (ordNow?.[0]?.status !== "incomplete") {
+        try { await sb(`/rest/v1/pack_tasks?id=eq.${task.id}&status=eq.pending`, { method: "PATCH", token, body: { status: "superseded" } }); } catch (e2) { /* best-effort */ }
+        showToast("Yeh order ab Incomplete nahi raha (dobara pick ho chuka hai) — is card ko ignore karein, normal card se pack karein", "err");
+        setTransferring(false); setOpenTask(null); load(); return;
+      }
+      // (uuid ids don't sort by time — the latest pick is the one completed last)
+      const pickTasks = await sb(`/rest/v1/pick_tasks?order_id=eq.${task.order_id}&select=*&order=completed_at.desc.nullslast&limit=1`, { token });
       const pt = pickTasks && pickTasks[0];
       const ptLines = pt ? await sb(`/rest/v1/pick_task_lines?pick_task_id=eq.${pt.id}&select=*`, { token }) : [];
       const pickedLines = (ptLines || []).filter(l => Number(l.qty_picked || 0) > 0);
@@ -10965,7 +10980,13 @@ async function getSpecialBin(token, warehouseId, code) {
   let rows = await sb(`/rest/v1/bins?warehouse_id=eq.${warehouseId}&code=eq.${encodeURIComponent(code)}&select=*`, { token });
   let bin = rows && rows[0];
   if (!bin) {
-    const created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: warehouseId, code } });
+    let created;
+    try {
+      created = await sb(`/rest/v1/bins`, { method: "POST", token, prefer: "return=representation", body: { warehouse_id: warehouseId, code } });
+    } catch (e) {
+      if (/42501|row-level security/i.test(String(e.message || ""))) throw new Error(`Special bin "${code}" database mein nahi hai aur is role ko bananay ki ijazat nahi — Admin se create_special_bins.sql chalwayein`);
+      throw e;
+    }
     bin = created[0];
   }
   _specialBinCache[key] = bin;
