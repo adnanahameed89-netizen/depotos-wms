@@ -7702,7 +7702,7 @@ function StockingReceivingBase81({
       short: 0,
       excess: 0
     });
-    return React.createElement("p", null, "Arrival DC: ", React.createElement("b", null, D.arrival_qty), " · Physical received: ", React.createElement("b", null, e.base + e.excess), " · Short: ", React.createElement("b", null, e.short), " · Excess (RTV): ", React.createElement("b", null, e.excess), " · DC reconciliation: ", React.createElement("b", null, e.base + Math.max(e.short, e.excess)), React.createElement("br", null), "Enter only demand-covered pieces in OK; extra pieces go in Excess. Offsetting Short/Excess stay recorded by item and are not counted twice in the DC comparison.");
+    return React.createElement("p", null, "Arrival DC: ", React.createElement("b", null, D.arrival_qty), " · Physical received: ", React.createElement("b", null, e.base + e.excess), " · Short: ", React.createElement("b", null, e.short), " · Excess (RTV): ", React.createElement("b", null, e.excess), " · DC reconciliation: ", React.createElement("b", null, e.base + e.short + e.excess), React.createElement("br", null), "Enter only demand-covered pieces in OK; extra pieces go in Excess. DC-listed Short and Excess both count toward DC reconciliation. Physical received excludes Short.");
   })(), D.inspection_counted && React.createElement("p", null, "Actual received: ", $.reduce((e, t) => e + ["ok_qty", "dmg_qty", "mnf_qty", "wrong_qty", "excess_qty", "repair_qty"].reduce((e, a) => e + Number(t[a] || 0), 0), 0), " pcs. Sirf is delivery ka actual short claim enter karein; pending PO quantity short nahi hai. Repair in-house rahega."), React.createElement("div", {
     style: {
       display: "flex",
