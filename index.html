@@ -9940,7 +9940,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
   const [history72,setHistory72]=useState("");
   const n = useStkWarehouseId(e, t),
     r = "admin" === t.role,
-    o = "warehouse_lead" === t.role,
+    o = ["warehouse_lead","outbound_executive"].includes(t.role),
     l = r || o,
     [i, c] = useState("ledger"),
     [s, d] = useState([]),
@@ -10157,7 +10157,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
         body: {
           status: "pending_verification"
         }
-      }), a("✅ Warehouse Lead ki verification ke liye submit ho gaya"), await he(), ge({
+      }), a("✅ Warehouse Lead / Outbound Executive ki verification ke liye submit ho gaya"), await he(), ge({
         ...V,
         status: "pending_verification"
       }));
@@ -10498,7 +10498,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       color: "approved" === e.status ? "#4CAF7D" : "pending_admin_approval" === e.status ? "#F5A623" : "pending_verification" === e.status ? "#5B9EE8" : "#B084F5",
       borderColor: "approved" === e.status ? "#4CAF7D" : "pending_admin_approval" === e.status ? "#F5A623" : "pending_verification" === e.status ? "#5B9EE8" : "#B084F5"
     }
-  }, "counting" === e.status ? "Counting" : "pending_verification" === e.status ? "Pending Lead Verification" : "pending_admin_approval" === e.status ? "Pending Admin Approval" : "Approved")), React.createElement("td", {
+  }, "counting" === e.status ? "Counting" : "pending_verification" === e.status ? "Pending Lead / Outbound Verification" : "pending_admin_approval" === e.status ? "Pending Admin Approval" : "Approved")), React.createElement("td", {
     style: S.td
   }, React.createElement("button", {
     style: S.secondaryBtnSm,
@@ -10524,7 +10524,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       fontWeight: 400,
       fontSize: 13
     }
-  }, " — Assigned to ", P(V.assigned_to))), l && !["approved", "cancelled"].includes(V.status) && React.createElement("button", {
+  }, " — Assigned to ", P(V.assigned_to))), (r || t.role === "warehouse_lead") && !["approved", "cancelled"].includes(V.status) && React.createElement("button", {
     style: S.dangerBtnSm,
     onClick: wmsAction55(async () => {
       if (window.confirm("Count cancel kar ke location movements release karein? Saved stock adjustments change nahi hongi.")) try {
@@ -10776,7 +10776,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       marginTop: 14
     },
     onClick: wmsAction55(De)
-  }, "✓ Submit for Warehouse Lead Verification") : React.createElement("div", {
+  }, "✓ Submit for Lead / Outbound Verification") : React.createElement("div", {
     style: {
       color: "#8A8272",
       fontSize: 12,
@@ -10875,7 +10875,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       marginTop: 14
     },
     onClick: wmsAction55(De)
-  }, "✓ Submit for Warehouse Lead Verification"), "pending_verification" === V.status && o && React.createElement("div", {
+  }, "✓ Submit for Lead / Outbound Verification"), "pending_verification" === V.status && o && React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -10924,7 +10924,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       fontSize: 12,
       marginTop: 14
     }
-  }, "⏳ Warehouse Lead ki verification ka intezar hai."), "pending_admin_approval" === V.status && r && React.createElement("div", {
+  }, "⏳ Warehouse Lead / Outbound Executive ki verification ka intezar hai."), "pending_admin_approval" === V.status && r && React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -10934,7 +10934,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       fontSize: 12,
       marginBottom: 10
     }
-  }, "Warehouse Lead ne verify kar diya hai (", fmtTime(V.verified_at), ")."), React.createElement("div", {
+  }, "Lead / Outbound Executive ne verify kar diya hai (", fmtTime(V.verified_at), ")."), React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
