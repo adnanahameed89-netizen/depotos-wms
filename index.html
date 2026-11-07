@@ -2911,7 +2911,46 @@ function PutawayView({token:e,profile:t,showToast:a}){const [reviewWarning93,set
     message && h("p",{role:"status"},message));
 }
 
-function OrdersView({
+function HWTransfers112({token,profile,showToast,warehouse,documentId=null,lines=[],onChanged}) {
+ const h=React.createElement,isStock=warehouse==='034a5504-3d8b-4b88-acdd-9fc6d98ac2da';
+ const [data,setData]=useState({orders:[],claims:[]}),[error,setError]=useState(''),[busy,setBusy]=useState(false),[search,setSearch]=useState(''),[lineId,setLine]=useState(''),[qty,setQty]=useState(''),[reason,setReason]=useState('');
+ const lock=useRef(false);
+ const reviewer=isStock&&['admin','warehouse_lead','supervisor','outbound_executive'].includes(profile.role);
+ const reporter=isStock&&['admin','warehouse_lead','supervisor','putaway_officer'].includes(profile.role);
+ const replacer=!isStock&&['admin','warehouse_lead','supervisor'].includes(profile.role);
+ async function load(){const value=await wmsRead59(token,'wms_hw_board112',{p_wh:warehouse,p_search:search.trim(),p_document:documentId});setData(value);}
+ async function run(fn){if(lock.current)return;lock.current=true;setBusy(true);setError('');try{await fn();}catch(e){setError(e.message||String(e));}finally{lock.current=false;setBusy(false);}}
+ useEffect(()=>{run(load);},[warehouse,documentId]);
+ const button=(label,fn,disabled=false)=>h('button',{type:'button',style:S.secondaryBtnSm,disabled:busy||disabled,onClick:()=>run(fn)},label);
+ const td=v=>h('td',{style:S.td},v),th=v=>h('th',{style:S.th},v);
+ async function report(){if(!lineId)throw Error('Select a pending HW item.');const n=Number(qty);if(!Number.isSafeInteger(n)||n<=0||reason.trim().length<3)throw Error('Enter whole short quantity and reason.');await wmsRpc(token,'wms_hw_claim112',{p_line:lineId,p_qty:n,p_reason:reason.trim()},{once:true});setQty('');setReason('');await load();await onChanged?.();showToast('Short claim submitted for Executive verification.');}
+ async function review(c,approve){const note=window.prompt(approve?'Confirm verified shortage — enter verification note':'Reject shortage — enter reason');if(note===null)return;if(note.trim().length<3)throw Error('A verification note is required.');await wmsRpc(token,'wms_hw_review112',{p_claim:c.id,p_approve:approve,p_note:note.trim()},{once:true});await load();await onChanged?.();showToast(approve?'Shortage approved; visible in Ecommerce HW pending.':'Rejected; quantity available for putaway again.');}
+ async function replace(c){const left=Number(c.qty)-Number(c.replacement_qty);const input=window.prompt('Replacement pieces to send (maximum '+left+'). Only this quantity will enter normal picking.',String(left));if(input===null)return;const n=Number(input);if(!Number.isSafeInteger(n)||n<1||n>left)throw Error('Quantity must be within the pending shortage.');const r=await wmsRpc(token,'wms_hw_replace112',{p_claim:c.id,p_qty:n},{once:true});await load();showToast(r.reference+' · '+(r.allocation?.state==='short'?'Stock unavailable — replacement is in Incomplete.':'Replacement queued for normal picking. Refresh Sales Orders to see it.'));}
+ const orderRows=data.orders.map(o=>h('tr',{key:o.id},td(o.customer_order),td(o.ordered_qty),td(o.sent_qty),td(o.received_qty),td(o.pending_qty),td(Number(o.pending_qty)===0?'Complete':Number(o.received_qty)>0||Number(o.held_short_qty)>0?'Partial':Number(o.unverified_short_qty)>0?'Short claim verification':'Awaiting receipt')));
+ const claimRows=data.claims.map(c=>{
+ const actions=[];
+ if(reviewer&&c.state==='pending')actions.push(button('Verify shortage',()=>review(c,true)),button('Reject',()=>review(c,false)));
+ if(replacer&&c.state==='approved'&&Number(c.qty)>Number(c.replacement_qty))actions.push(button('Create replacement picking',()=>replace(c)));
+ for(const r of c.replacements||[])actions.push(h('div',{key:r.order_id,style:{fontSize:11,overflowWrap:'anywhere'}},r.reference+' · '+r.qty+' pcs · '+r.status));
+ return h('tr',{key:c.id},td(c.customer_order+' / '+c.barcode),td(c.qty),td(c.state+' · '+c.reason+(c.review_note?' · '+c.review_note:'')),td(c.replacement_qty),td(h(React.Fragment,null,...actions)));
+ });
+ const table=(headers,rows)=>h('div',{style:{overflowX:'auto',marginTop:10}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...headers.map(th))),h('tbody',null,...rows)));
+ return h('section',{style:{...S.panel,marginTop:12}},
+ h('div',{style:{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}},h('b',null,isStock?'HW short receipt / verification':'HW transfers · Partial / pending quantities'),button('Refresh HW',load)),
+ error&&h('p',{role:'alert',style:{color:'#d44545'}},error),
+ !documentId&&h('div',{style:{display:'flex',gap:8,marginTop:10}},h('input',{style:S.input,placeholder:'Customer Order # / tracking reference',value:search,onChange:e=>setSearch(e.target.value)}),button('Search',load)),
+ table(['Customer Order #','Original QTY','Total sent','Received / putaway','Pending QTY','HW status'],orderRows),
+ reporter&&documentId&&lines.some(l=>l.hw_transfer)&&h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginTop:12}},
+ h('select',{style:S.input,value:lineId,onChange:e=>setLine(e.target.value)},h('option',{value:''},'Select short-received item'),...lines.filter(l=>l.hw_transfer&&Number(l.available_qty)>0).map(l=>h('option',{key:l.id,value:l.id},l.barcode+' · '+l.product_name+' · pending '+l.available_qty))),
+ h('input',{style:{...S.input,width:120},type:'number',min:1,value:qty,placeholder:'Short pcs',onChange:e=>setQty(e.target.value)}),
+ h('input',{style:S.input,value:reason,placeholder:'Short receipt reason',onChange:e=>setReason(e.target.value)}),button('Submit short claim',report)),
+ data.claims.length>0&&table(['Order / Barcode','Short pcs','Status / reason','Replacement qty','Action / replacement reference'],claimRows),
+ !data.orders.length&&!error&&h('p',null,'No matching HW transfers. New HW dispatches appear here after installation.'),
+ h('small',null,'Original order quantity stays fixed. Total sent includes replacements; pending closes when received pieces are put away. Shows up to 200 orders / 500 claims; use search for older orders.'));
+}
+function OrdersView(props){return React.createElement(React.Fragment,null,['admin','warehouse_lead','supervisor'].includes(props.profile.role)&&React.createElement(HWTransfers112,{...props,warehouse:'6591c8c8-d223-4fe2-abdc-70bce5303ca2'}),React.createElement(OrdersBase112,props));}
+
+function OrdersBase112({
   token: e,
   profile: t,
   showToast: a,
@@ -18504,7 +18543,7 @@ function StockingIncoming81({
     }
   };
   const load = async (id = doc?.id) => {
-    setData(await wmsRead59(token, 'stk_incoming_board81', {
+    setData(await wmsRead59(token, 'stk_incoming_board112', {
       p_wh: wh,
       p_search: search.trim(),
       p_document: id || null
@@ -18568,7 +18607,7 @@ function StockingIncoming81({
   });
   const line = data.lines.find(l => l.barcode === barcode.trim());
   const shelve = () => run(async () => {
-    if (!line || !Number.isInteger(Number(qty)) || Number(qty) <= 0) throw Error('Scan a matching product and enter valid quantity.');
+    if (!line || !Number.isInteger(Number(qty)) || Number(qty) <= 0 || Number(qty)>Number(line.available_qty)) throw Error('Scan a matching product and enter valid quantity.');
     const r = await wmsRpc(token, 'stk_incoming_putaway81', {
       p_line: line.id,
       p_barcode: barcode.trim(),
@@ -18586,7 +18625,7 @@ function StockingIncoming81({
   });
   return /*#__PURE__*/React.createElement("section", {
     className: "w60-panel"
-  }, /*#__PURE__*/React.createElement("h2", null, "Incoming Shop STR"), /*#__PURE__*/React.createElement("p", null, "Reference = actual Odoo STR · Source Document = sending shop. Receive → Assign → Product / Bin / Qty → Putaway."), busy && /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("h2", null, "Incoming STR · Shops / Ecommerce HW"), /*#__PURE__*/React.createElement("p", null, "Reference = actual Odoo STR · Source Document = sending shop. Receive → Assign → Product / Bin / Qty → Putaway. HW dispatches appear automatically; report missing pieces using Short claim."), busy && /*#__PURE__*/React.createElement("p", {
     role: "status",
     className: "w60-notice"
   }, "Processing… please wait. Do not repeat the action."), error && /*#__PURE__*/React.createElement("p", {
@@ -18646,7 +18685,7 @@ function StockingIncoming81({
     style: {
       width: '100%'
     }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['Odoo STR', 'From shop', 'Items', 'Received pcs', 'Shelved', 'Pending', 'Status', 'Action'].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['Odoo STR', 'From shop', 'Items', 'Expected pcs', 'Shelved', 'Pending', 'Status', 'Action'].map(h => /*#__PURE__*/React.createElement("th", {
     key: h
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, data.documents.map(d => /*#__PURE__*/React.createElement("tr", {
     key: d.id
@@ -18661,7 +18700,7 @@ function StockingIncoming81({
       setBin('');
       setQty('');
     })
-  }, "Open"))))))), !data.documents.length && /*#__PURE__*/React.createElement("p", null, "No matching incoming STR tasks."), /*#__PURE__*/React.createElement("small", null, "Up to 200 matching STRs; use search to narrow results.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", null, doc.reference, " · From ", doc.source_shop), executive && /*#__PURE__*/React.createElement("div", {
+  }, "Open"))))))), !data.documents.length && /*#__PURE__*/React.createElement("p", null, "No matching incoming STR tasks."), /*#__PURE__*/React.createElement("small", null, "Up to 200 matching STRs; use search to narrow results.")) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("h3", null, doc.reference, " · From ", doc.source_shop),doc.hw_transfer&&React.createElement(HWTransfers112,{token,profile,showToast,warehouse:wh,documentId:doc.id,lines:data.lines,onChanged:()=>load(doc.id)}), executive && /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: 10
@@ -18678,7 +18717,7 @@ function StockingIncoming81({
     value: o.id
   }, o.name))), /*#__PURE__*/React.createElement("button", {
     style: S.primaryBtnSm,
-    disabled: busy || !officer || !data.lines.some(l => Number(l.qty) > Number(l.putaway_qty)),
+    disabled: busy || !officer || !data.lines.some(l => Number(l.available_qty) > 0),
     onClick: assign
   }, "Assign remaining stock")), canShelve && /*#__PURE__*/React.createElement("div", {
     style: {
@@ -18701,7 +18740,7 @@ function StockingIncoming81({
       setQty('');
     },
     showToast: showToast
-  }), line && /*#__PURE__*/React.createElement("p", null, line.product_name, " · Pending ", Number(line.qty) - Number(line.putaway_qty), " pcs"), /*#__PURE__*/React.createElement("label", null, "2. Bin location", /*#__PURE__*/React.createElement("input", {
+  }), line && /*#__PURE__*/React.createElement("p", null, line.product_name, " · Available for putaway ", Number(line.available_qty), " pcs · Short claim ", Number(line.short_qty||0), " pcs"), /*#__PURE__*/React.createElement("label", null, "2. Bin location", /*#__PURE__*/React.createElement("input", {
     style: S.input,
     disabled: busy,
     value: bin,
@@ -18729,11 +18768,11 @@ function StockingIncoming81({
     style: {
       width: '100%'
     }
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['Barcode', 'Product', 'Received', 'Shelved', 'Pending', 'Sale price', 'Officer'].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['Barcode', 'Product', 'Expected', 'Shelved', 'Pending', 'Short claim', 'Sale price', 'Officer'].map(h => /*#__PURE__*/React.createElement("th", {
     key: h
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, data.lines.map(l => /*#__PURE__*/React.createElement("tr", {
     key: l.id
-  }, /*#__PURE__*/React.createElement("td", null, l.barcode), /*#__PURE__*/React.createElement("td", null, l.product_name), /*#__PURE__*/React.createElement("td", null, l.qty), /*#__PURE__*/React.createElement("td", null, l.putaway_qty), /*#__PURE__*/React.createElement("td", null, Number(l.qty) - Number(l.putaway_qty)), /*#__PURE__*/React.createElement("td", null, l.sale_price ?? '—'), /*#__PURE__*/React.createElement("td", null, l.officer || 'Not assigned'))))))));
+  }, /*#__PURE__*/React.createElement("td", null, l.barcode), /*#__PURE__*/React.createElement("td", null, l.product_name), /*#__PURE__*/React.createElement("td", null, l.qty), /*#__PURE__*/React.createElement("td", null, l.putaway_qty), /*#__PURE__*/React.createElement("td", null, Number(l.available_qty)), React.createElement("td",null,Number(l.short_qty||0)), /*#__PURE__*/React.createElement("td", null, l.sale_price ?? '—'), /*#__PURE__*/React.createElement("td", null, l.officer || 'Not assigned'))))))));
 }
 function deadStockCsv83(rows, stocking) {
   const headers = stocking ? ['Supplier', 'Barcode', 'Product Name', 'Department', 'Available Qty', 'Ageing Days'] : ['Barcode', 'Product Name', 'Department', 'Available Qty', 'Ageing Days'];
