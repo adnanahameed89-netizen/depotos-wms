@@ -16025,112 +16025,52 @@ function StockingPartial67({
     onClick: save
   }, busy ? 'Saving…' : 'Release ' + pcs + ' pcs & Assign Packing')), /*#__PURE__*/React.createElement("small", null, selected.length, " selected barcode lines · ", order.destination, " only · No second inventory deduction at STR creation."));
 }
-function StockingIncomplete67({
-  token,
-  profile,
-  showToast,
-  onChanged
-}) {
-  const wh = useStkWarehouseId(token, profile),
-    [data, setData] = useState({
-      total: 0,
-      rows: []
-    }),
-    [open, setOpen] = useState(false),
-    [offset, setOffset] = useState(0),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(''),
-    [qty, setQty] = useState({}),
-    lock = useRef(false);
-  const load = async (page = offset) => {
-    setBusy(true);
-    try {
-      setData(await wmsRead59(token, 'stk_incomplete_board67', {
-        p_wh: wh,
-        p_offset: page
-      }));
-      setOffset(page);
-      setError('');
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const resume = async r => {
-    if (lock.current) return;
-    const n = Number(qty[r.id]);
-    if (!Number.isInteger(n) || n < 1 || n > Number(r.remaining)) {
-      setError('Enter valid quantity to return for assignment');
-      return;
-    }
-    lock.current = true;
-    setBusy(true);
-    try {
-      await wmsRpc(token, 'stk_incomplete_resume67', {
-        p_id: r.id,
-        p_qty: n
-      }, {
-        once: true
-      });
-      showToast('Returned to original reference. Select its department and assign Picker.');
-      await load();
-      onChanged?.();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      lock.current = false;
-      setBusy(false);
-    }
-  };
-  return /*#__PURE__*/React.createElement("section", {
-    className: "str58-panel"
-  }, /*#__PURE__*/React.createElement("button", {
-    style: S.secondaryBtnSm,
-    disabled: busy,
-    onClick: () => {
-      setOpen(!open);
-      if (!open) load(0);
-    }
-  }, /*#__PURE__*/React.createElement("b", null, "Incomplete demand"), " · ", open ? 'Hide' : 'View / Refresh'), /*#__PURE__*/React.createElement("small", null, " No-stock / PNA demand awaiting pickable stock. Requeueing demand does not move inventory. Unassigned shortages stay in the reference item list."), error && /*#__PURE__*/React.createElement("p", {
-    role: "alert"
-  }, error), busy && /*#__PURE__*/React.createElement("p", {
-    role: "status"
-  }, "Please wait…"), open && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", null, data.total, " pending records"), /*#__PURE__*/React.createElement("div", {
-    className: "str58-table"
-  }, /*#__PURE__*/React.createElement("table", null, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, ['Reference', 'Destination', 'Barcode / Product', 'Incomplete pcs', 'Free pickable (shared)', 'Reason', 'Return qty', 'Action'].map(h => /*#__PURE__*/React.createElement("th", {
-    key: h
-  }, h)))), /*#__PURE__*/React.createElement("tbody", null, data.rows.map(r => /*#__PURE__*/React.createElement("tr", {
-    key: r.id
-  }, /*#__PURE__*/React.createElement("td", null, r.reference), /*#__PURE__*/React.createElement("td", null, r.destination), /*#__PURE__*/React.createElement("td", null, r.barcode, /*#__PURE__*/React.createElement("small", null, r.product_name)), /*#__PURE__*/React.createElement("td", null, r.remaining), /*#__PURE__*/React.createElement("td", null, r.free_shared), /*#__PURE__*/React.createElement("td", null, r.reason), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("input", {
-    "aria-label": 'Resume ' + r.barcode,
-    style: {
-      ...S.input,
-      width: 100
-    },
-    type: "number",
-    min: "1",
-    max: r.remaining,
-    disabled: busy,
-    value: qty[r.id] || '',
-    onChange: e => setQty(s => ({
-      ...s,
-      [r.id]: e.target.value
-    }))
-  })), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
-    style: S.secondaryBtnSm,
-    disabled: busy || !Number(r.free_shared),
-    onClick: () => resume(r)
-  }, "Return to assignment"))))))), /*#__PURE__*/React.createElement("button", {
-    style: S.secondaryBtnSm,
-    disabled: busy || offset === 0,
-    onClick: () => load(Math.max(0, offset - 50))
-  }, "Previous"), " ", /*#__PURE__*/React.createElement("button", {
-    style: S.secondaryBtnSm,
-    disabled: busy || offset + 50 >= data.total,
-    onClick: () => load(offset + 50)
-  }, "Next")));
+function StockingIncomplete67({token,profile,showToast,onChanged}) {
+ const h=React.createElement,wh=useStkWarehouseId(token,profile);
+ const [open,setOpen]=useState(false),[data,setData]=useState({total:0,pending_qty:0,rows:[]}),[offset,setOffset]=useState(0),[search,setSearch]=useState(''),[applied,setApplied]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[selected,setSelected]=useState({}),[quantities,setQuantities]=useState({}),[reason,setReason]=useState('Fulfilled via GRN distribution'),[reference,setReference]=useState('');
+ const lock=useRef(false);
+ const canManage=['admin','warehouse_lead','supervisor','outbound_executive'].includes(profile.role);
+ const read=(page,filter)=>wmsRead59(token,'stk_incomplete_board116',{p_wh:wh,p_search:filter,p_offset:page});
+ const load=async(page=0,filter=applied)=>{const r=await read(page,filter);setData(r);setOffset(page);setApplied(filter);setSelected({});setQuantities({});};
+ const run=async(fn)=>{if(lock.current)return;lock.current=true;setBusy(true);setError('');try{await fn();}catch(e){setError(e.message||String(e));}finally{lock.current=false;setBusy(false);}};
+ const chosen=data.rows.filter(r=>selected[r.id]);
+ const qtyOf=r=>Number(quantities[r.id]??r.remaining);
+ const pcs=chosen.reduce((s,r)=>s+qtyOf(r),0);
+ const close=()=>run(async()=>{
+  if(!chosen.length)throw Error('Select at least one pending item.');
+  if(!reference.trim())throw Error('Enter the GRN/distribution reference or closure note.');
+  const lines=chosen.map(r=>{const qty=qtyOf(r);if(!Number.isSafeInteger(qty)||qty<=0||qty>Number(r.remaining))throw Error('Invalid close quantity for '+r.barcode);return {id:r.id,qty,expected:Number(r.remaining)};});
+  if(!window.confirm(`Close ${pcs} pending pcs across ${lines.length} item lines?\nReason: ${reason}\nReference: ${reference.trim()}\nSelected unpicked quantity will no longer be available for picking/requeue. Picked stock remains in its existing packing/dispatch flow.`))return;
+  const r=await wmsRpc(token,'stk_incomplete_close116',{p_wh:wh,p_lines:lines,p_reason:reason,p_reference:reference.trim()},{once:true});
+  showToast(`${r.closed_qty} pending pcs closed; ${r.lines} item lines recorded in history.`);setReference('');await load(0,applied);onChanged?.();
+ });
+ const resume=r=>run(async()=>{
+  const value=window.prompt(`Return deferred quantity for ${r.barcode} to assignment (maximum ${r.deferred_pending}).`,String(r.deferred_pending));if(value===null)return;
+  const n=Number(value);if(!Number.isSafeInteger(n)||n<1||n>Number(r.deferred_pending))throw Error('Enter a valid whole quantity.');
+  await wmsRpc(token,'stk_incomplete_resume116',{p_demand:r.id,p_qty:n},{once:true});showToast('Returned to original reference. Assign its picker from the STR list.');await load(0,applied);onChanged?.();
+ });
+ const exportAll=()=>run(async()=>{
+  const rows=[],seen=new Set();let count=null,page=0;
+  for(;;){const r=await read(page,applied);if(count===null)count=Number(r.total);if(count!==Number(r.total))throw Error('Pending list changed during export. Please retry.');
+   for(const x of r.rows||[]){if(seen.has(x.id))throw Error('Pending list changed during export. Please retry.');seen.add(x.id);rows.push(x);}
+   if(rows.length>=count)break;if(!(r.rows||[]).length)throw Error('Export page missing. Please retry.');page+=50;
+  }
+  if(!rows.length)throw Error('No pending item lines to export.');
+  const headers=['Reference','Linked STRs','Destination','Department','Barcode','Product','Demand Qty','Picked Qty','Active Unpicked Qty','Assigned Unpicked Qty','Deferred Incomplete Qty','Total Pending Qty','Closed / Cancelled Qty','Created At'];
+  const cells=rows.map(r=>[String(r.reference||''),(r.str_numbers||[]).join(' | '),String(r.destination||''),String(r.department||''),String(r.barcode||''),String(r.product_name||''),...['demand_qty','picked_qty','active_pending','assigned_pending','deferred_pending','remaining','closed_qty'].map(k=>Number(r[k]||0)),r.created_at?new Date(r.created_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}):'']);
+  const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet([headers,...cells]);ws['!cols']=[20,28,18,20,22,48,...Array(7).fill({wch:20}),24].map(x=>typeof x==='number'?{wch:x}:x);ws['!autofilter']={ref:ws['!ref']};XLSX.utils.book_append_sheet(wb,ws,'Incomplete Orders');XLSX.writeFile(wb,'Incomplete_Orders_'+new Date().toISOString().slice(0,10)+'.xlsx');showToast(`${rows.length} pending item lines exported.`);
+ });
+ const button=(label,click,disabled=false)=>h('button',{type:'button',style:S.secondaryBtnSm,onClick:click,disabled:busy||disabled},label);
+ const cell=x=>h('td',null,x);
+ return h('section',{className:'str58-panel'},h('div',{style:{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}},button(open?'Incomplete Orders · Hide':'Incomplete Orders · Open',()=>{if(open)setOpen(false);else{setOpen(true);run(()=>load(0,''));}}),button('Export Incomplete Orders',exportAll)),
+ h('p',{style:{fontSize:12,margin:'8px 0'}},'Item-wise unpicked balances, including deferred shortages. Assigned unpicked pieces are included. Close quantities already fulfilled elsewhere to prevent repeated replenishment.'),
+ error&&h('p',{role:'alert',style:{color:'#e5484d'}},error),busy&&h('p',{role:'status'},'Please wait…'),
+ open&&h(React.Fragment,null,h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}},h('input',{style:{...S.input,maxWidth:330},placeholder:'Reference / destination / barcode / product',value:search,maxLength:100,onChange:e=>setSearch(e.target.value),onKeyDown:e=>{if(e.key==='Enter')run(()=>load(0,search.trim()));}}),button('Search / Refresh',()=>run(()=>load(0,search.trim()))),h('span',null,`${data.total} item lines · ${Number(data.pending_qty||0).toLocaleString()} pending pcs`)),
+ h('div',{className:'str58-table'},h('table',null,h('thead',null,h('tr',null,h('th',null,h('input',{type:'checkbox','aria-label':'Select all items on this page',disabled:busy||!canManage,checked:!!data.rows.length&&chosen.length===data.rows.length,onChange:e=>setSelected(e.target.checked?Object.fromEntries(data.rows.map(r=>[r.id,true])):{})})),...['Reference / STR','Destination','Barcode / Product','Demand','Picked','Active unpicked','Assigned unpicked','Deferred','Total pending','Close qty','Recovery'].map(x=>h('th',{key:x},x)))),h('tbody',null,data.rows.map(r=>h('tr',{key:r.id},cell(h('input',{type:'checkbox','aria-label':'Select '+r.reference+' '+r.barcode,disabled:busy||!canManage,checked:!!selected[r.id],onChange:e=>setSelected(s=>({...s,[r.id]:e.target.checked}))})),cell(h('span',null,r.reference,h('small',null,(r.str_numbers||[]).join(' · ')))),cell(r.destination),cell(h('span',null,r.barcode,h('small',null,r.product_name))),cell(r.demand_qty),cell(r.picked_qty),cell(r.active_pending),cell(r.assigned_pending),cell(r.deferred_pending),cell(h('b',null,r.remaining)),cell(h('input',{type:'number',min:1,max:r.remaining,step:1,'aria-label':'Close quantity '+r.barcode,style:{...S.input,width:90},disabled:busy||!selected[r.id],value:quantities[r.id]??r.remaining,onChange:e=>setQuantities(q=>({...q,[r.id]:e.target.value}))})),cell(Number(r.deferred_pending)>0?button('Return deferred',()=>resume(r)): '—')))))),
+ canManage&&h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginTop:12}},h('select',{style:{...S.input,maxWidth:270},value:reason,onChange:e=>setReason(e.target.value),disabled:busy},['Fulfilled via GRN distribution','Demand cancelled','Duplicate demand'].map(x=>h('option',{key:x,value:x},x))),h('input',{style:{...S.input,maxWidth:400},placeholder:'GRN / distribution reference or closure note (required)',maxLength:500,value:reference,onChange:e=>setReference(e.target.value),disabled:busy}),button(`Close selected balance (${chosen.length} lines · ${pcs} pcs)`,close,!chosen.length||!reference.trim())),
+ h('div',{style:{display:'flex',gap:8,alignItems:'center',marginTop:12}},button('Previous',()=>run(()=>load(Math.max(0,offset-50))),offset===0),h('span',null,`Page ${Math.floor(offset/50)+1}`),button('Next',()=>run(()=>load(offset+50)),offset+50>=Number(data.total)))));
 }
+
 function StockingBins67({
   token,
   profile,
