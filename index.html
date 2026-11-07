@@ -471,7 +471,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
     token: e.token,
     profile: C,
     showToast: q
-  }), "stkmovement" === c && "stocking" === w && React.createElement(StockingMovement72,{token:e.token,profile:C,showToast:q}), "stkinventory" === c && React.createElement(['putaway_officer','picker'].includes(C.role)?StockingReadInventory72:StockingInventoryView, {
+  }), "stkmovement" === c && "stocking" === w && React.createElement(StockingMovement72,{token:e.token,profile:C,showToast:q}), "stkcyclecount" === c && "stocking" === w && React.createElement(StockingInventoryView,{key:C.id+":"+C.warehouse_id+":count117",token:e.token,profile:C,showToast:q,countOnly:true}), "stkinventory" === c && React.createElement(['putaway_officer','picker'].includes(C.role)?StockingReadInventory72:StockingInventoryView, {
     token: e.token,
     profile: C,
     showToast: q
@@ -914,8 +914,9 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
   });
   if (o === "stocking") h = h.filter(x => x.id !== "stkpacking");
  if(o==='stocking'){if(['admin','warehouse_lead','supervisor','outbound_executive','putaway_officer','picker'].includes(a.role)&&a.nav_overrides?.stkmovement!==false&&!h.some(x=>x.id==='stkmovement'))h.push({id:'stkmovement',label:'Stock Movement',icon:'↔'});if(['putaway_officer','picker'].includes(a.role)&&a.nav_overrides?.stkinventory!==false&&!h.some(x=>x.id==='stkinventory'))h.push({id:'stkinventory',label:'Stocking Inventory',icon:'🧰'});}
+  if(o==='stocking'&&!h.some(x=>x.id==='stkcyclecount'))h.push({id:'stkcyclecount',label:'Cycle Count',icon:'🔢'});
   if(o==='stocking') {
-    const order89=['stkdashboard','stkdashboardv2','stkcatalogue','stkreceiving','stkrtv','stkrepair','stkoutbound','stkstr','stkpicking','stklogistics','stkmovement','stkbins','stkinventory','stkreports'];
+    const order89=['stkdashboard','stkdashboardv2','stkcatalogue','stkreceiving','stkrtv','stkrepair','stkoutbound','stkstr','stkpicking','stklogistics','stkmovement','stkcyclecount','stkbins','stkinventory','stkreports'];
     h=h.filter(x=>x.id!=='stkpendingdcs').sort((x,y)=>{
       const rank=id=>order89.includes(id)?order89.indexOf(id):order89.indexOf('stkinventory')-.5;
       return rank(x.id)-rank(y.id);
@@ -9957,14 +9958,16 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
 }function StockingInventoryView({
   token: e,
   profile: t,
-  showToast: a
+  showToast: a,
+  countOnly = false
 }) {
+  const token117=e;
   const [history72,setHistory72]=useState("");
   const n = useStkWarehouseId(e, t),
     r = "admin" === t.role,
-    o = ["warehouse_lead","outbound_executive"].includes(t.role),
+    o = ["warehouse_lead","supervisor","outbound_executive"].includes(t.role),
     l = r || o,
-    [i, c] = useState("ledger"),
+    [i, c] = useState(countOnly ? "cyclecount" : "ledger"),
     [s, d] = useState([]),
     [m, u] = useState([]),
     [p, y] = useState([]),
@@ -9981,6 +9984,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
     if (n) {
       E(!0);
       try {
+        if(countOnly){const ctx=await wmsRead59(e,'stk_count_context117',{p_wh:n});y(ctx.bins||[]);g(ctx.profiles||[]);j(ctx.counts||[]);E(false);return;}
         const [t, a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/stk_putaway_queue?warehouse_id=eq.${n}&status=eq.completed&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${n}&select=id,warehouse_id,product_barcode,product_name,bin_id,qty_delta,reason,source,created_by,created_at&order=id.asc`), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${n}&select=*&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&select=id,full_name,role&order=id.asc`), sbPaged(e, "/rest/v1/stk_products?select=internal_barcode,display_name,department&order=id.asc")]);
         d(t || []), u(a || []), y(r || []), g(o || []), _(l || []);
       } catch (e) {
@@ -10059,8 +10063,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
     ye = useMemo(() => p.map(e => e.id).sort((e, t) => T(e).localeCompare(T(t))), [p]),
     he = async () => {
       if (!n) return;
-      const t = await sbPaged(e, `/rest/v1/stk_cycle_counts?warehouse_id=eq.${n}&select=*&order=created_at.desc`);
-      j(t || []);
+      const ctx=await wmsRead59(e,'stk_count_context117',{p_wh:n});j(ctx.counts||[]);if(countOnly){y(ctx.bins||[]);g(ctx.profiles||[]);}
     };
   useEffect(() => {
     "cyclecount" === i && he();
@@ -10143,7 +10146,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       }
     },
     be = "piece" === (t.putaway_mode || "bulk") ? "piece" : "bulk",
-    Se = !(!V || "counting" !== V.status || t.id !== V.assigned_to || l),
+    Se = !!(V && V.status === "counting" && (t.id === V.assigned_to || l)),
     [ke, ve] = useState(""),
     [we, Ce] = useState(null),
     [xe, Be] = useState(""),
@@ -10154,11 +10157,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       const n = cleanCode(t),
         r = G.find(e => cleanCode(e.product_barcode || "") === n);
       if (!r) {
-        const e = f.find(e => cleanCode(e.internal_barcode || "") === n);
-        return Te({
-          barcode: t,
-          name: e?.display_name || t
-        }), void a(`⚠ ${t} is bin ki expected list mein nahi — Excess Item add karein`, "err");
+        try{const product=await wmsRead59(token117,'stk_count_product117',{p_count:V.id,p_barcode:t});Te(product);a(`Product ${product.barcode} found — use Add Excess Item, then enter actual counted quantity.`);}catch(error){Te(null);a(error.message,"err");}return;
       }
       if ("piece" === be) {
         const e = (r.counted_qty || 0) + 1;
@@ -10186,9 +10185,9 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
     };
   return R && "opening" !== i ? React.createElement(EmptyNote, {
     text: "Loading..."
-  }) : React.createElement("div", null, history72&&React.createElement(StockingHistory72,{token:e,profile:t,showToast:a,barcode:history72,onClose:()=>setHistory72("")}),React.createElement('button',{style:S.secondaryBtnSm,onClick:()=>{const bar=window.prompt('Exact barcode for transaction history');if(bar?.trim())setHistory72(bar.trim());}},'Barcode transaction history'),React.createElement(SectionTitle, {
-    title: "Stocking Warehouse — Inventory"
-  }), React.createElement("div", {
+  }) : React.createElement("div", null, history72&&React.createElement(StockingHistory72,{token:e,profile:t,showToast:a,barcode:history72,onClose:()=>setHistory72("")}),!countOnly&&React.createElement('button',{style:S.secondaryBtnSm,onClick:()=>{const bar=window.prompt('Exact barcode for transaction history');if(bar?.trim())setHistory72(bar.trim());}},'Barcode transaction history'),React.createElement(SectionTitle, {
+    title: countOnly ? "Stocking — Cycle Count" : "Stocking Warehouse — Inventory", action: countOnly ? React.createElement("button",{style:S.secondaryBtnSm,onClick:wmsAction55(he)},"Refresh assigned jobs") : null
+  }), !countOnly&&React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -10500,7 +10499,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
     style: S.th
   }, "Status"), React.createElement("th", {
     style: S.th
-  }))), React.createElement("tbody", null, W.filter(e => !e.parent_audit_id).map(e => React.createElement("tr", {
+  }))), React.createElement("tbody", null, W.filter(e => l ? !e.parent_audit_id : e.assigned_to === t.id).map(e => React.createElement("tr", {
     key: e.id
   }, React.createElement("td", {
     style: {
@@ -10525,10 +10524,10 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
   }, React.createElement("button", {
     style: S.secondaryBtnSm,
     onClick: wmsAction55(() => ge(e))
-  }, "Open")))), !W.filter(e => !e.parent_audit_id).length && React.createElement("tr", null, React.createElement("td", {
+  }, "Open")))), !W.filter(e => l ? !e.parent_audit_id : e.assigned_to === t.id).length && React.createElement("tr", null, React.createElement("td", {
     colSpan: 4
   }, React.createElement(EmptyNote, {
-    text: "Abhi tak koi cycle count nahi hui."
+    text: "Aap ke liye koi cycle count assigned nahi hai."
   }))))))), "cyclecount" === i && V && React.createElement("div", {
     style: S.panel
   }, React.createElement("div", {
@@ -10708,22 +10707,8 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
     onClick: wmsAction55(async () => {
       if (Pe) try {
         const n = "piece" === be,
-          r = await sb("/rest/v1/stk_cycle_count_lines", {
-            method: "POST",
-            token: e,
-            prefer: "return=representation",
-            body: {
-              cycle_count_id: V.id,
-              product_barcode: Pe.barcode,
-              product_name: Pe.name,
-              system_qty: 0,
-              is_excess: !0,
-              counted_qty: n ? 1 : null,
-              counted_by: t.id,
-              counted_at: new Date().toISOString()
-            }
-          });
-        H(e => [...e, r[0]]), Te(null), n ? a(`✓ Excess item add ho gaya — ${Pe.barcode} (1 pc counted)`) : (Ce(r[0]), Be(""), a("✓ Excess item add ho gaya — ab total qty likhein"));
+          result117=await wmsRpc(e,'stk_count_excess117',{p_count:V.id,p_barcode:Pe.barcode,p_qty:n?1:null},{once:true}),r=[result117.line];
+        H(e => [...e.filter(x=>x.id!==r[0].id), r[0]]), Te(null), n ? a(`✓ Excess item add ho gaya — ${Pe.barcode} (1 pc counted)`) : (Ce(r[0]), Be(""), a("✓ Excess item add ho gaya — ab total qty likhein"));
       } catch (e) {
         a("Add fail: " + e.message, "err");
       }
@@ -10804,7 +10789,7 @@ function StockingRtvView({token:e,profile:t,showToast:a}){const n=useStkWarehous
       fontSize: 12,
       marginTop: 14
     }
-  }, "Sab lines count hone k baad hi submit hoga."))) : React.createElement("table", {
+  }, "Har item ki actual quantity count karein. Shortage ke liye actual kam qty ya 0 / Not Found; extra item ke liye barcode scan/type karke Excess Add karein. Sab lines count hone ke baad submit hoga."))) : React.createElement("table", {
     style: {
       width: "100%",
       borderCollapse: "collapse"
