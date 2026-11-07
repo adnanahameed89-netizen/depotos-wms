@@ -1138,7 +1138,7 @@ function DashboardView({token:e,profile:t,setView:a,showToast:n}){const r={panel
           token: e
         })]);
         w(m || []), x(u || []);
-        const p = await fetchByIds(e, "products", [...n, ...i].map(e => e.product_id), "id,sales_price,department"),
+        const p = await fetchByIds(e, "products", [...n, ...i].map(e => e.product_id), "id,barcode,name,sales_price,department"),
           h = Object.fromEntries((p || []).map(e => [e.id, e]));
         X(h);
         const f = new Date(),
