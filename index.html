@@ -103,7 +103,10 @@ button[data-wms-busy55="1"]{cursor:wait!important}
 .wms-order-panels75 .wms-line-panel75 input{max-width:100%;box-sizing:border-box}
 @media(max-width:760px){.wms-order-panels75{grid-template-columns:minmax(0,1fr);gap:10px}.wms-order-panels75>.wms-line-panel75{overflow-x:auto}}
 </style>
-<style>.stk-receiving89{width:100%;max-width:none}.depotos-sidebar button{white-space:normal;overflow-wrap:anywhere}</style></head>
+<style>.stk-receiving89{width:100%;max-width:none}.depotos-sidebar button{white-space:normal;overflow-wrap:anywhere}</style><style>
+.sm88 .sm88-body{padding:16px}.sm88 .sm88-heading{margin-bottom:10px}.sm88 .sm88-kpis{margin-top:10px;gap:8px}.sm88 .sm88-kpi{padding:12px}.sm88 .sm88-value{font-size:26px;margin:6px 0}.sm88 .sm88-panel{margin-bottom:10px}.sm88 .sm88-panel-head{padding:12px 16px}.sm88 h3{font-size:16px}.sm88 .sm88-sla{padding:10px 0}.sm88 .inbound132 td,.sm88 .inbound132 th{padding:5px 7px;font-size:11px}.in132-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 16px 10px}.in132-grid>div{padding:10px;background:#f5f8fb;border-radius:7px}.in132-grid span{display:block;font-size:10px}.in132-grid strong{display:block;font-size:22px;margin-top:4px}@media(max-width:900px){.in132-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:550px){.in132-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sm88 .inbound132 table{min-width:520px}}
+</style>
+</head>
 <body>
 <div id="root"></div>
 
@@ -10437,6 +10440,114 @@ function StockDashboardAccess99({token,profile,dashboard}) {
   if(!admin && !published)return React.createElement('p',null,message);
   return React.createElement(dashboard==='stkdashboard'?StockingDashboardView:StockingDashboardV2View,{token,profile,shared:admin?null:published});
 }
+// V132 — inbound-only summaries, 09:00–18:00 PKT, Sunday/holiday exclusion.
+const INBOUND_SLA132={LOCAL:4,IMPORT:20,'E-COM':2};
+function inboundDays132(start,end,holidays=[]){
+ if(!start||!end)return null;
+ const a=Date.parse(start),b=Date.parse(end);if(!Number.isFinite(a)||!Number.isFinite(b)||b<a)return null;
+ const off=new Set(holidays),day=86400000,offset=18000000;
+ let d=Math.floor((a+offset)/day)*day-offset,total=0;
+ for(;d<b;d+=day){const local=new Date(d+offset),key=local.toISOString().slice(0,10);if(local.getUTCDay()===0||off.has(key))continue;
+ total+=Math.max(0,Math.min(b,d+18*3600000)-Math.max(a,d+9*3600000));}
+ return total/32400000;
+}
+async function inboundEnrich132(token,wh,base){
+ const [arrivals,orders,holidays,links]=await Promise.all([
+ sbPaged(token,`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${wh}&select=*&order=id.asc`),
+ sbPaged(token,`/rest/v1/stk_purchase_orders?warehouse_id=eq.${wh}&select=id,source,supplier,po_number,scheduled_date,original_scheduled_date&order=id.asc`),
+ sbPaged(token,'/rest/v1/holidays?select=holiday_date&order=holiday_date.asc'),
+ sbPaged(token,`/rest/v1/stk_excess_links101?warehouse_id=eq.${wh}&reversed_at=is.null&select=source_dc,target_dc,qty&order=request_id.asc`)]);
+ const dm=new Map(arrivals.map(r=>[r.id,r])),pm=new Map(orders.map(r=>[r.id,r])),targets=new Set(links.map(r=>r.target_dc));
+ const receipts=(base.receipts||[]).map(r=>{const d=dm.get(r.dc_id);if(!d)throw Error('DC metadata missing; previous snapshot retained');return {...r,...d,id:r.id,dc_id:r.dc_id,...pm.get(d.po_id),po_id:d.po_id,status:d.status,excess_conversion132:targets.has(r.dc_id)};});
+ // Preserve DC identity after PO metadata merge.
+ receipts.forEach(r=>{r.id=r.dc_id;});
+ return {...base,receipts,calendar132:holidays.map(r=>r.holiday_date),inbound_version132:132};
+}
+function inboundModel132(snapshot,source='',supplier=''){
+ const m=stkManagementModel36(snapshot,source,supplier);
+ if(snapshot.inbound_version132!==132)return m;
+ const days=(a,b)=>inboundDays132(a,b,snapshot.calendar132);
+ for(const r of m.rows){
+ const target=INBOUND_SLA132[stkManagementSource88(r.source)],elapsed=days(r.received_at,r.inspection_completed_at||snapshot.as_of);
+ r.sla_days=target;r.delayDays=elapsed==null||target==null?0:Math.max(0,elapsed-target);r.inspectionDays132=elapsed;
+ r.sla=elapsed==null||target==null?'Unknown':r.inspection_completed_at?(elapsed>target?'Late':'On time'):(elapsed>target?'Overdue':target-elapsed<=1?'Due today':'Within timeline');
+ }
+ m.overdue=m.open.filter(r=>r.sla==='Overdue');m.due=m.open.filter(r=>r.sla==='Due today');m.ontime=m.open.filter(r=>['Within timeline','On time'].includes(r.sla));m.unknown=m.open.filter(r=>r.sla==='Unknown');
+ m.priorities=m.open.slice().sort((a,b)=>b.delayDays-a.delayDays);
+ for(const r of m.rtv){r.age=r.picked?null:days(r.created_at,snapshot.as_of);}
+ return m;
+}
+function inboundStats132(snapshot,m){
+ const days=(a,b)=>inboundDays132(a,b,snapshot.calendar132),posted=m.posted.filter(r=>!r.excess_conversion132),conversions=m.posted.filter(r=>r.excess_conversion132);
+ const stages=[['Arrival → inspection start','received_at','inspection_started_at'],['Inspection execution','inspection_started_at','inspection_completed_at'],['Arrival → inspection complete','received_at','inspection_completed_at'],['Inspection complete → GRN posted','inspection_completed_at','grn_posted_at'],['Arrival → GRN posted','received_at','grn_posted_at']].map(([label,a,b])=>{
+ const values=posted.map(r=>days(r[a],r[b])).filter(v=>v!=null).sort((a,b)=>a-b),n=values.length;
+ return {label,n,missing:posted.length-n,average:n?values.reduce((a,b)=>a+b,0)/n:null,median:n?(values[Math.floor((n-1)/2)]+values[Math.floor(n/2)])/2:null,p90:n?values[Math.ceil(n*.9)-1]:null};});
+ const supplierMap=new Map(),valid=posted.filter(r=>Number(r.dc_qty_total)>0&&r.accepted_qty!=null);
+ for(const r of valid){const key=JSON.stringify([r.supplier||'Unknown supplier',stkManagementSource88(r.source)]),x=supplierMap.get(key)||{supplier:r.supplier||'Unknown supplier',source:stkManagementSource88(r.source),dcs:0,affected:0,dc:0,ok:0,gap:0};
+ const dc=Number(r.dc_qty_total),ok=Number(r.accepted_qty);x.dcs++;x.dc+=dc;x.ok+=ok;if(ok/dc<.95){x.affected++;x.gap+=Math.max(0,dc-ok);}supplierMap.set(key,x);}
+ const suppliers=[...supplierMap.values()].map(x=>({...x,acceptance:100*x.ok/x.dc,affectedPct:100*x.affected/x.dcs})).sort((a,b)=>b.affected-a.affected||b.gap-a.gap||a.supplier.localeCompare(b.supplier));
+ const schedule=r=>{const s=String(r.delivery_type||'').toLowerCase().replace(/[^a-z]/g,'');return ['scheduled','schedule'].includes(s)?'Scheduled':['nonscheduled','unscheduled'].includes(s)?'Non-scheduled':'Unknown';};
+ const scheduleRows=posted.map(r=>({r,type:schedule(r),date:r.original_scheduled_date||r.scheduled_date}));
+ const comparable=scheduleRows.filter(x=>x.type==='Scheduled'&&x.date&&x.r.received_at);
+ const variance=comparable.filter(x=>pkYmd(new Date(x.r.received_at))!==String(x.date).slice(0,10)).length;
+ const slaRows=posted.filter(r=>r.inspection_completed_at&&r.inspectionDays132!=null&&r.sla_days!=null),late=slaRows.filter(r=>r.inspectionDays132>r.sla_days).length;
+ return {posted,conversions,stages,suppliers,top:suppliers.filter(r=>r.affected).slice(0,10),valid,dc:valid.reduce((s,r)=>s+Number(r.dc_qty_total),0),ok:valid.reduce((s,r)=>s+Number(r.accepted_qty),0),schedule,scheduleRows,comparable,variance,slaRows,late};
+}
+function inboundSheets132(snapshot,m){
+ const a=inboundStats132(snapshot,m),v=stkManagementPresentation88(snapshot,m),fmt=n=>n==null?'':Math.round(n*100)/100;
+ const common=r=>[r.source,r.supplier,r.po_number,r.dc_number,r.grn_number||'',r.stage,r.dc_qty_total??'',r.accepted_qty??''];
+ const headers=['Source','Supplier','PO','DC','GRN','Status','DC PCS','Accepted PCS'];
+ return {
+ 'Management Summary':[['Metric','Value'],['Period from',snapshot.from_date],['Period to',snapshot.to_date],['Snapshot PKT',new Date(snapshot.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})],['Calendar','09:00–18:00 PKT; Sunday + registered holidays excluded; 9h = 1 day'],['GRNs posted',m.posted.length],['Standard receipts',a.posted.length],['Excess conversion GRNs',a.conversions.length],['Unique POs',new Set(m.posted.map(r=>r.po_id)).size],['DC acceptance %',a.dc?fmt(a.ok/a.dc*100):''],['Missing DC quantity',a.posted.length-a.valid.length],['Scheduled',a.scheduleRows.filter(x=>x.type==='Scheduled').length],['Non-scheduled',a.scheduleRows.filter(x=>x.type==='Non-scheduled').length],['Schedule unknown',a.scheduleRows.filter(x=>x.type==='Unknown').length],['Scheduled share of known delivery types %',a.scheduleRows.filter(x=>x.type!=='Unknown').length?fmt(100*a.scheduleRows.filter(x=>x.type==='Scheduled').length/a.scheduleRows.filter(x=>x.type!=='Unknown').length):''],['Schedule date variance %',a.comparable.length?fmt(100*a.variance/a.comparable.length):''],['Schedule comparable DCs',a.comparable.length],['Inspection late',a.late],['Inspection on-time %',a.slaRows.length?fmt(100*(a.slaRows.length-a.late)/a.slaRows.length):''],['Inspection SLA sample',a.slaRows.length],['Open DCs (all dates)',m.open.length],['Pending RTV PCS (all dates)',v.rtvQty],[],['Stage','Average working days','Median','P90','Valid DCs','Missing / invalid timestamps'],...a.stages.map(s=>[s.label,fmt(s.average),fmt(s.median),fmt(s.p90),s.n,s.missing]),[],['Source','GRNs posted','Inspection SLA working days'],...Object.entries(INBOUND_SLA132).map(([s,n])=>[s,m.posted.filter(r=>stkManagementSource88(r.source)===s).length,n])],
+ 'Supplier Acceptance':[['Supplier','Source','DC count','DCs below 95%','Affected DC %','DC PCS','Accepted PCS','Weighted acceptance %','Affected DC gap PCS'],...a.suppliers.map(x=>[x.supplier,x.source,x.dcs,x.affected,fmt(x.affectedPct),x.dc,x.ok,fmt(x.acceptance),x.gap])],
+ 'Posted GRNs':[[...headers,'Receipt kind','Arrival','Inspection start','Inspection complete','Posted','Arrival to inspection days','Inspection to posting days','Acceptance %','Delivery type','Committed date'],...m.posted.map(r=>[...common(r),r.excess_conversion132?'Excess conversion':'Standard',r.received_at,r.inspection_started_at,r.inspection_completed_at,r.grn_posted_at,fmt(inboundDays132(r.received_at,r.inspection_completed_at,snapshot.calendar132)),fmt(inboundDays132(r.inspection_completed_at,r.grn_posted_at,snapshot.calendar132)),!r.excess_conversion132&&Number(r.dc_qty_total)>0?fmt(100*Number(r.accepted_qty)/Number(r.dc_qty_total)):'',a.schedule(r),r.original_scheduled_date||r.scheduled_date||''])],
+ 'Pending DCs':[[...headers,'Owner','Age working days','Inspection SLA days','Overdue working days'],...m.priorities.map(r=>[...common(r),r.owner,fmt(inboundDays132(r.received_at,snapshot.as_of,snapshot.calendar132)),r.sla_days??'',fmt(r.delayDays)])],
+ 'Pending RTV':[['Source','Supplier','PO / DC','Pending RTV PCS','Oldest age working days','Status','Known cost PKR','Cost incomplete'],...v.pendingSummary.map(r=>{const matches=m.rtvPending.filter(q=>String(q.supplier||'').trim()===r.supplier&&('PO '+(q.po_number||'—')+' / DC '+(q.dc_number||'—'))===r.poDC&&({'E-COM':'Ecommerce',LOCAL:'Local',IMPORT:'Import'}[stkManagementSource88(q.source)]||'Source needs review')===r.source);return [r.source,r.supplier,r.poDC,r.qty,fmt(r.age),[...new Set(matches.map(q=>q.status))].join(' / '),fmt(matches.reduce((n,q)=>n+Number(q.cost||0),0)),matches.some(q=>q.cost==null)?'Yes':'No'];}),['TOTAL','','',v.rtvQty,'','','','']],
+ 'Definitions':[['Measure','Definition'],['Cohort','Posted KPIs: GRN posted date within selected period. Open DC and RTV: current snapshot, all dates.'],['Acceptance','Sum accepted / sum documented DC quantity; zero/missing DC quantities excluded and reported. Excess conversion GRNs excluded from acceptance and lead times.'],['Supplier ranking','Count of DCs below 95%, then affected quantity gap. Exactly 95% is not below threshold.'],['Inspection SLA','Arrival to inspection complete: Local 4, Import 20, Ecommerce 2 working days. Open inspection uses snapshot timestamp.'],['Posting','Inspection complete to posting: actual average only, no SLA.'],['Schedule variance','Arrival date different from original committed date (fallback current scheduled date); unknown dates excluded.'],['Pending RTV','Current physical balance; short/repair excluded; age starts RTV creation. No barcode rows.'],['Missing timestamps','Excluded from averages, never replaced by zero.'],['Calendar','09:00–18:00 Asia/Karachi. Sundays and holidays table excluded. Historical metrics use current 4/20/2 benchmark.']]};
+}
+function inboundExport132(snapshot,m){
+ if(snapshot.inbound_version132!==132)throw Error('Admin must refresh once for the new inbound report');
+ const wb=XLSX.utils.book_new();for(const [name,rows]of Object.entries(inboundSheets132(snapshot,m))){const safe=rows.map(row=>row.map(v=>typeof v==='string'&&/^[\s]*[=+@-]/.test(v)?"'"+v:v??''));const ws=XLSX.utils.aoa_to_sheet(safe);ws['!cols']=rows[0].map((_,i)=>({wch:i===1?32:23}));XLSX.utils.book_append_sheet(wb,ws,name);}XLSX.writeFile(wb,`Stocking_Inbound_${snapshot.from_date}_${snapshot.to_date}.xlsx`);
+}
+function InboundPanel132({snapshot,model}){
+ const h=React.createElement;if(snapshot.inbound_version132!==132)return h('p',{className:'sm88-muted'},'Admin refresh required for working-day inbound analytics. Existing snapshot remains available.');
+ const a=inboundStats132(snapshot,model),fmt=v=>v==null?'—':v.toFixed(2),pct=(x,y)=>y?(100*x/y).toFixed(1)+'%':'—';
+ const table=(headers,rows)=>h('div',{className:'sm88-table-wrap'},h('table',null,h('thead',null,h('tr',null,headers.map((x,i)=>h('th',{key:i},x)))),h('tbody',null,rows.map((row,i)=>h('tr',{key:i},row.map((x,j)=>h('td',{key:j},x)))))));
+ return h('section',{className:'sm88-panel inbound132'},h('div',{className:'sm88-panel-head'},h('div',null,h('h3',null,'Inbound performance'),h('p',{className:'sm88-muted'},'9 AM–6 PM PKT · Sunday / holidays excluded · 9 hours = 1 working day'))),
+ h('div',{className:'in132-grid'},[
+ ['POs / posted GRNs',new Set(model.posted.map(r=>r.po_id)).size+' / '+model.posted.length],['DC acceptance',pct(a.ok,a.dc)],['Inspection on time',pct(a.slaRows.length-a.late,a.slaRows.length)],['Inspection delayed',a.late],['Scheduled / non-scheduled',a.scheduleRows.filter(x=>x.type==='Scheduled').length+' / '+a.scheduleRows.filter(x=>x.type==='Non-scheduled').length],['Schedule date variance',pct(a.variance,a.comparable.length)]].map(([label,value])=>h('div',{key:label},h('span',null,label),h('strong',null,value)))),
+ table(['Stage · working days','Average','Median','P90','Sample / missing'],a.stages.map(s=>[s.label,fmt(s.average),fmt(s.median),fmt(s.p90),s.n+' / '+s.missing])),
+ table(['Source','GRNs','Inspection SLA'],Object.entries(INBOUND_SLA132).map(([s,n])=>[s,model.posted.filter(r=>stkManagementSource88(r.source)===s).length,n+' days'])),
+ h('p',{className:'sm88-muted',style:{padding:'6px 16px'}},'Excess conversion GRNs: ',a.conversions.length,' (excluded from acceptance and stage averages). Schedule unknown: ',a.scheduleRows.filter(x=>x.type==='Unknown').length,'. Missing DC quantity: ',a.posted.length-a.valid.length,'. Posting has no SLA.'),
+ h('div',{className:'sm88-panel-head'},h('h3',null,'Top 10 suppliers · DC acceptance below 95%')),
+ table(['Supplier / source','DCs','Below 95%','Affected %','Acceptance %','Gap pcs'],a.top.map(x=>[x.supplier+' / '+x.source,x.dcs,x.affected,fmt(x.affectedPct)+'%',fmt(x.acceptance)+'%',x.gap])),
+ !a.top.length&&h('p',{className:'sm88-muted',style:{padding:12}},'No eligible supplier below 95% in this period.'),
+ h('div',{className:'sm88-panel-foot'},'Ranked by affected DC count, then gap pcs. Excel includes all suppliers and document summaries.'));
+}
+async function inboundPng132(snapshot,m){
+ if(snapshot.inbound_version132!==132)throw Error('Admin must refresh once for the new inbound snapshot');
+ const a=inboundStats132(snapshot,m),v=stkManagementPresentation88(snapshot,m),c=document.createElement('canvas');c.width=1600;c.height=1260;const x=c.getContext('2d');if(!x)throw Error('Canvas unavailable');
+ const text=(s,px,py,size=18,color='#17324d')=>{x.fillStyle=color;x.font=`${size>=24?'600':'400'} ${size}px Arial`;x.fillText(String(s),px,py);};
+ const fit=(s,w,size=17)=>{x.font=`400 ${size}px Arial`;s=String(s??'—');while(x.measureText(s).width>w&&s.length)s=s.slice(0,-1);return s;};
+ const box=(y,h,title)=>{x.fillStyle='#fff';x.fillRect(24,y,1552,h);text(title,42,y+30,24);};
+ const row=(cells,y,widths)=>{let p=42;cells.forEach((s,i)=>{text(fit(s,widths[i]-12),p,y,17);p+=widths[i];});};
+ const fmt=n=>n==null?'—':Number(n).toFixed(2),pct=(n,d)=>d?(100*n/d).toFixed(1)+'%':'—';
+ x.fillStyle='#f2f5f8';x.fillRect(0,0,c.width,c.height);text('DEPOTOS · STOCKING GRN DASHBOARD',32,42,30);
+ text(`${snapshot.from_date} — ${snapshot.to_date} · ${m.source||'All sources'} · ${m.supplier||'All suppliers'}`,32,74);
+ text('9 AM–6 PM PKT · Sunday / holidays excluded · 9 hours = 1 working day',32,100,16);
+ text('As of '+new Date(snapshot.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT',32,124,16);
+ box(145,100,'Selected-period inbound performance');row(['Posted GRNs: '+m.posted.length,'Unique POs: '+new Set(m.posted.map(r=>r.po_id)).size,'DC acceptance: '+pct(a.ok,a.dc),'Inspection on time: '+pct(a.slaRows.length-a.late,a.slaRows.length)],212,[365,365,365,410]);
+ box(258,220,'Stage lead times · working days');row(['Stage','Average','Median','P90','Valid / missing'],318,[650,200,200,200,250]);a.stages.forEach((s,i)=>row([s.label,fmt(s.average),fmt(s.median),fmt(s.p90),s.n+' / '+s.missing],346+i*26,[650,200,200,200,250]));
+ box(491,105,'Source & delivery schedule');row(Object.entries(INBOUND_SLA132).map(([s,n])=>`${s}: ${m.posted.filter(r=>stkManagementSource88(r.source)===s).length} GRNs · SLA ${n}d`),547,[510,510,510]);row(['Scheduled: '+a.scheduleRows.filter(r=>r.type==='Scheduled').length,'Non-scheduled: '+a.scheduleRows.filter(r=>r.type==='Non-scheduled').length,'Date variance: '+pct(a.variance,a.comparable.length)],576,[510,510,510]);
+ box(609,205,'Suppliers · highest count of DCs below 95%');row(['Supplier / source','Total DCs','Below 95%','Acceptance','Gap pcs'],669,[680,200,200,200,240]);a.top.slice(0,5).forEach((s,i)=>row([s.supplier+' / '+s.source,s.dcs,s.affected,fmt(s.acceptance)+'%',s.gap],695+i*24,[680,200,200,200,240]));
+ box(827,205,`Priority actions · ${v.overdue.length} overdue DCs · highest 5 shown`);row(['PO / DC','Supplier','Status','Overdue days'],887,[420,520,400,200]);v.overdue.slice(0,5).forEach((r,i)=>row([r.po_number+' / '+r.dc_number,r.supplier,r.stage,fmt(r.delayDays)],913+i*24,[420,520,400,200]));
+ box(1045,115,'RTV · current pending balance, all dates');row(['Suppliers: '+v.supplierCount,'DCs: '+v.dcCount,'Pending: '+v.rtvQty+' pcs'],1104,[510,510,510]);row(v.sourceTotals.map(([s,q])=>s+': '+q+' pcs'),1134,[380,380,380,380]);
+ text('Full top 10, all pending DCs and all pending RTV references: Excel summary workbook. No barcode detail.',32,1188,16);
+ text(`Excess conversions excluded from stage/acceptance: ${a.conversions.length}. Missing DC quantities: ${a.posted.length-a.valid.length}. Schedule unknown: ${a.scheduleRows.filter(r=>r.type==='Unknown').length}.`,32,1215,16);
+ text('Inspection complete → posting is an actual average without SLA. Historical periods use current 4 / 20 / 2 day targets.',32,1240,16);
+ const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));if(!blob)throw Error('Snapshot export failed');const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`Stocking_Inbound_${snapshot.from_date}_${snapshot.to_date}.png`;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+
 function StockingDashboardView({token,profile,shared}) {
   const wh=useStkWarehouseId(token,profile);
   const [publishedAt,setPublishedAt]=useState(null);
@@ -10447,7 +10558,7 @@ function StockingDashboardView({token,profile,shared}) {
   const saved=useDashboardSnapshot(profile.role==='admin'&&wh?JSON.stringify([SUPABASE_URL,profile.id,wh,'StockingManagement36',1]):null,
     {snapshot,lastUpdated,preset,from,to,source,supplier},
     {snapshot:setSnapshot,lastUpdated:setLastUpdated,preset:setPreset,from:setFrom,to:setTo,source:setSource,supplier:setSupplier});
-  const model=useMemo(()=>snapshot?stkManagementModel36(snapshot,source,supplier):null,[snapshot,source,supplier]);
+  const model=useMemo(()=>snapshot?inboundModel132(snapshot,source,supplier):null,[snapshot,source,supplier]);
   const display=useMemo(()=>model?stkManagementPresentation88(snapshot,model):null,[snapshot,model]);
   const h=React.createElement;
   const openDetail=value=>{setDetail(value);setPage(0);};
@@ -10458,12 +10569,13 @@ function StockingDashboardView({token,profile,shared}) {
       const today=pkYmd(new Date()),start=preset==='custom'?from:preset==='today'?today:pkMonthStart(today),end=preset==='custom'?to:today;
       if(!start||!end||end<start||end>today)throw new Error('Choose valid dates through today');
       const base=await saved.track(()=>wmsRpc(token,'stk_management_snapshot_v36',{p_wh:wh,p_from:start,p_to:end}));
-      const result=await saved.track(()=>liveRtvSnapshot109(token,wh,base));
+      const enriched=await saved.track(()=>inboundEnrich132(token,wh,base));
+      const result=await saved.track(()=>liveRtvSnapshot109(token,wh,enriched));
       await saved.track(()=>publishStockDashboard99(token,wh,"stkdashboard",result,result.as_of));
       setPublishedAt(result.as_of);setSnapshot(result);setLastUpdated(result.as_of);setPage(0);
     }catch(err){setError(err.message);}finally{setBusy(false);}
   };
-  const exportSnapshot=async()=>{setExporting(true);setError('');try{await stkManagementPng36(snapshot,model);}catch(err){setError(err.message);}finally{setExporting(false);}};
+  const exportSnapshot=async()=>{setExporting(true);setError('');try{await inboundPng132(snapshot,model);}catch(err){setError(err.message);}finally{setExporting(false);}};
   if(profile.role!=='admin' && !shared)return null;
   const rows=!model?[]:detail==='rtv'?display.pendingSummary:detail==='posted'?model.posted:detail==='inspection'?model.inspecting:detail==='ready'?model.ready:detail==='overdue'?display.overdue:model.priorities;
   const money=value=>display.money(value),count=value=>display.number(value);
@@ -10479,7 +10591,7 @@ function StockingDashboardView({token,profile,shared}) {
     h('style',null,STK_MANAGEMENT_CSS88+".sm88 .sm88-sources{grid-template-columns:1fr!important}.sm88 .sm88-source-head{padding:7px 12px}.sm88 .sm88-column-labels{display:none}.sm88 .priority94-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}.sm88 .priority94-table th,.sm88 .priority94-table td{padding:7px 12px;border-bottom:1px solid var(--sm88-line,#e1e8f0);text-align:left;overflow-wrap:anywhere}.sm88 .priority94-table th{font-size:10px;font-weight:500}.sm88 .priority94-table th:nth-child(1){width:29%}.sm88 .priority94-table th:nth-child(2){width:29%}.sm88 .priority94-table th:nth-child(3){width:25%}.sm88 .priority94-table th:last-child{width:17%}.sm88 .priority94-table td:last-child,.sm88 .priority94-table th:last-child{text-align:right}@media(max-width:600px){.sm88 .priority94-table{font-size:10px}.sm88 .priority94-table td,.sm88 .priority94-table th{padding:6px 4px}}"),
     h('header',{className:'sm88-chrome'},h('div',{className:'sm88-brand'},h('span',null,'D'),'DEPOTOS'),h('div',{className:'sm88-crumb'},'Stocking warehouse / Management')),
     h('div',{className:'sm88-body'},
-      h('div',{className:'sm88-heading'},h('div',null,h('div',{className:'sm88-eyebrow'},'Management overview'),h('h2',null,'Receiving & RTV'),h('p',{className:'sm88-muted'},snapshot?`${snapshot.from_date} — ${snapshot.to_date} · ${source==='E-COM'?'Ecommerce':source||'All sources'} · ${supplier||'All suppliers'}`:'Refresh to load your first management snapshot')),
+      h('div',{className:'sm88-heading'},h('div',null,h('div',{className:'sm88-eyebrow'},'Management overview'),h('h2',null,'STOCKING GRN DASHBOARD'),h('p',{className:'sm88-muted'},snapshot?`${snapshot.from_date} — ${snapshot.to_date} · ${source==='E-COM'?'Ecommerce':source||'All sources'} · ${supplier||'All suppliers'}`:'Refresh to load your first management snapshot')),
         h('div',{className:'sm88-asof'},h('span',null,'Saved snapshot'),h('strong',null,snapshot?new Date(snapshot.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT':'Not refreshed yet'),h('span',null,'Manual refresh only'))),
       h('div',{className:'sm88-toolbar'},
         !shared&&h('div',{className:'sm88-presets'},[['today','Today'],['mtd','This month'],['custom','Custom dates']].map(([key,label])=>action(label,()=>setPreset(key),{key,'aria-pressed':preset===key}))),
@@ -10497,7 +10609,8 @@ function StockingDashboardView({token,profile,shared}) {
           ['In inspection',model.inspecting.length,`${count(model.waiting.length)} awaiting import / inspection`,'inspection'],
           ['Ready to post',model.ready.length,`${count(model.open.filter(r=>r.costIncomplete).length)} open values incomplete`,'ready']
         ].map(([label,value,note,key])=>h('button',{type:'button',key,className:'sm88-kpi'+(key==='posted'?' sm88-positive':''),onClick:wmsAction55(()=>openDetail(key))},h('span',{className:'sm88-label'},label),h('strong',{className:'sm88-value'},count(value)),h('span',{className:'sm88-muted'},note)))),
-        h('div',{className:'sm88-sla'},h('span',{className:'sm88-overdue'},h('b',null,model.overdue.length),' Overdue'),h('span',null,h('b',null,model.due.length),' Due today'),h('span',null,h('b',null,model.ontime.length),' Within SLA'),h('span',null,h('b',null,model.unknown.length),' SLA unknown'),h('span',{className:'sm88-today'},h('b',null,model.todayPosted.length),' Posted today')),
+        h(InboundPanel132,{snapshot,model}),
+        h('div',{className:'sm88-sla'},h('span',{className:'sm88-overdue'},h('b',null,model.overdue.length),' Overdue'),h('span',null,h('b',null,model.due.length),' Due within 1 working day'),h('span',null,h('b',null,model.ontime.length),' Within SLA'),h('span',null,h('b',null,model.unknown.length),' SLA unknown'),h('span',{className:'sm88-today'},h('b',null,model.todayPosted.length),' Posted today')),
         h('section',{className:'sm88-panel','aria-label':'Priority actions'},
           h('div',{className:'sm88-panel-head'},h('div',null,h('div',{className:'sm88-eyebrow'},'Needs attention'),h('h3',null,'Priority actions'),h('p',{className:'sm88-muted'},'All overdue PO / DC · highest overdue first · all open dates')),action(`View all open (${model.open.length})`,()=>openDetail('open'))),
           display.groups.length>0&&h('div',{className:'sm88-sources',style:{'--sm88-columns':display.groups.length}},display.groups.map(group=>h('section',{className:'sm88-source',key:group.key,'aria-label':group.label+' overdue'},h('div',{className:'sm88-source-head'},h('strong',null,group.label),h('span',null,group.rows.length,' overdue')),h('div',{className:'sm88-column-labels'},h('span',null,'PO / DC · supplier'),h('span',null,'Overdue days')),sourceRows(group.rows)))),
@@ -10511,7 +10624,7 @@ function StockingDashboardView({token,profile,shared}) {
           (display.missingSupplier>0||display.missingDC>0)&&h('p',{className:'sm88-count-warning'},`Counts incomplete: ${display.missingSupplier} RTV rows missing supplier; ${display.missingDC} missing DC identity.`),
           h('div',{className:'sm88-rtv-flow'},h('div',null,h('b',null,count(model.sum(model.rtvPicked,'qty'))),' picked',h('span',{className:'sm88-muted'},'Selected period')),h('div',null,h('b',null,count(model.sum(model.rtvIdentified,'qty'))),' identified',h('span',{className:'sm88-muted'},'Selected period')),h('div',{className:'sm88-cost'},h('span',{className:'sm88-muted'},'Known pending cost'),h('b',null,money(model.sum(model.rtvPending,'cost'))))),
           h('div',{className:'sm88-panel-foot'},h('span',null,'Repair pending ',count(model.sum(model.repairPending,'qty')),' pcs · separate'),h('span',null,model.rtvPending.filter(r=>r.cost==null).length,' rows missing pending cost'))),
-        h('div',{className:'sm88-bottom-actions'},action(exporting?'Preparing snapshot…':'Download Management Snapshot',exportSnapshot,{disabled:exporting,className:'sm88-button sm88-primary'}),h('span',{className:'sm88-muted'},'All overdue records included. Large reports download as a ZIP of numbered snapshots.')),
+        h('div',{className:'sm88-bottom-actions'},action(exporting?'Preparing snapshot…':'Download Management Snapshot',exportSnapshot,{disabled:exporting,className:'sm88-button sm88-primary'}),action('Download Excel summaries',()=>inboundExport132(snapshot,model)),h('span',{className:'sm88-muted'},'Snapshot: compact overview · Excel: all supplier and document summaries, no barcode rows.')),
         detail&&h('section',{className:'sm88-panel sm88-detail'},h('div',{className:'sm88-panel-head'},h('h3',null,detail==='rtv'?'Pending RTV by supplier and PO / DC':detail==='posted'?'Posted GRNs':detail==='inspection'?'In inspection':detail==='ready'?'Ready to post':'Open GRNs',' (',rows.length,')'),detail==='rtv'&&action('Export summary (CSV)',()=>exportCSV('Pending_RTV_'+model.today+'.csv',pendingRtvHeaders97,[...rows.map(row=>pendingRtvCells97(row).map(value=>typeof value==='string'&&/^[\s]*[=+@-]/.test(value)?"'"+value:value)),['Grand total','','',display.rtvQty,'']])),action('Close',()=>setDetail(''))),
           h('div',{className:'sm88-table-wrap'},h('table',null,h('thead',null,h('tr',null,(detail==='rtv'?pendingRtvHeaders97:['Supplier / Source','PO / DC','Stage','OK pcs','Known cost','SLA / Overdue days / Owner']).map(label=>h('th',{key:label},label)))),h('tbody',null,rows.slice(page*25,page*25+25).map((row,index)=>h('tr',{key:row.id||row.dc_id||index},(detail==='rtv'?pendingRtvCells97(row):[`${row.supplier} / ${row.source}`,`PO ${row.po_number} / DC ${row.dc_number}`,row.stage,row.accepted_qty,`${money(row.knownCost)}${row.costIncomplete?' *':''}`,`${row.sla}${row.sla==='Overdue'?' · '+display.delay(row.delayDays)+' working days':''} / ${row.owner}`]).map((value,i)=>h('td',{key:i},value))))))),
           detail==='rtv'&&h('div',{className:'sm88-panel-foot'},h('strong',null,'Total pending · ',count(display.rtvQty),' pcs')),h('div',{className:'sm88-pagination'},action('Previous',()=>setPage(p=>p-1),{disabled:page===0}),h('span',null,'Page ',page+1,' / ',Math.max(1,Math.ceil(rows.length/25))),action('Next',()=>setPage(p=>p+1),{disabled:(page+1)*25>=rows.length}))),
