@@ -928,7 +928,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
       return rank(x.id)-rank(y.id);
     });
   }
-  if(a.role==='sales_resolution_executive')h=[{id:'orders',label:'Sales Orders / Incomplete',icon:'🧾'}];
+  if(a.role==='sales_resolution_executive')h=[{id:'orders',label:'Sales Orders',icon:'🧾'}];
   return "admin" !== a.role && (h = h.filter(e => (!["dashboard", "dashboardv2", "stkdashboard", "stkdashboardv2"].includes(e.id) || (o==="stocking" && canViewStockDashboard99(a.role,e.id))))), React.createElement("div", {
     style: {...S.sidebar,...(o==="stocking"?{width:270,minWidth:270,flexShrink:0}:{})},
     className: "depotos-sidebar" + (r ? " open" : "")
@@ -2090,30 +2090,7 @@ function HWTransfers112({token,profile,showToast,warehouse,documentId=null,lines
  !data.orders.length&&!error&&h('p',null,'No matching HW transfers. New HW dispatches appear here after installation.'),
  h('small',null,'Original order quantity stays fixed. Total sent includes replacements; pending closes when received pieces are put away. Shows up to 200 orders / 500 claims; use search for older orders.'));
 }
-function SalesResolution134({token,profile,showToast}){
- const h=React.createElement,[rows,setRows]=useState([]),[search,setSearch]=useState(''),[status,setStatus]=useState('incomplete'),[offset,setOffset]=useState(0),[more,setMore]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[detail,setDetail]=useState(null),[lines,setLines]=useState([]),[tracking,setTracking]=useState(''),[courier,setCourier]=useState(''),[reason,setReason]=useState(''),[query,setQuery]=useState(''),[products,setProducts]=useState([]);
- const rpc=(action,order=null,data={})=>sb('/rest/v1/rpc/wms_sales_resolution134',{method:'POST',token,body:{p_action:action,p_order:order,p_data:data}});
- const run=async fn=>{if(busy)return;setBusy(true);setError('');try{await fn();}catch(e){setError(e.message);}finally{setBusy(false);}};
- const load=async pos=>{const r=await rpc('list',null,{search,status,offset:pos});setRows(r.rows.slice(0,100));setMore(r.rows.length>100);setOffset(pos);};
- useEffect(()=>{let active=true;rpc('list',null,{status:'incomplete',offset:0}).then(r=>{if(active){setRows(r.rows.slice(0,100));setMore(r.rows.length>100);}}).catch(e=>active&&setError(e.message));return()=>{active=false;};},[token]);
- const open=async id=>{const r=await rpc('detail',id);setDetail(r);setLines(r.lines);setTracking(r.order.tracking||'');setCourier(r.order.courier||'');setReason('');setProducts([]);setQuery('');};
- const editable=detail?.order.status==='incomplete'&&!detail.blocked;
- const button=(text,fn,disabled=false)=>h('button',{type:'button',style:S.secondaryBtnSm,onClick:()=>run(fn),disabled:busy||disabled},text);
- const table=(heads,body)=>h('div',{style:{overflowX:'auto'}},h('table',null,h('thead',null,h('tr',null,heads.map((x,i)=>h('th',{key:i,style:S.th},x)))),h('tbody',null,body)));
- return h('div',null,h(SectionTitle,{title:'Sales Orders · Resolution'}),h('p',{style:{fontSize:12,color:'#6B6355'}},'Sales Resolution Executive · Orders are read-only except parked incomplete orders.'),error&&h('div',{role:'alert',style:{...S.panel,color:'#b91c1c'}},error),
- detail?h('div',{style:S.panel},h('div',{style:{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}},button('← Back',async()=>{setDetail(null);await load(offset);}),h('strong',null,detail.order.tracking),h('span',null,detail.order.status),button('Reload order',()=>open(detail.order.id))),
- detail.blocked&&h('p',{style:{color:'#b45309'}},'Warehouse transfer / claims are still active. Editing unlocks after the incomplete transfer is completed.'),
- h('div',{style:{display:'flex',gap:12,margin:'16px 0',flexWrap:'wrap'}},h('label',null,'Tracking',h('input',{style:S.input,value:tracking,disabled:!editable||busy,onChange:e=>setTracking(e.target.value)})),h('label',null,'Courier',h('input',{style:S.input,value:courier,list:'resolution-couriers134',disabled:!editable||busy,onChange:e=>setCourier(e.target.value)})),h('datalist',{id:'resolution-couriers134'},['M&P','PostEx','Daraz COD','HW','Others'].map(x=>h('option',{key:x,value:x})))),
- table(['Barcode','Product','Required','Picked','Held','Action'],lines.map((l,i)=>h('tr',{key:l.product_id},h('td',{style:S.td},l.barcode||'—'),h('td',{style:S.td},l.name||l.product_id),h('td',{style:S.td},h('input',{type:'number',min:Math.max(1,Number(l.picked)||0,Number(l.held)||0),step:1,style:{...S.input,width:90},value:l.qty,disabled:!editable||busy,onChange:e=>setLines(prev=>prev.map((x,j)=>j===i?{...x,qty:e.target.value}:x))})),h('td',{style:S.td},l.picked||0),h('td',{style:S.td},l.held||0),h('td',{style:S.td},editable&&button('Remove',async()=>setLines(prev=>prev.filter((_,j)=>j!==i)),Number(l.picked)>0||Number(l.held)>0))))),
- editable&&h('div',null,h('div',{style:{display:'flex',gap:8,marginTop:14}},h('input',{style:S.input,value:query,placeholder:'Find barcode / product (2+ characters)',onChange:e=>setQuery(e.target.value)}),button('Find item',async()=>setProducts(await rpc('products',null,{search:query})),query.trim().length<2)),
- products.map(p=>h('div',{key:p.id,style:{display:'flex',gap:10,alignItems:'center',padding:6}},h('span',null,p.barcode,' · ',p.name),button('Add',async()=>{setLines(prev=>[...prev,{product_id:p.id,barcode:p.barcode,name:p.name,qty:1,picked:0,held:0}]);setProducts([]);setQuery('');},lines.some(l=>l.product_id===p.id)))),
- h('label',{style:{display:'block',marginTop:14}},'Correction reason',h('textarea',{style:S.input,value:reason,onChange:e=>setReason(e.target.value),disabled:busy})),
- button('Save corrections',async()=>{if(!lines.length||lines.some(l=>!Number.isInteger(Number(l.qty))||Number(l.qty)<1))throw Error('Add at least one item with positive whole quantity');await rpc('save',detail.order.id,{tracking,courier,reason,expected:detail.expected,lines:lines.map(l=>({product_id:l.product_id,qty:Number(l.qty)}))});showToast('Saved. Order remains incomplete for warehouse retry / top-up.');await open(detail.order.id);},!reason.trim()||!tracking.trim()||!courier.trim()),h('p',{style:{fontSize:12}},'Picked / held pieces cannot be removed here. Warehouse handles restock and retry; corrections remain in the audit trail.')))
- :h('div',null,h('div',{style:{...S.panel,display:'flex',gap:10,flexWrap:'wrap'}},h('input',{style:S.input,value:search,placeholder:'Tracking / Customer Order #',onChange:e=>setSearch(e.target.value)}),h('select',{style:S.input,value:status,onChange:e=>setStatus(e.target.value)},[['incomplete','Incomplete orders'],['','All orders (view)']].map(([v,t])=>h('option',{key:v,value:v},t))),button('Search / Refresh',()=>load(0))),
- h('div',{style:S.panel},table(['Tracking','Customer Order #','Courier','Status','Qty','Action'],rows.map(r=>h('tr',{key:r.id},...[r.external_order_id,r.customer_order||'—',r.courier,r.status,r.qty].map((v,i)=>h('td',{key:i,style:S.td},v)),h('td',{style:S.td},button(r.status==='incomplete'?'Open / Edit':'View',()=>open(r.id)))))),!rows.length&&h('p',null,'No matching orders.'),h('div',{style:{display:'flex',gap:12,marginTop:12}},button('Previous',()=>load(Math.max(0,offset-100)),offset===0),h('span',null,'Page ',offset/100+1),button('Next',()=>load(offset+100),!more)))));
-}
-
-function OrdersView(props){if(props.profile.role==='sales_resolution_executive')return React.createElement(SalesResolution134,props);return React.createElement(React.Fragment,null,['admin','warehouse_lead','supervisor'].includes(props.profile.role)&&React.createElement(HWTransfers112,{...props,warehouse:'6591c8c8-d223-4fe2-abdc-70bce5303ca2'}),React.createElement(OrdersBase112,props));}
+function OrdersView(props){return React.createElement(React.Fragment,null,['admin','warehouse_lead','supervisor'].includes(props.profile.role)&&React.createElement(HWTransfers112,{...props,warehouse:'6591c8c8-d223-4fe2-abdc-70bce5303ca2'}),React.createElement(OrdersBase112,props));}
 
 function OrdersBase112({
   token: e,
@@ -2121,6 +2098,7 @@ function OrdersBase112({
   showToast: a,
   setView: n
 }) {
+  const resolutionOnly135 = t.role === 'sales_resolution_executive';
   const [courier64, setCourier64] = useState('');
   const courierKey64 = v => {
     const s = String(v || '').trim(),
@@ -2228,7 +2206,7 @@ function OrdersBase112({
           ve(n);
         }
       } catch (e) {
-        a("Load failed", "err");
+        a("Load failed: " + e.message, "err");
       }
     }, [e, t.warehouse_id]);
   useEffect(() => {
@@ -2379,7 +2357,7 @@ function OrdersBase112({
         ...R
       })), N(a.external_order_id), I(a.courier), G({}), v(a);
     },
-    st = ["admin", "warehouse_lead"].includes(t.role),
+    st = ["admin", "warehouse_lead", "sales_resolution_executive"].includes(t.role),
     [dt, mt] = useState(""),
     ut = async () => {
       const n = dt.trim();
@@ -2649,7 +2627,7 @@ function OrdersBase112({
         fontWeight: 600
       }
     }, e.not_available_qty));
-  }))), st && "incomplete" === k.status && (yt ? React.createElement("div", {
+  }))), !resolutionOnly135 && st && "incomplete" === k.status && (yt ? React.createElement("div", {
     style: {
       marginTop: 14
     }
@@ -2880,7 +2858,7 @@ function OrdersBase112({
     events: x
   }))) : React.createElement("div", null, React.createElement(SectionTitle, {
     title: "Sales Orders",
-    action: React.createElement("div", {
+    action: !resolutionOnly135 && React.createElement("div", {
       style: {
         display: "flex",
         gap: 8
@@ -3367,7 +3345,7 @@ function OrdersBase112({
     style: {
       fontSize: 12
     }
-  }, "Oldest received orders first · " + Ye.length + " matching orders")), Ge.length > 0 && React.createElement("div", {
+  }, "Oldest received orders first · " + Ye.length + " matching orders")), !resolutionOnly135 && Ge.length > 0 && React.createElement("div", {
     style: S.panel
   }, React.createElement("div", {
     style: S.panelTitle
@@ -3501,7 +3479,7 @@ function OrdersBase112({
       }
       a(`♻ ${r} orders reset, ${o} pcs Restock putaway mein${l ? `, ${l} skip` : ""}`), Ue();
     })
-  }, "♻ Reset ALL Incomplete → Restock")), Ge.length > 0 && React.createElement("div", {
+  }, "♻ Reset ALL Incomplete → Restock")), !resolutionOnly135 && Ge.length > 0 && React.createElement("div", {
     style: S.panel
   }, React.createElement("div", {
     style: S.panelTitle
@@ -3981,12 +3959,12 @@ function OrdersBase112({
       }
     }, fmtTime(n.received_at)), React.createElement("td", {
       style: S.td
-    }, "received" === n.status && React.createElement("button", {
+    }, !resolutionOnly135 && "received" === n.status && React.createElement("button", {
       style: S.secondaryBtnSm,
       onClick: wmsAction55(e => {
         e.stopPropagation(), rt(n);
       })
-    }, "Reserve only"), "incomplete" === n.status && React.createElement(React.Fragment, null, React.createElement("button", {
+    }, "Reserve only"), !resolutionOnly135 && "incomplete" === n.status && React.createElement(React.Fragment, null, React.createElement("button", {
       style: {
         ...S.secondaryBtnSm,
         color: "#4CAF7D",
