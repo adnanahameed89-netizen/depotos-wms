@@ -10421,7 +10421,7 @@ function StockDashboardAccess99({token,profile,dashboard}) {
   const [published,setPublished]=useState(null),[message,setMessage]=useState('Loading dashboard…');
   const warehouse=profile.warehouse_id;
   useEffect(()=>{
-    if(profile.role==='admin'||!warehouse || !canViewStockDashboard99(profile.role,dashboard))return;
+    if(dashboard==='stkdashboard'||profile.role==='admin'||!warehouse || !canViewStockDashboard99(profile.role,dashboard))return;
     let active=true,loading=false,finished=false,timer,lastSeen138=null;
     async function readPublished() {
       if(!active || loading || finished || document.hidden)return;
@@ -10449,9 +10449,11 @@ function StockDashboardAccess99({token,profile,dashboard}) {
     return ()=>{active=false;clearTimeout(timer);document.removeEventListener('visibilitychange',readPublished);};
   },[token,warehouse,dashboard,profile.role]);
   const admin=profile.role==='admin';
+  if(dashboard==='stkdashboard')return canViewStockDashboard99(profile.role,dashboard)||admin
+    ? React.createElement(StockingInbound143,{key:profile.id+':'+warehouse,token,profile}) : null;
   if(!admin && (!warehouse || !canViewStockDashboard99(profile.role,dashboard)))return null;
   if(!admin && !published)return React.createElement('p',null,message);
-  return React.createElement(dashboard==='stkdashboard'?StockingDashboardView:StockingDashboardV2View,{token,profile,shared:admin?null:published});
+  return React.createElement(StockingDashboardV2View,{token,profile,shared:admin?null:published});
 }
 // V132 — inbound-only summaries, 09:00–18:00 PKT, Sunday/holiday exclusion.
 const INBOUND_SLA132={LOCAL:4,IMPORT:20,'E-COM':2};
@@ -10607,98 +10609,173 @@ async function inboundPng134(snapshot,m,dark=false){
  const blob=await new Promise(resolve=>c.toBlob(resolve,'image/png'));if(!blob)throw Error('Snapshot export failed');const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=`Stocking_Inbound_${snapshot.from_date}_${snapshot.to_date}.png`;link.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
 }
 
-function StockingDashboardView({token,profile,shared}) {
+function StockingInbound143({token,profile}) {
   const wh=useStkWarehouseId(token,profile);
-  const [dark134,setDark134]=useState(false);
-  const [publishedAt,setPublishedAt]=useState(null);
-  const [snapshot,setSnapshot]=useState(shared?.payload||null),[lastUpdated,setLastUpdated]=useState(shared?.as_of||null),[preset,setPreset]=useState('today'),
-    [from,setFrom]=useState(''),[to,setTo]=useState(''),[source,setSource]=useState(''),[supplier,setSupplier]=useState(''),
-    [busy,setBusy]=useState(false),[error,setError]=useState(''),[detail,setDetail]=useState(''),[page,setPage]=useState(0),[exporting,setExporting]=useState(false);
-  useEffect(()=>{if(shared?.payload){setSnapshot(shared.payload);setLastUpdated(shared.as_of);}},[shared]);
-  const saved=useDashboardSnapshot(profile.role==='admin'&&wh?JSON.stringify([SUPABASE_URL,profile.id,wh,'StockingManagement36',1]):null,
-    {snapshot,lastUpdated,preset,from,to,source,supplier},
-    {snapshot:setSnapshot,lastUpdated:setLastUpdated,preset:setPreset,from:setFrom,to:setTo,source:setSource,supplier:setSupplier});
-  const model=useMemo(()=>snapshot?inboundModel132(snapshot,source,supplier):null,[snapshot,source,supplier]);
-  const display=useMemo(()=>model?stkManagementPresentation88(snapshot,model):null,[snapshot,model]);
+  const [active,setActive]=useState('progress');
+  const panels=[['progress','Inbound Progress'],['pending','Pending DCs'],['rtv','Pending RTV']];
   const h=React.createElement;
-  const openDetail=value=>{setDetail(value);setPage(0);};
-  const refresh=async()=>{
-    if(profile.role!=='admin'||!wh||!saved.begin())return;
-    setBusy(true);setError('');setPublishedAt(null);
-    try {
-      const today=pkYmd(new Date()),start=preset==='custom'?from:preset==='today'?today:pkMonthStart(today),end=preset==='custom'?to:today;
-      if(!start||!end||end<start||end>today)throw new Error('Choose valid dates through today');
-      const result=await saved.track(()=>withStockingRefresh142(token,wh,async publish=>{
-        const snapshot=await wmsRpc(token,'stk_management_snapshot_v142',{p_wh:wh,p_from:start,p_to:end});
-        await publish('stkdashboard',snapshot,snapshot.as_of);
-        return snapshot;
-      }));
-      setPublishedAt(result.as_of);setSnapshot(result);setLastUpdated(result.as_of);setPage(0);
-    }catch(err){setError(err.message);}finally{setBusy(false);}
-  };
-  const exportSnapshot=async()=>{setExporting(true);setError('');try{await inboundPng134(snapshot,model,dark134);}catch(err){setError(err.message);}finally{setExporting(false);}};
-  if(profile.role!=='admin' && !shared)return null;
-  const rows=!model?[]:detail==='rtv'?display.pendingSummary:detail==='posted'?model.posted:detail==='inspection'?model.inspecting:detail==='ready'?model.ready:detail==='overdue'?display.overdue:model.priorities;
-  const money=value=>display.money(value),count=value=>display.number(value);
-  const action=(label,fn,extra={})=>h('button',{type:'button',className:'sm88-button',onClick:wmsAction55(fn),...extra},label);
-  const sourceRows=list=>h('table',{className:'priority94-table'},
- h('thead',null,h('tr',null,...['PO / DC','Supplier','Status','Action / age'].map(label=>h('th',{key:label},label)))),
- h('tbody',null,...list.map(row=>h('tr',{key:row.dc_id||JSON.stringify([row.po_number,row.dc_number])},
- h('td',null,h('strong',null,'PO ',row.po_number||'—',' / DC ',row.dc_number||'—')),
- h('td',null,row.supplier||'Supplier unavailable'),
- h('td',null,row.stage,' · ',row.owner||'Unassigned'),
- h('td',null,h('span',{className:row.actionKind134==='Overdue'?'sm88-delay':'sm88-ready'},row.actionAge134==null?'—':display.delay(row.actionAge134)+' d'))))));
-  const perf134=model&&snapshot.inbound_version132===132?inboundStats132(snapshot,model):null;
-  return h('div',{className:'sm88 compact134','data-dark':dark134},
-    h('style',null,SM134_CSS),
-    h('style',null,STK_MANAGEMENT_CSS88+".sm88 .sm88-sources{grid-template-columns:1fr!important}.sm88 .sm88-source-head{padding:7px 12px}.sm88 .sm88-column-labels{display:none}.sm88 .priority94-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}.sm88 .priority94-table th,.sm88 .priority94-table td{padding:7px 12px;border-bottom:1px solid var(--sm88-line,#e1e8f0);text-align:left;overflow-wrap:anywhere}.sm88 .priority94-table th{font-size:10px;font-weight:500}.sm88 .priority94-table th:nth-child(1){width:29%}.sm88 .priority94-table th:nth-child(2){width:29%}.sm88 .priority94-table th:nth-child(3){width:25%}.sm88 .priority94-table th:last-child{width:17%}.sm88 .priority94-table td:last-child,.sm88 .priority94-table th:last-child{text-align:right}@media(max-width:600px){.sm88 .priority94-table{font-size:10px}.sm88 .priority94-table td,.sm88 .priority94-table th{padding:6px 4px}}"),
-    h('header',{className:'sm88-chrome'},h('div',{className:'sm88-brand'},h('span',null,'D'),'DEPOTOS'),h('div',{className:'sm88-crumb'},'Stocking warehouse / Management')),
-    h('div',{className:'sm88-body'},
-      h('div',{className:'sm88-heading'},h('div',null,h('div',{className:'sm88-eyebrow'},'Management overview'),h('h2',null,'STOCKING GRN DASHBOARD'),h('p',{className:'sm88-muted'},snapshot?`${snapshot.from_date} — ${snapshot.to_date} · ${source==='E-COM'?'Ecommerce':source||'All sources'} · ${supplier||'All suppliers'}`:'Refresh to load your first management snapshot')),
-        h('div',{className:'sm88-asof'},h('span',null,'Saved snapshot'),h('strong',null,snapshot?new Date(snapshot.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT':'Not refreshed yet'),h('span',null,'Manual refresh only'))),
-      h('div',{className:'sm88-toolbar'},
-        action(dark134?'Light view':'Dark view',()=>setDark134(v=>!v)),
-        !shared&&h('div',{className:'sm88-presets'},[['today','Today'],['mtd','This month'],['custom','Custom dates']].map(([key,label])=>action(label,()=>setPreset(key),{key,'aria-pressed':preset===key}))),
-        preset==='custom'&&h(React.Fragment,null,h('label',null,'From',h('input',{type:'date',value:from,onChange:e=>setFrom(e.target.value)})),h('label',null,'To',h('input',{type:'date',value:to,onChange:e=>setTo(e.target.value)}))),
-        h('select',{'aria-label':'Source',value:source,onChange:e=>{setSource(e.target.value);setPage(0);}},h('option',{value:''},'All sources'),[['LOCAL','Local'],['IMPORT','Import'],['E-COM','Ecommerce']].map(([key,label])=>h('option',{key,value:key},label))),
-        h('select',{'aria-label':'Supplier',value:supplier,onChange:e=>{setSupplier(e.target.value);setPage(0);}},h('option',{value:''},'All suppliers'),[...new Set([...(snapshot?.receipts||[]),...(snapshot?.rtv||[])].map(r=>r.supplier).filter(Boolean))].sort().map(s=>h('option',{key:s,value:s},s))),
-        !shared&&action(busy?'Refreshing…':'Refresh data',refresh,{className:'sm88-button sm88-primary',disabled:busy||!saved.ready||!wh})),
-      !shared&&h(DashboardSnapshotNote,{state:saved}),
-      publishedAt&&h('p',{role:'status',className:'sm88-muted'},'Published for Inbound Executive · ',new Date(publishedAt).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}),' PKT'),
-      error&&h('div',{role:'alert',className:'sm88-error'},error),
-      model&&h(React.Fragment,null,
-        h('div',{className:'sm88-kpis'},[
-          ['GRNs posted',model.posted.length,count(model.sum(model.posted,'accepted_qty'))+' accepted pcs','posted'],
-          ['Open DCs',model.open.length,model.inspecting.length+' inspecting · '+model.ready.length+' ready','open'],
-          ['Unique POs',new Set(model.posted.map(r=>r.po_id)).size,'Selected posted period','posted'],
-          ['DC acceptance',perf134?.dc?(100*perf134.ok/perf134.dc).toFixed(1)+'%':'—','Accepted / documented PCS','posted'],
-          ['Inspection on time',perf134?.slaRows.length?(100*(perf134.slaRows.length-perf134.late)/perf134.slaRows.length).toFixed(1)+'%':'—','Local 4d · Import 20d · Ecom 2d','posted'],
-          ['Inspection delays',perf134?perf134.late:'—','Completed inspections beyond SLA','posted']
-        ].map(([label,value,note,key],i)=>h('button',{type:'button',key:i,className:'sm88-kpi',onClick:wmsAction55(()=>openDetail(key))},h('span',{className:'sm88-label'},label),h('strong',{className:'sm88-value'},value),h('span',{className:'sm88-muted'},note)))),
-        h(InboundPanel134,{snapshot,model}),
-        h('div',{className:'sm88-sla'},h('span',{className:'sm88-overdue'},h('b',null,model.overdue.length),' Overdue'),h('span',null,h('b',null,model.due.length),' Due within 1 working day'),h('span',null,h('b',null,model.ontime.length),' Within SLA'),h('span',null,h('b',null,model.unknown.length),' SLA unknown'),h('span',{className:'sm88-today'},h('b',null,model.todayPosted.length),' Posted today')),
-        h('div',{className:'sm134-bottom'},h('section',{className:'sm88-panel','aria-label':'Priority actions'},
-          h('div',{className:'sm88-panel-head'},h('div',null,h('div',{className:'sm88-eyebrow'},'Needs attention'),h('h3',null,'Priority actions'),h('p',{className:'sm88-muted'},'Overdue inspections first · then Ready to post · all open dates')),action(`View all open (${model.open.length})`,()=>openDetail('open'))),
-          display.priorityGroups.length>0&&h('div',{className:'sm88-sources',style:{'--sm88-columns':display.priorityGroups.length}},display.priorityGroups.map(group=>h('section',{className:'sm88-source',key:group.key,'aria-label':group.label+' priority actions'},h('div',{className:'sm88-source-head'},h('strong',null,group.label),h('span',null,group.rows.filter(r=>r.actionKind134==='Overdue').length,' overdue · ',group.rows.filter(r=>r.actionKind134==='Ready to post').length,' ready')),h('div',{className:'sm88-column-labels'},h('span',null,'PO / DC · supplier · status'),h('span',null,'Action / working days')),sourceRows(group.rows)))),
-          display.priorityUnmapped.length>0&&h('div',{className:'sm88-unmapped'},h('strong',null,'Source needs review · ',display.priorityUnmapped.length,' priority'),h('p',{className:'sm88-muted'},'These records are retained here until their source is assigned to Local, Import or Ecommerce.'),sourceRows(display.priorityUnmapped)),
-          !display.priority.length&&h('div',{className:'sm88-empty'},'No overdue or ready to post PO / DC for the selected source and supplier.'),
-          h('div',{className:'sm88-panel-foot'},h('strong',null,display.priority.length,' priority PO / DC · ',display.overdue.length,' overdue, ',display.ready.length,' ready to post'),h('span',null,'All priority rows shown · ready age starts at inspection completion'))),
-        h('section',{className:'sm88-panel','aria-label':'RTV summary'},
-          h('div',{className:'sm88-panel-head'},h('div',null,h('div',{className:'sm88-eyebrow'},'Return to vendor'),h('h3',null,'RTV summary'),h('p',{className:'sm88-muted'},'Pending across all dates · as of ',model.today)),action('View pending RTV',()=>openDetail('rtv'))),
-          h('div',{className:'sm88-rtv-stats'},[['Total suppliers',count(display.supplierCount),'Distinct suppliers'],['Total DCs',count(display.dcCount),'Distinct DC receipts'],['Total RTV quantity',count(display.rtvQty)+' pcs','Pending RTV pieces']].map(([label,value,note])=>h('div',{className:'sm88-rtv-stat',key:label},h('span',{className:'sm88-label'},label),h('strong',{className:'sm88-value'},value),h('span',{className:'sm88-muted'},note)))),
-          display.sourceTotals.length>0&&h('div',{className:'sm88-rtv-flow','aria-label':'Pending RTV by source'},display.sourceTotals.map(([name,qty])=>h('div',{key:name},h('span',{className:'sm88-label'},name+' total'),h('strong',null,count(qty)+' pcs')))),
-          (display.missingSupplier>0||display.missingDC>0)&&h('p',{className:'sm88-count-warning'},`Counts incomplete: ${display.missingSupplier} RTV rows missing supplier; ${display.missingDC} missing DC identity.`),
-          h('div',{className:'sm88-rtv-flow'},h('div',null,h('b',null,count(model.sum(model.rtvPicked,'qty'))),' picked',h('span',{className:'sm88-muted'},'Selected period')),h('div',null,h('b',null,count(model.sum(model.rtvIdentified,'qty'))),' identified',h('span',{className:'sm88-muted'},'Selected period')),h('div',{className:'sm88-cost'},h('span',{className:'sm88-muted'},'Known pending cost'),h('b',null,money(model.sum(model.rtvPending,'cost'))))),
-          h('div',{className:'sm88-panel-foot'},h('span',null,'Repair pending ',count(model.sum(model.repairPending,'qty')),' pcs · separate'),h('span',null,model.rtvPending.filter(r=>r.cost==null).length,' rows missing pending cost'))),
-        ),
-        h('div',{className:'sm88-bottom-actions'},action(exporting?'Preparing snapshot…':'Download Management Snapshot',exportSnapshot,{disabled:exporting,className:'sm88-button sm88-primary'}),action('Download Excel summaries',()=>inboundExport132(snapshot,model)),h('span',{className:'sm88-muted'},'Snapshot: compact overview · Excel: all supplier and document summaries, no barcode rows.')),
-        detail&&h('section',{className:'sm88-panel sm88-detail'},h('div',{className:'sm88-panel-head'},h('h3',null,detail==='rtv'?'Pending RTV by supplier and PO / DC':detail==='posted'?'Posted GRNs':detail==='inspection'?'In inspection':detail==='ready'?'Ready to post':'Open GRNs',' (',rows.length,')'),detail==='rtv'&&action('Export summary (CSV)',()=>exportCSV('Pending_RTV_'+model.today+'.csv',pendingRtvHeaders97,[...rows.map(row=>pendingRtvCells97(row).map(value=>typeof value==='string'&&/^[\s]*[=+@-]/.test(value)?"'"+value:value)),['Grand total','','',display.rtvQty,'']])),action('Close',()=>setDetail(''))),
-          h('div',{className:'sm88-table-wrap'},h('table',null,h('thead',null,h('tr',null,(detail==='rtv'?pendingRtvHeaders97:['Supplier / Source','PO / DC','Stage','OK pcs','Known cost','SLA / Overdue days / Owner']).map(label=>h('th',{key:label},label)))),h('tbody',null,rows.slice(page*25,page*25+25).map((row,index)=>h('tr',{key:row.id||row.dc_id||index},(detail==='rtv'?pendingRtvCells97(row):[`${row.supplier} / ${row.source}`,`PO ${row.po_number} / DC ${row.dc_number}`,row.stage,row.accepted_qty,`${money(row.knownCost)}${row.costIncomplete?' *':''}`,`${row.sla}${row.sla==='Overdue'?' · '+display.delay(row.delayDays)+' working days':''} / ${row.owner}`]).map((value,i)=>h('td',{key:i},value))))))),
-          detail==='rtv'&&h('div',{className:'sm88-panel-foot'},h('strong',null,'Total pending · ',count(display.rtvQty),' pcs')),h('div',{className:'sm88-pagination'},action('Previous',()=>setPage(p=>p-1),{disabled:page===0}),h('span',null,'Page ',page+1,' / ',Math.max(1,Math.ceil(rows.length/25))),action('Next',()=>setPage(p=>p+1),{disabled:(page+1)*25>=rows.length}))),
-        h('div',{className:'sm88-footer'},h('span',null,'Cost values only · Internal repair receipts excluded from GRN counters'),h('span',null,`Incomplete costs: ${model.posted.filter(r=>r.costIncomplete).length} posted / ${model.open.filter(r=>r.costIncomplete).length} open`)),
-        h('p',{className:'sm88-footnote'},'SLA: Pakistan working days excluding Sundays. Unknown policies stay unknown. RTV identified uses GRN date; picked uses handover date; pending includes older stock. Date selections apply on Refresh; source and supplier filters reuse the saved snapshot.')
-      )
+  return h('div',{className:'sm88 compact134'},
+    h('style',null,STK_MANAGEMENT_CSS88+SM134_CSS+
+      '.si143 table{width:100%;border-collapse:collapse}.si143 th,.si143 td{padding:8px;text-align:left;border-bottom:1px solid #dce5ec;white-space:nowrap}.si143 .sm88-kpis{margin:12px 0}.si143 .sm88-button[aria-pressed=true]{font-weight:bold;border:2px solid #267775}.si143 .sm88-toolbar{flex-wrap:wrap}'),
+    h('header',{className:'sm88-chrome'},h('div',{className:'sm88-brand'},h('span',null,'D'),'DEPOTOS')),
+    h('div',{className:'sm88-body si143'},
+      h('div',{className:'sm88-heading'},h('div',null,h('h2',null,'STOCKING INBOUND'))),
+      h('nav',{className:'sm88-toolbar','aria-label':'Inbound reports'},...panels.map(([key,label])=>
+        h('button',{key,type:'button',className:'sm88-button','aria-pressed':active===key,onClick:()=>setActive(key)},label))),
+      ...panels.map(([key,label])=>h('div',{hidden:active!==key,key},h(StockingInboundPanel143,{token,wh,panel:key,label})))
     )
+  );
+}
+function StockingInboundPanel143({token,wh,panel,label}) {
+  const h=React.createElement, today=pkYmd(new Date());
+  const progress=panel==='progress', pending=panel==='pending';
+  const [dates,setDates]=useState(progress);
+  const [from,setFrom]=useState(pkMonthStart(today)),[to,setTo]=useState(today),[source,setSource]=useState('');
+  const [snapshot,setSnapshot]=useState(null),[detail,setDetail]=useState(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const running=useRef(false);
+  const pageSize=50;
+  const groups=pending?['Awaiting Import','Awaiting Inspection','In Inspection','Ready to Post','Other Open']:
+    ['0–7 days','8–15 days','16–30 days','31+ days','Unknown age'];
+  const sourceLabels={'':'All sources',LOCAL:'Local',IMPORT:'Import','E-COM':'Ecommerce',OTHER:'Other / unknown'};
+  const number=value=>value==null?'—':Number(value).toLocaleString('en-PK',{maximumFractionDigits:2});
+  const date=value=>value?new Date(value).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}):'—';
+  const pct=(n,d)=>d?(100*n/d).toFixed(1)+'%':'—';
+  const currentFilters={p_wh:wh,p_panel:panel,p_from:dates?from:null,p_to:dates?to:null,p_source:source};
+  const currentKey=JSON.stringify(currentFilters);
+  const view=snapshot?.key===currentKey?snapshot:null;
+  const page=detail?.key===currentKey?detail:null;
+  async function run(action) {
+    if(running.current||!wh)return;
+    running.current=true;
+    setBusy(true);setError('');
+    try { await action(); }
+    catch(err){setError(err.message||'Report request failed');}
+    finally {running.current=false;setBusy(false);}
+  }
+  const read=(filters,group,offset,limit)=>wmsRpc(token,'stk_inbound_panel143',{
+    ...filters,p_group:group,p_offset:offset,p_limit:limit
+  });
+  const refresh=()=>run(async()=>{
+    if(dates&&(!from||!to||from>to||to>today))throw new Error('Choose valid From and To dates through today.');
+    const data=await read(currentFilters,'',0,0);
+    setSnapshot({key:currentKey,filters:currentFilters,data});setDetail(null);
+  });
+  const open=(group,offset=0)=>run(async()=>{
+    const data=await read(view.filters,group,offset,pageSize);
+    setDetail({key:currentKey,group,offset,data});
+  });
+  const progressCols=[
+    ['Source',row=>row.source===null?'Total':sourceLabels[row.source]],
+    ['POs',r=>r.pos],['DCs',r=>r.dcs],['Received pcs',r=>r.received_pcs],['Inspected DCs',r=>r.inspected_dcs],
+    ['Inspected pcs',r=>r.inspected_pcs],['Received DCs since posted',r=>r.received_cohort_posted],
+    ['Accepted pcs since posted',r=>r.received_cohort_posted_pcs],['GRNs posted in period',r=>r.posted_dcs],
+    ['Posted pcs in period',r=>r.posted_pcs],['Assessed DCs',r=>r.on_time+r.delayed],
+    ['On-time DCs',r=>r.on_time],['Delayed DCs',r=>r.delayed],
+    ['On-time %',r=>pct(r.on_time,r.on_time+r.delayed)],['Delayed %',r=>pct(r.delayed,r.on_time+r.delayed)],
+    ['SLA unknown',r=>r.unknown_sla],['Avg. receive → complete days',r=>r.avg_elapsed],
+    ['Avg. start → complete days',r=>r.avg_execution],['Missing receipt qty',r=>r.missing_received_qty],
+    ['Missing inspected qty',r=>r.missing_inspected_qty],['Missing cohort posted qty',r=>r.missing_cohort_posted_qty],
+    ['Missing period posted qty',r=>r.missing_posted_qty]
+  ];
+  const commonCols=[['Supplier',r=>r.supplier],['Source',r=>sourceLabels[r.source]],['PO',r=>r.po_number],['DC',r=>r.dc_number]];
+  const detailCols=pending?[
+    ...commonCols,['Stage',r=>r.stage],['Pending pcs',r=>r.pending_qty],['Received (PKT)',r=>date(r.received_at)],
+    ['Inspection SLA',r=>r.priority],['Inspection days',r=>r.elapsed_days],['SLA target days',r=>r.sla_days],
+    ['Posting wait days',r=>r.posting_wait_days],['Inspector',r=>r.owner],
+    ['Next action',r=>({'Awaiting Import':'Import DC lines','Awaiting Inspection':'Start inspection',
+      'In Inspection':'Complete inspection','Ready to Post':'Post GRN'}[r.stage]||'Review DC')]
+  ]:[
+    ...commonCols,['GRN',r=>r.grn_number],['Barcode',r=>r.barcode],['Product',r=>r.product],['Pending pcs',r=>r.qty],
+    ['DMG',r=>r.dmg],['MNF',r=>r.mnf],['Wrong',r=>r.wrong],['Excess',r=>r.excess],
+    ['Opened (PKT)',r=>date(r.created_at)],['Age days',r=>r.age_days],['Age bucket',r=>r.bucket]
+  ];
+  function download(cols,rows,suffix) {
+    const reportName=dates?from+'-to-'+to:'all-dates';
+    exportCSV('stocking-'+panel+'-'+reportName+'-'+suffix+'.csv',cols.map(c=>c[0]),
+      rows.map(row=>cols.map(([,value])=>{
+        const cell=value(row);
+        return typeof cell==='number'?cell:safeReportCell(cell??'');
+      })));
+  }
+  const exportDetail=()=>run(async()=>{
+    const group=page?.group||'';
+    const max=2000, chunk=200;
+    const first=await read(view.filters,group,0,chunk);
+    if(first.total_rows>max)throw new Error('More than 2,000 rows. Narrow the dates, source or group before exporting.');
+    const rows=[...first.rows], ids=new Set(rows.map(row=>row.id));
+    while(rows.length<first.total_rows){
+      const next=await read(view.filters,group,rows.length,chunk);
+      if(next.total_rows!==first.total_rows||!next.rows.length||next.rows.some(row=>ids.has(row.id))){
+        throw new Error('Pending records changed during export. Please try again.');
+      }
+      for(const row of next.rows){rows.push(row);ids.add(row.id);}
+    }
+    download(detailCols,rows,group?group.replace(/[^a-z0-9]+/gi,'-'):'all');
+  });
+  const button=(text,onClick,extra={})=>h('button',{type:'button',className:'sm88-button',onClick,disabled:busy||!wh,...extra},text);
+  const table=(cols,rows)=>h('div',{className:'sm88-table-wrap',style:{overflowX:'auto'}},
+    h('table',null,h('thead',null,h('tr',null,...cols.map(([name])=>h('th',{key:name,scope:'col'},name)))),
+      h('tbody',null,...rows.map((row,i)=>h('tr',{key:row.id??row.source??i},
+        ...cols.map(([name,value])=>{const cell=value(row);return h('td',{key:name},typeof cell==='number'?number(cell):cell??'—');}))))));
+  const data=view?.data, total=data?.groups?.find(row=>row.source===null);
+  const tiles=progress&&total?[
+    ['POs / DCs received',number(total.pos)+' / '+number(total.dcs)],
+    ['Received / inspected pcs',number(total.received_pcs)+' / '+number(total.inspected_pcs)],
+    ['GRNs posted in period',number(total.posted_dcs)+' · '+number(total.posted_pcs)+' pcs'],
+    ['On time / delayed',pct(total.on_time,total.on_time+total.delayed)+' / '+pct(total.delayed,total.on_time+total.delayed)],
+  ]:data?(pending?[
+    ['Open DCs',number(data.totals.dcs)],['Overdue',number(data.totals.overdue)],
+    ['Due within 1 working day',number(data.totals.due)],['SLA unknown',number(data.totals.unknown_sla)]
+  ]:[
+    ['Suppliers',number(data.totals.suppliers)],['DCs',number(data.totals.dcs)],['Pending pcs',number(data.totals.pcs)],
+    ['Rows missing references',number(data.totals.missing_reference_rows)]
+  ]):[];
+  const dateBasis=progress?'DC Received Date · Posted in Period uses GRN Posted Date':
+    pending?'Current open DCs · optional filter by DC Received Date':'Current pending RTV · optional filter by RTV Opened Date';
+  return h('section',{className:'sm88-panel','aria-label':label},
+    h('div',{className:'sm88-panel-head'},h('div',null,h('h3',null,label),h('p',{className:'sm88-muted'},dateBasis))),
+    h('div',{className:'sm88-toolbar'},
+      !progress&&h('label',null,h('input',{type:'checkbox',checked:dates,disabled:busy,onChange:e=>setDates(e.target.checked)}),' Filter by dates'),
+      dates&&h('label',null,'From ',h('input',{type:'date',value:from,max:today,disabled:busy,onChange:e=>setFrom(e.target.value)})),
+      dates&&h('label',null,'To ',h('input',{type:'date',value:to,max:today,disabled:busy,onChange:e=>setTo(e.target.value)})),
+      h('label',null,'Source ',h('select',{value:source,disabled:busy,onChange:e=>setSource(e.target.value)},
+        ...Object.entries(sourceLabels).map(([key,name])=>h('option',{key,value:key},name)))),
+      button(busy?'Loading…':'View Report',refresh,{className:'sm88-button sm88-primary'}),
+      view&&button(progress?'Export Progress CSV':'Export '+(page?.group||label)+' CSV',
+        progress?()=>download(progressCols,data.groups,'summary'):exportDetail)),
+    error&&h('p',{role:'alert',className:'sm88-error'},error),
+    !view&&h('p',{className:'sm88-muted'},snapshot?'Filters changed. Select View Report to apply.':'Select View Report to load this panel.'),
+    view&&h(React.Fragment,null,
+      h('p',{className:'sm88-muted'},'As of '+date(data.as_of)+' PKT'),
+      h('div',{className:'sm88-kpis'},...tiles.map(([title,value])=>h('div',{key:title,className:'sm88-kpi'},h('span',{className:'sm88-label'},title),h('strong',{className:'sm88-value'},value)))),
+      progress?h(React.Fragment,null,
+        table([progressCols[0],progressCols[1],progressCols[2],progressCols[3],progressCols[9],
+          progressCols[10],progressCols[13],progressCols[14]],data.groups),
+        h('p',{className:'sm88-muted'},'Received cohort · '+number(total.inspected_dcs)+' inspections complete · '+
+          number(total.received_cohort_posted)+' DCs since posted · '+number(total.received_cohort_posted_pcs)+' accepted pcs.'),
+        h('p',{className:'sm88-muted'},'Average working days · Receipt to complete '+number(total.avg_elapsed)+
+          ' · Start to complete '+number(total.avg_execution)+' · SLA unknown '+number(total.unknown_sla)+' DCs.'),
+        h('p',{className:'sm88-muted'},'Inspection SLA from receipt to completion · Local 4, Import 20, Ecommerce 2 working days · 09:00–18:00 PKT, Sundays and holidays excluded.'),
+        total&&h('p',{className:'sm88-muted'},'Missing quantities (DCs) · Received '+total.missing_received_qty+' · Inspected '+total.missing_inspected_qty+
+          ' · Cohort posted '+total.missing_cohort_posted_qty+' · Period posted '+total.missing_posted_qty)
+      ):h(React.Fragment,null,
+        h('div',{className:'sm88-toolbar'},button('View all details',()=>open(''),{'aria-pressed':page?.group===''}),
+          ...groups.map(group=>{
+            const item=data.groups.find(row=>(pending?row.stage:row.bucket)===group);
+            return button(group+' · '+number(item?.dcs??0)+' DCs / '+number(item?.pcs??0)+' pcs'+
+              (item?.unknown_qty?' · '+item.unknown_qty+' missing qty':''),()=>open(group),
+              {key:group,'aria-pressed':page?.group===group});
+          })),
+        h('p',{className:'sm88-muted'},pending?'Overdue first, then due soon and ready to post. Ready to Post quantity is accepted pcs.':'Oldest first. Age uses calendar days from the RTV opened date.'),
+        page&&h(React.Fragment,null,
+          h('h4',null,page.group||label+' details'),
+          page.data.rows.length?table(detailCols,page.data.rows):h('p',null,'No matching records.'),
+          h('div',{className:'sm88-pagination'},
+            button('Previous',()=>open(page.group,page.offset-pageSize),{disabled:busy||page.offset===0}),
+            h('span',null,number(page.offset+page.data.rows.length)+' of '+number(page.data.total_rows)),
+            button('Next',()=>open(page.group,page.offset+pageSize),{disabled:busy||page.offset+pageSize>=page.data.total_rows})))
+      ))
   );
 }
 
