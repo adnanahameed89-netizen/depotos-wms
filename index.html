@@ -221,7 +221,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
       packer: "stklogistics",
       logistics_officer: "stklogistics",
       rtv_officer: "stkrtv"
-    }[e] || "stkinventory" : {
+    }[e] || "stkcyclecount" : {
       picker: "picking",
       packer: "packing",
       putaway_officer: "putaway",
@@ -475,7 +475,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
     token: e.token,
     profile: C,
     showToast: q
-  }), "ecommovement" === c && "ecommerce" === w && React.createElement(EcommerceMovement121,{token:e.token,profile:C,showToast:q}), "stkmovement" === c && "stocking" === w && React.createElement(StockingMovement72,{token:e.token,profile:C,showToast:q}), "stkcyclecount" === c && "stocking" === w && React.createElement(StockingInventoryView,{key:C.id+":"+C.warehouse_id+":count117",token:e.token,profile:C,showToast:q,countOnly:true}), "stkinventory" === c && React.createElement(['putaway_officer','picker'].includes(C.role)?StockingReadInventory72:StockingInventoryView, {
+  }), "ecommovement" === c && "ecommerce" === w && React.createElement(EcommerceMovement121,{token:e.token,profile:C,showToast:q}), "stkmovement" === c && "stocking" === w && React.createElement(StockingMovement72,{token:e.token,profile:C,showToast:q}), "stkcyclecount" === c && "stocking" === w && React.createElement(StockingInventoryView,{key:C.id+":"+C.warehouse_id+":count117",token:e.token,profile:C,showToast:q,countOnly:true}), "stkinventory" === c && w === "stocking" && canOpenStockingInventory142(C.role) && C.nav_overrides?.stkinventory!==false && React.createElement(StockingInventoryView, {
     token: e.token,
     profile: C,
     showToast: q
@@ -919,7 +919,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
   });
   if (o === "stocking") h = h.filter(x => x.id !== "stkpacking");
  if(o==='ecommerce'&&['admin','warehouse_lead','supervisor','picker','putaway_officer'].includes(a.role)&&a.nav_overrides?.ecommovement!==false&&!h.some(x=>x.id==='ecommovement'))h.push({id:'ecommovement',label:'Stock Movement',icon:'↔'});
- if(o==='stocking'){if(['admin','warehouse_lead','supervisor','outbound_executive','putaway_officer','picker'].includes(a.role)&&a.nav_overrides?.stkmovement!==false&&!h.some(x=>x.id==='stkmovement'))h.push({id:'stkmovement',label:'Stock Movement',icon:'↔'});if(['putaway_officer','picker'].includes(a.role)&&a.nav_overrides?.stkinventory!==false&&!h.some(x=>x.id==='stkinventory'))h.push({id:'stkinventory',label:'Stocking Inventory',icon:'🧰'});}
+ if(o==='stocking'){if(['admin','warehouse_lead','supervisor','outbound_executive','putaway_officer','picker'].includes(a.role)&&a.nav_overrides?.stkmovement!==false&&!h.some(x=>x.id==='stkmovement'))h.push({id:'stkmovement',label:'Stock Movement',icon:'↔'});}
   if(o==='stocking'&&!h.some(x=>x.id==='stkcyclecount'))h.push({id:'stkcyclecount',label:'Cycle Count',icon:'🔢'});
   if(o==='stocking') {
     const order89=['stkdashboard','stkdashboardv2','stkcatalogue','stkreceiving','stkrtv','stkrepair','stkoutbound','stkstr','stkpicking','stklogistics','stkmovement','stkcyclecount','stkbins','stkinventory','stkreports'];
@@ -928,6 +928,7 @@ const dashboardBaseSb=sb,dashboardBasePaged=sbPaged,dashboardBaseAll=sbAll;funct
       return rank(x.id)-rank(y.id);
     });
   }
+  h=h.filter(tab=>tab.id!=='stkinventory'||(o==='stocking'&&canOpenStockingInventory142(a.role)&&a.nav_overrides?.stkinventory!==false));
   if(a.role==='sales_resolution_executive')h=[{id:'orders',label:'Sales Orders',icon:'🧾'}];
   return "admin" !== a.role && (h = h.filter(e => (!["dashboard", "dashboardv2", "stkdashboard", "stkdashboardv2"].includes(e.id) || (o==="stocking" && canViewStockDashboard99(a.role,e.id))))), React.createElement("div", {
     style: {...S.sidebar,...(o==="stocking"?{width:270,minWidth:270,flexShrink:0}:{})},
@@ -4956,7 +4957,7 @@ function DispatchView({
     }
   }, f.map(([e, t]) => {
     const a = ((e, t) => {
-      const a = (t==='ecommovement'?['admin','warehouse_lead','supervisor','putaway_officer','picker'].includes(e.role):t==='stkmovement'?['admin','warehouse_lead','supervisor','outbound_executive','putaway_officer','picker'].includes(e.role):t==='stkinventory'?['admin','warehouse_lead','supervisor','inbound_executive','outbound_executive','putaway_officer','picker'].includes(e.role):(_[e.role] || ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch"]).includes(t)),
+      const a = (t==='ecommovement'?['admin','warehouse_lead','supervisor','putaway_officer','picker'].includes(e.role):t==='stkmovement'?['admin','warehouse_lead','supervisor','outbound_executive','putaway_officer','picker'].includes(e.role):t==='stkinventory'?canOpenStockingInventory142(e.role):(_[e.role] || ["dashboard", "products", "receiving", "putaway", "inventory", "orders", "picking", "packing", "dispatch"]).includes(t)),
         n = (e.nav_overrides || {})[t];
       return !0 === n || !1 !== n && a;
     })({
@@ -9145,8 +9146,7 @@ function StockingCatalogueView({token:e,profile:t,showToast:a}){const[n,r]=useSt
     o = ["warehouse_lead","supervisor","outbound_executive"].includes(t.role),
     l = r || o,
     [i, c] = useState(countOnly ? "cyclecount" : "ledger"),
-    [s, d] = useState([]),
-    [m, u] = useState([]),
+    [ledgerRows, setLedgerRows] = useState([]),
     [p, y] = useState([]),
     [h, g] = useState([]),
     [f, _] = useState([]),
@@ -9162,8 +9162,13 @@ function StockingCatalogueView({token:e,profile:t,showToast:a}){const[n,r]=useSt
       E(!0);
       try {
         if(countOnly){const ctx=await wmsRead59(e,'stk_count_context117',{p_wh:n});y(ctx.bins||[]);g(ctx.profiles||[]);j(ctx.counts||[]);E(false);return;}
-        const [t, a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/stk_putaway_queue?warehouse_id=eq.${n}&status=eq.completed&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${n}&select=id,warehouse_id,product_barcode,product_name,bin_id,qty_delta,reason,source,created_by,created_at&order=id.asc`), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${n}&select=*&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&select=id,full_name,role&order=id.asc`), sbPaged(e, "/rest/v1/stk_products?select=internal_barcode,display_name,department&order=id.asc")]);
-        d(t || []), u(a || []), y(r || []), g(o || []), _(l || []);
+        const [rows, bins, profiles, products] = await Promise.all([
+          wmsRead59(e, 'stk_inventory_ledger142', {p_wh:n}),
+          sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${n}&select=id,code&order=code.asc`),
+          sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&select=id,full_name,role&order=id.asc`),
+          sbPaged(e, '/rest/v1/stk_products?select=internal_barcode,display_name,department&order=id.asc')
+        ]);
+        setLedgerRows(rows || []), y(bins || []), g(profiles || []), _(products || []);
       } catch (e) {
         a("Load fail: " + e.message, "err");
       }
@@ -9178,32 +9183,7 @@ function StockingCatalogueView({token:e,profile:t,showToast:a}){const[n,r]=useSt
     A = e => f.find(t => t.internal_barcode === e),
     q = e => A(e)?.department || "—",
     D = (e, t) => A(e)?.display_name || t,
-    F = useMemo(() => {
-      const e = {};
-      for (const t of s) {
-        const a = `${t.product_barcode || t.product_name}|${t.bin_id}`;
-        e[a] || (e[a] = {
-          product_barcode: t.product_barcode,
-          product_name: t.product_name,
-          bin_id: t.bin_id,
-          on_hand: 0,
-          last_by: null,
-          last_at: null
-        }), e[a].on_hand += Number(t.qty || 0), (!e[a].last_at || new Date(t.completed_at) > new Date(e[a].last_at)) && (e[a].last_at = t.completed_at, e[a].last_by = t.completed_by);
-      }
-      for (const t of m) {
-        const a = `${t.product_barcode || t.product_name}|${t.bin_id}`;
-        e[a] || (e[a] = {
-          product_barcode: t.product_barcode,
-          product_name: t.product_name,
-          bin_id: t.bin_id,
-          on_hand: 0,
-          last_by: null,
-          last_at: null
-        }), e[a].on_hand += Number(t.qty_delta || 0), (!e[a].last_at || new Date(t.created_at) > new Date(e[a].last_at)) && (e[a].last_at = t.created_at, e[a].last_by = t.created_by);
-      }
-      return Object.values(e).filter(e => 0 !== e.on_hand);
-    }, [s, m]),
+    F = ledgerRows,
     $ = useMemo(() => {
       const e = {};
       for (const t of F) {
@@ -10410,6 +10390,33 @@ async function publishStockDashboard99(token,warehouse,dashboard,payload,asOf) {
   if(rows?.length!==1 || rows[0].warehouse_id!==warehouse || rows[0].dashboard!==dashboard ||
       Date.parse(rows[0].as_of)!==Date.parse(asOf)) throw new Error('Dashboard publication could not be confirmed.');
 }
+function canOpenStockingInventory142(role) {
+  return ['admin','inbound_executive','outbound_executive'].includes(role);
+}
+async function withStockingRefresh142(token, warehouse, refresh) {
+  const lease = crypto.randomUUID();
+  const args = {p_wh:warehouse,p_lease:lease};
+  if (!await wmsRpc(token,'stk_dashboard_lease142',{...args,p_release:false})) {
+    throw new Error('A Stocking dashboard refresh is already running for this warehouse.');
+  }
+  try {
+    return await refresh(async (dashboard,payload,asOf) => {
+      await wmsRpc(token,'stk_dashboard_publish142',{
+        ...args,p_dashboard:dashboard,p_payload:payload,p_as_of:asOf
+      });
+    });
+  } finally {
+    try { await wmsRpc(token,'stk_dashboard_lease142',{...args,p_release:true}); }
+    catch (error) { console.warn('Dashboard refresh lease will expire automatically.',error); }
+  }
+}
+async function stockingDashboardReads142(requests) {
+  // Wait for every parallel read to settle before releasing the warehouse lease.
+  const results = await Promise.allSettled(requests);
+  const failure = results.find(result => result.status === 'rejected');
+  if (failure) throw failure.reason;
+  return results.map(result => result.value);
+}
 function StockDashboardAccess99({token,profile,dashboard}) {
   const [published,setPublished]=useState(null),[message,setMessage]=useState('Loading dashboard…');
   const warehouse=profile.warehouse_id;
@@ -10621,8 +10628,11 @@ function StockingDashboardView({token,profile,shared}) {
     try {
       const today=pkYmd(new Date()),start=preset==='custom'?from:preset==='today'?today:pkMonthStart(today),end=preset==='custom'?to:today;
       if(!start||!end||end<start||end>today)throw new Error('Choose valid dates through today');
-      const result=await saved.track(()=>wmsRpc(token,'stk_management_snapshot_v138',{p_wh:wh,p_from:start,p_to:end}));
-      await saved.track(()=>publishStockDashboard99(token,wh,"stkdashboard",result,result.as_of));
+      const result=await saved.track(()=>withStockingRefresh142(token,wh,async publish=>{
+        const snapshot=await wmsRpc(token,'stk_management_snapshot_v142',{p_wh:wh,p_from:start,p_to:end});
+        await publish('stkdashboard',snapshot,snapshot.as_of);
+        return snapshot;
+      }));
       setPublishedAt(result.as_of);setSnapshot(result);setLastUpdated(result.as_of);setPage(0);
     }catch(err){setError(err.message);}finally{setBusy(false);}
   };
@@ -10776,8 +10786,8 @@ function StockingDashboardV2View({
       lastUpdated: S,
       nowTick: B
     }),
-    T = (...e) => P.track(() => dashboardBaseSb(...e)),
-    A = (...e) => P.track(() => dashboardBaseAll(...e)),
+    T = dashboardBaseSb,
+    A = dashboardBaseAll,
     q = "#0F0D0A",
     D = "rgba(255,255,255,0.08)",
     F = "#F4EFE6",
@@ -10857,16 +10867,19 @@ function StockingDashboardV2View({
       const t = performance.now();
       _("");
       try {
+        const {nextData,completed}=await P.track(()=>withStockingRefresh142(e,a,async publish=>{
         const n = `warehouse_id=eq.${a}&`,
           r = pkStart(pkMonthStart(pkYmd(new Date()), 13)).toISOString().split(".")[0] + "Z",
-          [balance138, i, c] = await Promise.all([
+          [balance138, i, c] = await stockingDashboardReads142([
           T('/rest/v1/rpc/stk_dashboard_balances138',{method:'POST',token:e,body:{p_wh:a,p_since:r}}),
           A(`/rest/v1/stk_str?${n}select=id,str_number,status,source,destination,product_barcode,product_name,qty,created_at,confirmed_at,picked_at,packed_at,dispatched_at,gatepass_number&order=id.asc`,e),
           A('/rest/v1/stk_products?select=internal_barcode,display_name,department,sales_price&order=internal_barcode.asc',e)]);
         const nextData={putaway:balance138.putaway,adj:balance138.adj,strs:i,
           products:Object.fromEntries((c||[]).map(row=>[row.internal_barcode,row])),grn:balance138.grn};
         const completed=new Date();
-        await P.track(()=>publishStockDashboard99(e,a,"stkdashboardv2",nextData,completed.toISOString()));
+        await publish('stkdashboardv2',nextData,completed.toISOString());
+        return {nextData,completed};
+        }));
         y(nextData), S(completed), B(completed.getTime()), E(Math.round(performance.now() - t));
       } catch (e) {
         _(`Load fail: ${e.message}`);
