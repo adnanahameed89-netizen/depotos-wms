@@ -1948,6 +1948,7 @@ function Sidebar({
       return rank(x.id) - rank(y.id);
     });
   }
+  h = h.filter(tab => tab.id !== 'dashboardv2');
   h = h.filter(tab => tab.id !== 'stkinventory' || o === 'stocking' && canOpenStockingInventory142(a.role) && a.nav_overrides?.stkinventory !== false);
   if (a.role === 'sales_resolution_executive') h = [{
     id: 'orders',
@@ -3091,7 +3092,7 @@ function DashboardViewPanel147({
       gap: 12,
       marginBottom: 14
     }
-  }, ke("Orders today", s.received.toLocaleString(), `${s.dispatched} dispatched today`, Se.BLUE, () => a("orders"), "Orders received / dispatched today"), ke("Pending orders", p.ordersPending.toLocaleString(), `${p.ordersPendingQty.toLocaleString()} pcs to fulfil`, Se.AMBER, () => a("orders"), "Received, queued, picking, RTD, scanned or incomplete"), ke("Dispatched", p.ordersCompleted.toLocaleString(), `${p.ordersCompletedQty.toLocaleString()} pcs shipped`, Se.GREEN, () => a("dispatch")), ke("48h on-time rate", null != f.rate ? `${f.rate}%` : "—", `${f.onTime} on time · ${f.delayed} delayed`, null == f.rate ? Se.MUTED : f.rate >= 90 ? Se.GREEN : f.rate >= 75 ? Se.AMBER : Se.RED, null, "Received → dispatched within 48h, Pakistan holidays excluded"), ke("Avg lead time", null != h.avgFulfillmentHrs ? `${h.avgFulfillmentHrs.toFixed(1)}h` : "—", `Target 48h · bucket ${h.avgBucketSize} units/order`, null != h.avgFulfillmentHrs && h.avgFulfillmentHrs > 48 ? Se.RED : Se.GREEN), ke("Backlog > 48h", ne ? ne.backlogCount.toLocaleString() : "—", "Over 48h since receiving, holidays excluded", ne && ne.backlogCount > 0 ? Se.RED : Se.GREEN, () => a("orders")), ke("Return in-transit", z.length.toLocaleString(), Object.entries(z.reduce((e, t) => (e[t.courier || "Other"] = (e[t.courier || "Other"] || 0) + 1, e), {})).map(([e, t]) => `${e}: ${t}`).join(" · ") || "None coming back", z.length ? Se.PURPLE : Se.GREEN, () => a("returns")), ke("Delivery success", we(ve.del, ve.syn), `${ve.del.toLocaleString()} delivered · returns ${we(ve.ret, ve.syn)}`, Se.GREEN, null, "Of dispatched orders with a synced courier status (PostEx + M&P)")), panel147 === "orders" && React.createElement("div", {
+  }, ke("Orders today", s.received.toLocaleString(), `${s.dispatched} dispatched today`, Se.BLUE, () => a("orders"), "Orders received / dispatched today"), ke("Pending orders", p.ordersPending.toLocaleString(), `${p.ordersPendingQty.toLocaleString()} pcs to fulfil`, Se.AMBER, () => a("orders"), "Received, queued, picking, RTD, scanned or incomplete"), ke("Dispatched", p.ordersCompleted.toLocaleString(), `${p.ordersCompletedQty.toLocaleString()} pcs shipped`, Se.GREEN, () => a("dispatch")), ke("48h on-time rate", null != f.rate ? `${f.rate}%` : "—", `${f.onTime} on time · ${f.delayed} delayed`, null == f.rate ? Se.MUTED : f.rate >= 90 ? Se.GREEN : f.rate >= 75 ? Se.AMBER : Se.RED, null, "Received → dispatched within 48h, Pakistan holidays excluded"), ke("Avg lead time", null != h.avgFulfillmentHrs ? `${h.avgFulfillmentHrs.toFixed(1)}h` : "—", `Target 48h · bucket ${h.avgBucketSize} units/order`, null != h.avgFulfillmentHrs && h.avgFulfillmentHrs > 48 ? Se.RED : Se.GREEN), ke("Backlog > 48h", ne ? ne.backlogCount.toLocaleString() : "—", "Over 48h since receiving, holidays excluded", ne && ne.backlogCount > 0 ? Se.RED : Se.GREEN, () => a("orders")), null, null), panel147 === "orders" && React.createElement("div", {
     style: {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fit, minmax(330px, 1fr))",
@@ -3148,62 +3149,7 @@ function DashboardViewPanel147({
         transition: "width 0.4s"
       }
     })))));
-  })(xe)), React.createElement("div", {
-    style: r.panel
-  }, React.createElement("div", {
-    style: r.panelTitle
-  }, "Courier performance — last mile"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, ["Courier", "Dispatched", "Delivered", "Returned", "In transit", "Success", "Return"].map(e => React.createElement("th", {
-    key: e,
-    style: r.th
-  }, e)))), React.createElement("tbody", null, i.map(e => React.createElement("tr", {
-    key: e.courier
-  }, React.createElement("td", {
-    style: {
-      ...r.td,
-      fontWeight: 600
-    }
-  }, e.courier), React.createElement("td", {
-    style: r.td
-  }, e.dispatched.toLocaleString()), React.createElement("td", {
-    style: {
-      ...r.td,
-      color: Se.GREEN
-    }
-  }, e.delivered.toLocaleString()), React.createElement("td", {
-    style: {
-      ...r.td,
-      color: Se.RED
-    }
-  }, e.returned.toLocaleString()), React.createElement("td", {
-    style: {
-      ...r.td,
-      color: Se.MUTED
-    }
-  }, (e.dispatched - e.delivered - e.returned).toLocaleString()), React.createElement("td", {
-    style: {
-      ...r.td,
-      color: Se.GREEN,
-      fontWeight: 600
-    }
-  }, we(e.delivered, e.synced)), React.createElement("td", {
-    style: {
-      ...r.td,
-      color: Se.RED
-    }
-  }, we(e.returned, e.synced)))), !i.length && React.createElement("tr", null, React.createElement("td", {
-    colSpan: 7,
-    style: {
-      ...r.td,
-      color: Se.MUTED,
-      textAlign: "center"
-    }
-  }, "No dispatched orders yet")))), React.createElement("div", {
-    style: {
-      color: Se.MUTED,
-      fontSize: 10.5,
-      marginTop: 8
-    }
-  }, "Rates use orders with a synced courier status. Other couriers show counts only."))), panel147 === "orders" && React.createElement("div", {
+  })(xe)), null), panel147 === "orders" && React.createElement("div", {
     style: r.panel
   }, React.createElement("div", {
     style: r.panelTitle
@@ -40620,8 +40566,8 @@ function DashboardTabs147({kind,token,profile,setView,showToast}){
  const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
  return h('div',null,h('div',{style:{...S.panel,display:'flex',gap:8,flexWrap:'wrap'}},...list.map(([key,label])=>h('button',{key,style:stkPill(panel===key),onClick:()=>setPanel(key)},label))),h('p',{style:{fontSize:12,color:'#7b7469'}},'Select a panel, then Refresh. Each panel has its own saved snapshot. Other panels are not refreshed.'),isShared&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:published},busy?'Loading…':'Load latest published panel'),error&&h('p',{role:'alert'},error),(!isShared||shared)&&h(Component,{key:kind+':'+panel+':'+profile.id+':'+profile.warehouse_id+':'+(shared?.as_of||''),panel147:panel,token,profile,setView,showToast,shared}));
 }
-function DashboardView(props){return React.createElement(DashboardTabs147,{...props,kind:'main'});}
-function DashboardV2View(props){return React.createElement(DashboardTabs147,{...props,kind:'v2'});}
+function DashboardView(props){return React.createElement(EcommerceDashboard152,props);}
+function DashboardV2View(props){return React.createElement(EcommerceDashboard152,props);}
 function StockingDashboardV2View(props){return React.createElement(DashboardTabs147,{...props,kind:'stock'});}
 function monthlyModel149(data,destination='',department='') {
  const months=[];let d=new Date(data.from_date+'T00:00:00Z');const end=data.to_date.slice(0,7);
@@ -40654,6 +40600,29 @@ function MonthlyDispatch149({token,profile}){
  h('div',{style:card},h('h3',null,'Monthly dispatch'),h('div',{className:'no-print149'},...['pcs','known_sale_value'].map(k=>h('button',{key:k,onClick:()=>M(k),style:{background:metric===k?"#f5a623":"#1b1811",color:metric===k?"#171108":"#f2efe7",fontWeight:600}},k==='pcs'?'PCS':'Sale Value (PKR)'))),h('p',null,metric==='pcs'?'Dispatched PCS':'Sale Value (PKR) · incomplete months have no value bar'),h('svg',{viewBox:'0 0 960 250',role:'img','aria-label':'Monthly dispatch '+(metric==='pcs'?'PCS':'Sale Value PKR')},...model.months.map((m,i)=>{const v=model.byMonth[m],missing=metric!=='pcs'&&v.unpriced_pcs>0,max=Math.max(1,...model.months.map(m=>metric!=='pcs'&&model.byMonth[m].unpriced_pcs?0:model.byMonth[m][metric])),width=900/model.months.length,x=30+i*width,height=missing?0:170*v[metric]/max;return h('g',{key:m},h('rect',{x:x+width*.2,y:200-height,width:width*.6,height,rx:5,fill:m===current?'#f5a623':'#489bff'}),h('text',{x:x+width/2,y:missing?185:190-height,textAnchor:'middle',fontSize:11,fill:'#f2efe7'},missing?'Incomplete':num(v[metric])),h('text',{x:x+width/2,y:225,textAnchor:'middle',fontSize:11,fill:'#f2efe7'},label(m)));}))),
  h('div',{style:{...card,marginTop:18,overflowX:'auto'}},h('h3',null,'Destination-wise monthly breakup'),h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:13}},h('thead',null,h('tr',null,h('th',{rowSpan:2,style:td},'Destination'),...model.months.map(m=>h('th',{key:m,colSpan:2,style:{...td,background:m===current?'#332810':'#242116'}},label(m))),h('th',{colSpan:2,style:td},'Period total')),h('tr',null,...[...model.months,'total'].flatMap(m=>[h('th',{key:m+'p',style:td},'PCS'),h('th',{key:m+'v',style:td},'Sale Value (PKR)')]))),h('tbody',null,...[...model.destinations,['TOTAL', {months:model.byMonth,total:model.total}]].map(([name,row])=>h('tr',{key:name,style:{fontWeight:name==='TOTAL'?700:400,color:name==='TOTAL'?'#ffb627':'#f2efe7',background:name==='TOTAL'?'#242116':'transparent'}},h('td',{style:{...td,textAlign:'left'}},name),...[...model.months.map(m=>row.months[m]||{pcs:0,known_sale_value:0,unpriced_pcs:0}),row.total].flatMap((v,i)=>[h('td',{key:i+'p',style:td},num(v.pcs)),h('td',{key:i+'v',style:td},money(v))]))))),!model.destinations.length&&h('p',null,'No dispatched records for these filters.')),
  h('p',{style:{fontSize:12}},'Only dispatched / received STR quantities. Pending picking and packing excluded. Current month is partial; no full-month growth comparison.')));
+}
+
+function courierTotal152(rows){const keys=['dispatched','delivered','returned','rip','pending','unknown','valid_times','delivery_days_sum','pending_days_sum','pending_valid','ambiguous_handovers'];const a=Object.fromEntries(keys.map(k=>[k,0]));rows.forEach(r=>keys.forEach(k=>a[k]+=Number(r[k]||0)));return a;}
+function EcommerceDashboard152(props){
+ const h=React.createElement,[tab,T]=useState('warehouse'),[section,U]=useState('orders');
+ const tabs=[['warehouse','Warehouse progress'],['courier','Courier progress'],['staff','Staff productivity'],['cartons','Carton consumption'],['inventory','Inventory movement & ageing']];
+ const sub=[['orders','Orders & dispatch'],['inbound','Inbound pending'],['velocity','Fulfillment velocity'],['snapshot','Date-range orders']];
+ const Comp=tab==='courier'?CourierProgress152:['inventory','cartons'].includes(tab)?DashboardV2ViewPanel147:DashboardViewPanel147;
+ return h('section',{style:{background:'#100e09',color:'#f2efe7',padding:16,borderRadius:16}},h('h2',null,'Ecommerce Management'),h('nav',{'aria-label':'Dashboard sections',style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}},...tabs.map(([k,n])=>h('button',{key:k,onClick:()=>T(k),style:{...stkPill(tab===k),background:tab===k?'#f5aa21':'#242016',color:tab===k?'#100e09':'#f2efe7'}},n))),tab==='warehouse'&&h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},...sub.map(([k,n])=>h('button',{key:k,onClick:()=>U(k),style:stkPill(section===k)},n))),h(Comp,{...props,key:tab+':'+section+':'+props.profile.id+':'+props.profile.warehouse_id,panel147:tab==='warehouse'?section:tab}));
+}
+function CourierProgress152({token,profile}){
+ const h=React.createElement,today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Karachi'});
+ const [from,F]=useState(today.slice(0,7)+'-01'),[to,T]=useState(today),[data,D]=useState(null),[busy,B]=useState(false),[error,E]=useState(''),[city,C]=useState(''),[basis,R]=useState('all');const live=React.useRef(true),running=React.useRef(false);
+ useEffect(()=>()=>{live.current=false;},[]);
+ const refresh=async()=>{if(running.current)return;running.current=true;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>92)throw Error('Choose up to 93 days, without future dates.');const v=await dashboardRequest147('/rest/v1/rpc/wms_courier_progress152',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid courier report response');if(live.current){D(v);C('');}}catch(e){if(live.current)E(e.message);}finally{running.current=false;if(live.current)B(false);}};
+ const n=x=>Number(x||0).toLocaleString('en-PK',{maximumFractionDigits:1}),avg=(s,key='delivery')=>{const den=key==='delivery'?s.valid_times:s.pending_valid;return den?n(s[key+'_days_sum']/den)+' days':'N/A';},rate=(v,s)=>{const den=basis==='closed'?s.delivered+s.returned:s.dispatched;return den?n(100*v/den)+'%':'N/A';};
+ const rows=(data?.rows||[]).filter(r=>!city||r.city===city),card={background:'#1a1710',border:'1px solid #393327',borderRadius:14,padding:18},cell={padding:'12px 10px',borderBottom:'1px solid #393327',textAlign:'right',whiteSpace:'nowrap'},colors=['#39d780','#ff6868','#f5aa21','#58a6ff','#827767'],keys=['delivered','returned','rip','pending','unknown'];
+ return h('div',{className:'courier152'},h('style',null,`.courier152 input,.courier152 select{background:#242016;color:#f2efe7;border:1px solid #514731;border-radius:7px;padding:10px;color-scheme:dark}.courier152 button{background:#f5aa21;border:0;border-radius:20px;padding:10px 16px;color:#160f04;font-weight:700}.courier152 button:disabled{opacity:.5}.courier152 small{color:#b9ad94}.courier152 .panels152{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}@media(max-width:950px){.courier152 .panels152{grid-template-columns:1fr}}`),
+ h('h2',null,'Courier performance — Last mile'),h('div',{style:{...card,display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},h('label',null,'Handover from ',h('input',{type:'date',value:from,max:today,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,onChange:e=>T(e.target.value)})),h('button',{disabled:busy,onClick:refresh},busy?'Refreshing…':'Refresh courier panel'),h('select',{'aria-label':'City',value:city,onChange:e=>C(e.target.value)},h('option',{value:''},'All cities'),...[...new Set((data?.rows||[]).map(r=>r.city))].sort().map(c=>h('option',{key:c,value:c},c))),h('select',{'aria-label':'Rate denominator',value:basis,onChange:e=>R(e.target.value)},h('option',{value:'all'},'Rates / All dispatched'),h('option',{value:'closed'},'Rates / Delivered + returned'))),
+ error&&h('p',{role:'alert',style:{color:'#ff6868'}},error+(data?' · Previous snapshot retained.':'')),!data&&h('p',null,'Select handover dates and refresh this panel.'),data&&h(React.Fragment,null,h('p',null,data.from_date+' — '+data.to_date+' · Snapshot '+new Date(data.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT'),(from!==data.from_date||to!==data.to_date)&&h('p',{style:{color:'#f5aa21'}},'Dates changed — refresh to apply.'),h('p',{style:{fontSize:12,color:'#b9ad94'}},'Success / Return % basis: '+(basis==='all'?'all dispatched orders':'delivered + confirmed returned')+' · Lead time: handover → delivery, calendar days'),
+ data.delivery_time_verified===false&&h('p',{style:{color:'#f5aa21'}},'Delivery timestamp verification pending — lead-time averages unavailable. Counts and rates remain available.'),h('div',{className:'panels152'},...['M&P','PostEx'].map(c=>{const rs=rows.filter(r=>r.courier===c),s=courierTotal152(rs),scale=Math.max(7,...rs.map(r=>r.valid_times?r.delivery_days_sum/r.valid_times:0));return h('article',{key:c,style:card},h('h2',null,c+' · '+n(s.dispatched)+' dispatched'),h('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:18}},...[
+ ['Delivery success',rate(s.delivered,s),n(s.delivered)+' delivered',colors[0]],['Return rate',rate(s.returned,s),n(s.returned)+' confirmed returned',colors[1]],['Average delivery',avg(s),n(s.valid_times)+' / '+n(s.delivered)+' valid timestamps',colors[3]],['Pending deliveries',n(s.pending),'Average age '+avg(s,'pending'),colors[2]],['Return in process',n(s.rip),'Not confirmed returned',colors[2]],['Tracking unknown',n(s.unknown),'Needs tracking review','#b9ad94']].map(([label,value,sub,color])=>h('div',{key:label},h('small',null,label),h('div',{style:{fontSize:27,fontWeight:700,color,margin:'5px 0'}},value),h('small',null,sub)))),h('div',{style:{display:'flex',height:16,background:'#272219',borderRadius:6,overflow:'hidden',marginTop:22},'aria-label':'Dispatch status distribution'},...keys.map((k,i)=>h('span',{key:k,title:k+': '+s[k],style:{width:(s.dispatched?100*s[k]/s.dispatched:0)+'%',background:colors[i]}}))),h('div',{style:{display:'flex',gap:10,flexWrap:'wrap',fontSize:11,marginTop:8}},...['Delivered','Returned','Return in process','Pending','Unknown'].map((x,i)=>h('span',{key:x,style:{color:colors[i]}},x))),h('h3',null,'City delivery lead time'),...rs.map(r=>h('div',{key:r.city,style:{display:'grid',gridTemplateColumns:'110px 1fr 80px',alignItems:'center',gap:10,margin:'12px 0',fontSize:12}},h('span',null,r.city),h('div',{style:{height:8,background:'#29241a'}},h('div',{style:{height:8,background:'#58a6ff',width:(r.valid_times?100*r.delivery_days_sum/r.valid_times/scale:0)+'%'}})),h('span',null,avg(r)))),!rs.length&&h('p',null,'No handovers in this selection.'),h('small',null,'Scale 0–'+n(scale)+' days · shorter is faster'),s.ambiguous_handovers>0&&h('p',{style:{color:'#f5aa21'}},n(s.ambiguous_handovers)+' duplicate sheet memberships excluded from time averages.'));})),
+ h('div',{style:{...card,marginTop:16,overflowX:'auto'}},h('h3',null,'City-wise delivery performance'),h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},h('thead',null,h('tr',null,...['Courier / City','Dispatched','Delivered','Success %','Returned','Return %','Return in process','Pending','Unknown','Avg delivery','Timestamp coverage','Avg pending age'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...rows.map(r=>h('tr',{key:r.courier+r.city},...[r.courier+' / '+r.city,n(r.dispatched),n(r.delivered),rate(r.delivered,r),n(r.returned),rate(r.returned,r),n(r.rip),n(r.pending),n(r.unknown),avg(r),n(r.valid_times)+' / '+n(r.delivered),avg(r,'pending')].map((v,i)=>h('td',{key:i,style:{...cell,textAlign:i?'right':'left'}},v)))))),!rows.length&&h('p',null,'No matching handovers.'))));
 }
 
 </script>
