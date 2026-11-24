@@ -282,7 +282,7 @@ function DashboardSnapshotNote({
       fontSize: 12,
       color: e.error ? "#EF4444" : "#8A8272"
     }
-  }, e.error || (e.ready ? e.pending ? "Refreshing dashboard… please wait before changing tabs." : e.savedAt ? `Last refresh: ${new Date(e.refreshedAt || e.savedAt).toLocaleString()} · Saved snapshot — values remain until manual refresh.` : "No saved snapshot yet — press Refresh." : "Restoring saved dashboard…"));
+  }, e.error || (e.ready ? e.pending ? "Refreshing dashboard… please wait before changing tabs." : e.savedAt ? `Last refresh: ${new Date(e.refreshedAt || e.savedAt).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT'} · Saved snapshot — values remain until manual refresh.` : "No saved snapshot yet — press Refresh." : "Restoring saved dashboard…"));
 }
 const {
     useState: useState,
@@ -29793,8 +29793,8 @@ function StockingInboundPanel143({
   const [from, setFrom] = useState(pkMonthStart(today)),
     [to, setTo] = useState(today),
     [source, setSource] = useState('');
-  const [snapshot, setSnapshot] = useState(null),
-    [detail, setDetail] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const cache158=usePanelSnapshot158('stock-inbound:'+panel,dashboardScope158(null,token,wh),{dates,from,to,source},{dates:setDates,from:setFrom,to:setTo,source:setSource}),snapshot=cache158.data,setSnapshot=cache158.commit;
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const running = useRef(false);
@@ -29822,10 +29822,10 @@ function StockingInboundPanel143({
     p_source: source
   };
   const currentKey = JSON.stringify(currentFilters);
-  const view = snapshot?.key === currentKey ? snapshot : null;
-  const page = detail?.key === currentKey ? detail : null;
+  const view = snapshot;
+  const page = detail?.key === snapshot?.key ? detail : null;
   async function run(action) {
-    if (running.current || !wh) return;
+    if (!cache158.ready || running.current || !wh) return;
     running.current = true;
     setBusy(true);
     setError('');
@@ -29857,7 +29857,7 @@ function StockingInboundPanel143({
   const open = (group, offset = 0) => run(async () => {
     const data = await read(view.filters, group, offset, pageSize);
     setDetail({
-      key: currentKey,
+      key: view.key,
       group,
       offset,
       data
@@ -29963,7 +29963,7 @@ function StockingInboundPanel143({
   }), view && button(progress ? 'Export Progress CSV' : 'Export ' + (page?.group || label) + ' CSV', progress ? () => download(progressCols, data.groups, 'summary') : exportDetail)), error && h('p', {
     role: 'alert',
     className: 'sm88-error'
-  }, error), !view && h('p', {
+  }, error), cache158.note, snapshot && snapshot.key !== currentKey && h('p',{className:'sm88-muted'},'Filters changed — View Report to apply. Previous result remains below.'), !view && h('p', {
     className: 'sm88-muted'
   }, snapshot ? 'Filters changed. Select View Report to apply.' : 'Select View Report to load this panel.'), view && h(React.Fragment, null, h('p', {
     className: 'sm88-muted'
@@ -40140,14 +40140,10 @@ function CartonForecast124({
     today = pkYmd(new Date());
   const [from, setFrom] = useState(today.slice(0, 8) + '01'),
     [to, setTo] = useState(today);
-  const [report, setReport] = useState(null),
-    [stock, setStock] = useState({}),
+  const [stock, setStock] = useState({}),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  useEffect(() => {
-    setReport(null);
-    setStock({});
-  }, [profile.warehouse_id, token]);
+  const cache158=usePanelSnapshot158('cartons',dashboardScope158(profile),{from,to},{from:setFrom,to:setTo}),report=cache158.data,setReport=cache158.commit;
   const allowed = ['admin', 'warehouse_lead', 'supervisor', 'outbound_executive'].includes(profile.role);
   if (!allowed) return null;
   const fmt = v => v == null ? '—' : Number(v).toLocaleString('en-PK', {
@@ -40166,13 +40162,13 @@ function CartonForecast124({
   });
   const valid = rows.length > 0 && rows.every(r => Number.isSafeInteger(r.available) && r.available >= 0);
   const load = async () => {
+    if(!cache158.ready||busy)return;
     setError('');
     if (!from || !to || to < from || to > today) {
       setError('Choose valid dates without future dates');
       return;
     }
     setBusy(true);
-    setReport(null);
     try {
       setReport(await wmsRpc(token, 'wms_carton_report139', {
         p_wh: profile.warehouse_id,
@@ -40250,7 +40246,7 @@ function CartonForecast124({
       borderRadius: 12,
       marginTop: 20
     }
-  }, h('h3', null, 'Carton consumption & ordering'), h('div', {
+  }, cache158.note, h('h3', null, 'Carton consumption & ordering'), h('div', {
     style: {
       display: 'flex',
       gap: 12,
@@ -40270,8 +40266,7 @@ function CartonForecast124({
     },
     onChange: e => {
       set(e.target.value);
-      setReport(null);
-    }
+      }
   }))), h('button', {
     style: S.primaryBtnSm,
     disabled: busy,
@@ -40559,16 +40554,51 @@ async function dashboardRequest147(path,opts={}){if((opts.method||'GET')==='GET'
 function dashboardAll147(path,token){return dashboardPage147(token,path);}
 function DashboardTabs147({kind,token,profile,setView,showToast}){
  const h=React.createElement,sets={main:[['orders','Orders & dispatch'],['inbound','Inbound pending'],['courier','Courier & return transit'],['staff','Staff productivity'],['velocity','Fulfillment velocity'],['snapshot','Date-range orders']],v2:[['inventory','Inventory, movement & ageing'],['monthly','Monthly orders'],['transactions','Recent transactions'],['cartons','Carton consumption']],stock:[['inventory','Inventory'],['outbound','Outbound & lead time'],['trends','Monthly trends']]};
- const list=sets[kind],[panel,setPanel]=useState(list[0][0]),[shared,setShared]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),generation=React.useRef(0);
+ const list=sets[kind],[panel,setPanel]=useState(list[0][0]),[busy,setBusy]=useState(false),[error,setError]=useState(''),generation=React.useRef(0);
+ const cache158=usePanelSnapshot158('stock-published:'+panel,dashboardScope158(profile),{},{}),shared=cache158.data,setShared=cache158.commit;
  const isShared=kind==='stock'&&panel!=='trends'&&profile.role!=='admin';
- useEffect(()=>{generation.current++;setShared(null);setError('');setBusy(false);},[panel,token,profile.warehouse_id]);
- const published=async()=>{const run=++generation.current;setBusy(true);setError('');try{const rows=await dashboardRequest147('/rest/v1/stk_dashboard_published99?warehouse_id=eq.'+profile.warehouse_id+'&dashboard=eq.stkdashboardv2&select=panel:payload->panels147->'+panel,{token});const result=rows?.[0]?.panel;if(!result?.payload)throw Error('Admin has not published this panel yet.');if(run===generation.current)setShared(result);}catch(e){if(run===generation.current)setError(e.message);}finally{if(run===generation.current)setBusy(false);}};
+ useEffect(()=>{generation.current++;setError('');setBusy(false);},[panel,token,profile.warehouse_id]);
+ const published=async()=>{if(!cache158.ready||busy)return;const run=++generation.current;setBusy(true);setError('');try{const rows=await dashboardRequest147('/rest/v1/stk_dashboard_published99?warehouse_id=eq.'+profile.warehouse_id+'&dashboard=eq.stkdashboardv2&select=panel:payload->panels147->'+panel,{token});const result=rows?.[0]?.panel;if(!result?.payload)throw Error('Admin has not published this panel yet.');if(run===generation.current)setShared(result);}catch(e){if(run===generation.current)setError(e.message);}finally{if(run===generation.current)setBusy(false);}};
  const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
- return h('div',null,h('div',{style:{...S.panel,display:'flex',gap:8,flexWrap:'wrap'}},...list.map(([key,label])=>h('button',{key,style:stkPill(panel===key),onClick:()=>setPanel(key)},label))),h('p',{style:{fontSize:12,color:'#7b7469'}},'Select a panel, then Refresh. Each panel has its own saved snapshot. Other panels are not refreshed.'),isShared&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:published},busy?'Loading…':'Load latest published panel'),error&&h('p',{role:'alert'},error),(!isShared||shared)&&h(Component,{key:kind+':'+panel+':'+profile.id+':'+profile.warehouse_id+':'+(shared?.as_of||''),panel147:panel,token,profile,setView,showToast,shared}));
+ return h('div',null,h('div',{style:{...S.panel,display:'flex',gap:8,flexWrap:'wrap'}},...list.map(([key,label])=>h('button',{key,style:stkPill(panel===key),onClick:()=>setPanel(key)},label))),h('p',{style:{fontSize:12,color:'#7b7469'}},'Select a panel, then Refresh. Each panel has its own saved snapshot. Other panels are not refreshed.'),isShared&&cache158.note,isShared&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:published},busy?'Loading…':'Load latest published panel'),error&&h('p',{role:'alert'},error),(!isShared||shared)&&h(Component,{key:kind+':'+panel+':'+profile.id+':'+profile.warehouse_id+':'+(shared?.as_of||''),panel147:panel,token,profile,setView,showToast,shared}));
 }
 function DashboardView(props){return React.createElement(EcommerceDashboard152,props);}
 function DashboardV2View(props){return React.createElement(EcommerceDashboard152,props);}
 function StockingDashboardV2View(props){return React.createElement(DashboardTabs147,{...props,kind:'stock'});}
+
+// V158: local, account/role/warehouse-scoped successful panel snapshots. No background RPCs.
+const dashboardMemory158 = new Map();
+function dashboardScope158(profile, token, warehouse) {
+  if(profile?.id) return [profile.id,profile.role,profile.warehouse_id];
+  try {const p=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));return [p.sub,p.role,warehouse];} catch {return null;}
+}
+function usePanelSnapshot158(panel,scope,filters,setters) {
+  const key=scope?JSON.stringify(['V158',SUPABASE_URL,panel,...scope]):null;
+  const [entry,S]=useState(null),[ready,R]=useState(false),[error,E]=useState('');
+  const current=useRef({filters,setters}),alive=useRef(false),keyRef=useRef(key);
+  current.current={filters,setters};keyRef.current=key;
+  useEffect(()=>{alive.current=true;let cancelled=false;R(false);S(null);E('');
+    const restore=v=>{if(cancelled)return;if(v?.version===158){S(v);for(const [k,x] of Object.entries(v.filters||{}))current.current.setters[k]?.(x);}R(true);};
+    if(!key){R(true);return()=>{cancelled=true;alive.current=false;};}
+    if(dashboardMemory158.has(key))restore(dashboardMemory158.get(key));
+    else dashboardSnapshotIO('get',key).then(restore).catch(()=>{if(!cancelled){R(true);E('Saved result could not be restored. Refresh this panel.');}});
+    return()=>{cancelled=true;alive.current=false;};
+  },[key]);
+  const commit=value=>{if(!key||!ready||!alive.current||keyRef.current!==key)return;
+    const applied={...current.current.filters};
+    if(value?.selected_month)applied.month=value.selected_month.slice(0,7);
+    if(value?.from_date)applied.from=panel==='monthly'?value.from_date.slice(0,7):value.from_date;
+    if(value?.to_date)applied.to=panel==='monthly'?value.to_date.slice(0,7):value.to_date;
+    if(value?.filters){applied.dates=value.filters.p_from!==null;applied.from=value.filters.p_from||applied.from;applied.to=value.filters.p_to||applied.to;applied.source=value.filters.p_source;}
+    const v={version:158,data:value,filters:applied,savedAt:new Date().toISOString()};
+    dashboardMemory158.set(key,v);S(v);E('');
+    dashboardSnapshotIO('put',key,v).catch(()=>{if(alive.current&&keyRef.current===key)E('Result visible, but browser could not save it for the next visit.');});
+  };
+  const note=React.createElement('p',{style:{fontSize:12,color:error?'#ff7474':'#a99d85'},role:error?'alert':undefined},
+    error||(!ready?'Restoring saved result…':entry?'Last successful refresh: '+new Date(entry.savedAt).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT · Saved until next successful refresh':'No saved result — refresh this panel.'));
+  return {data:entry?.data??null,commit,ready,note};
+}
+
 function monthlyModel149(data,destination='',department='') {
  const months=[];let d=new Date(data.from_date+'T00:00:00Z');const end=data.to_date.slice(0,7);
  while(d.toISOString().slice(0,7)<=end){months.push(d.toISOString().slice(0,7));d.setUTCMonth(d.getUTCMonth()+1);}
@@ -40580,16 +40610,17 @@ function monthlyModel149(data,destination='',department='') {
 }
 function MonthlyDispatch149({token,profile}){
  const h=React.createElement,now=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Karachi'}),current=now.slice(0,7),prev=new Date(current+'-01T00:00:00Z');prev.setUTCMonth(prev.getUTCMonth()-1);
- const [from,F]=useState(prev.toISOString().slice(0,7)),[to,T]=useState(current),[data,D]=useState(null),[busy,B]=useState(false),[error,E]=useState(''),[dest,SD]=useState(''),[dept,SP]=useState(''),[metric,M]=useState('pcs');const running=React.useRef(false),generation=React.useRef(0),root=React.useRef(null);
+ const [from,F]=useState(prev.toISOString().slice(0,7)),[to,T]=useState(current),[busy,B]=useState(false),[error,E]=useState(''),[dest,SD]=useState(''),[dept,SP]=useState(''),[metric,M]=useState('pcs');const running=React.useRef(false),generation=React.useRef(0),root=React.useRef(null);
+ const cache158=usePanelSnapshot158('monthly',dashboardScope158(profile),{from,to},{from:F,to:T}),data=cache158.data,D=cache158.commit;
  useEffect(()=>()=>{generation.current++;},[]);
  const num=x=>Number(x||0).toLocaleString('en-PK',{maximumFractionDigits:2}),money=x=>x.unpriced_pcs>0?'Incomplete · '+num(x.unpriced_pcs)+' PCS unpriced':'Rs '+num(x.known_sale_value);
  const label=m=>new Date(m+'-01T00:00:00Z').toLocaleDateString('en-GB',{month:'short',year:'numeric',timeZone:'UTC'})+(data&&m===data.to_date.slice(0,7)&&Number(data.to_date.slice(8))<new Date(Number(m.slice(0,4)),Number(m.slice(5)),0).getDate()?' MTD':'');
- const generate=async()=>{if(running.current)return;running.current=true;const run=++generation.current;B(true);E('');try{if(!from||!to||from>to||to>current||(Number(to.slice(0,4))-Number(from.slice(0,4)))*12+Number(to.slice(5))-Number(from.slice(5))>=12)throw Error('Select a valid range of up to 12 months.');const last=new Date(Date.UTC(Number(to.slice(0,4)),Number(to.slice(5)),0)).toISOString().slice(0,10),end=last>now?now:last;const result=await dashboardRequest147('/rest/v1/rpc/stk_monthly_dispatch149',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_from:from+'-01',p_to:end}});if(!result||!Array.isArray(result.rows))throw Error('Invalid report response');monthlyModel149(result);if(run===generation.current){D(result);SD('');SP('');}}catch(e){if(run===generation.current)E(e.message);}finally{running.current=false;if(run===generation.current)B(false);}};
+ const generate=async()=>{if(!cache158.ready||running.current)return;running.current=true;const run=++generation.current;B(true);E('');try{if(!from||!to||from>to||to>current||(Number(to.slice(0,4))-Number(from.slice(0,4)))*12+Number(to.slice(5))-Number(from.slice(5))>=12)throw Error('Select a valid range of up to 12 months.');const last=new Date(Date.UTC(Number(to.slice(0,4)),Number(to.slice(5)),0)).toISOString().slice(0,10),end=last>now?now:last;const result=await dashboardRequest147('/rest/v1/rpc/stk_monthly_dispatch149',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_from:from+'-01',p_to:end}});if(!result||!Array.isArray(result.rows))throw Error('Invalid report response');monthlyModel149(result);if(run===generation.current){D(result);SD('');SP('');}}catch(e){if(run===generation.current)E(e.message);}finally{running.current=false;if(run===generation.current)B(false);}};
  const model=data?monthlyModel149(data,dest,dept):null,dirty=data&&(from!==data.from_date.slice(0,7)||to!==data.to_date.slice(0,7));
  const print=()=>{const w=window.open('','_blank');if(!w){E('Allow popups to save the PDF.');return;}w.document.write('<!doctype html><html><head><title>Destination Dispatch History</title><style>@page{size:A4 landscape;margin:10mm}body{font:11px Arial;color:#f2efe7;background:#100e09;-webkit-print-color-adjust:exact;print-color-adjust:exact}text{fill:#f2efe7}button,input,select,.no-print149{display:none!important}table{border-collapse:collapse;width:100%}th,td{padding:7px;border:1px solid #484132;text-align:right}th:first-child,td:first-child{text-align:left}thead{display:table-header-group}tr{break-inside:avoid}svg{max-height:170px;width:100%}</style></head><body>'+root.current.innerHTML+'</body></html>');w.document.close();w.focus();setTimeout(()=>w.print(),300);};
  const card={background:'#191710',border:'1px solid #353126',borderRadius:14,padding:20},td={padding:'12px 14px',textAlign:'right',whiteSpace:'nowrap',borderBottom:'1px solid #353126'};
  return h('section',{className:'monthly-dark150',style:{background:'#100e09',color:'#f2efe7',padding:20,borderRadius:18}},
- h('style',null,`.monthly-dark150 input,.monthly-dark150 select{background:#26231b;color:#f2efe7;border:1px solid #484132;border-radius:7px;padding:9px;color-scheme:dark}.monthly-dark150 button{background:#1b1811;color:#f2efe7;border:1px solid #484132;border-radius:20px;padding:9px 15px;cursor:pointer}.monthly-dark150 button:disabled{opacity:.55;cursor:wait}.monthly-dark150 small{color:#b7ab8b}.monthly-dark150 th{color:#e0d6bc}.monthly-dark150 tbody tr:hover{background:#29251a!important}.monthly-dark150 input:focus-visible,.monthly-dark150 select:focus-visible,.monthly-dark150 button:focus-visible{outline:2px solid #f5a623;outline-offset:2px}`),
+ cache158.note,h('style',null,`.monthly-dark150 input,.monthly-dark150 select{background:#26231b;color:#f2efe7;border:1px solid #484132;border-radius:7px;padding:9px;color-scheme:dark}.monthly-dark150 button{background:#1b1811;color:#f2efe7;border:1px solid #484132;border-radius:20px;padding:9px 15px;cursor:pointer}.monthly-dark150 button:disabled{opacity:.55;cursor:wait}.monthly-dark150 small{color:#b7ab8b}.monthly-dark150 th{color:#e0d6bc}.monthly-dark150 tbody tr:hover{background:#29251a!important}.monthly-dark150 input:focus-visible,.monthly-dark150 select:focus-visible,.monthly-dark150 button:focus-visible{outline:2px solid #f5a623;outline-offset:2px}`),
  h('div',{className:'no-print149',style:{...card,display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},h('label',null,'From month ',h('input',{type:'month',value:from,max:current,onChange:e=>F(e.target.value)})),h('label',null,'To month ',h('input',{type:'month',value:to,max:current,onChange:e=>T(e.target.value)})),h('select',{value:'',onChange:e=>{const n=Number(e.target.value);if(!n)return;const d=new Date(current+'-01T00:00:00Z');d.setUTCMonth(d.getUTCMonth()-(n-1));F(d.toISOString().slice(0,7));T(current);}},h('option',{value:''},'Quick range'),...[2,3,6,12].map(n=>h('option',{key:n,value:n},'Last '+n+' months'))),h('button',{style:{background:"#f5a623",color:"#171108",fontWeight:700},disabled:busy,onClick:generate},busy?'Generating…':'Generate Report')),
  error&&h('p',{role:'alert',style:{color:'#ff7474'}},'Refresh failed: '+error+(data?' — previous result retained.':' — report unavailable.')),
  dirty&&h('p',null,'Dates changed. Generate Report to apply; displayed snapshot dates remain below.'),
@@ -40611,13 +40642,14 @@ function EcommerceDashboard152(props){
 }
 function CourierProgress152({token,profile}){
  const h=React.createElement,today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Karachi'});
- const [from,F]=useState(today.slice(0,7)+'-01'),[to,T]=useState(today),[data,D]=useState(null),[busy,B]=useState(false),[error,E]=useState(''),[city,C]=useState(''),[basis,R]=useState('all');const live=React.useRef(true),running=React.useRef(false);
+ const [from,F]=useState(today.slice(0,7)+'-01'),[to,T]=useState(today),[busy,B]=useState(false),[error,E]=useState(''),[city,C]=useState(''),[basis,R]=useState('all');const live=React.useRef(true),running=React.useRef(false);
+ const cache158=usePanelSnapshot158('courier',dashboardScope158(profile),{from,to},{from:F,to:T}),data=cache158.data,D=cache158.commit;
  useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
- const refresh=async()=>{if(running.current)return;running.current=true;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>92)throw Error('Choose up to 93 days, without future dates.');const v=await dashboardRequest147('/rest/v1/rpc/wms_courier_region_progress154',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid courier report response');if(live.current){D(v);C('');}}catch(e){if(live.current)E(e.message);}finally{running.current=false;if(live.current)B(false);}};
+ const refresh=async()=>{if(!cache158.ready||running.current)return;running.current=true;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>92)throw Error('Choose up to 93 days, without future dates.');const v=await dashboardRequest147('/rest/v1/rpc/wms_courier_region_progress154',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid courier report response');if(live.current){D(v);C('');}}catch(e){if(live.current)E(e.message);}finally{running.current=false;if(live.current)B(false);}};
  const n=x=>Number(x||0).toLocaleString('en-PK',{maximumFractionDigits:1}),avg=(s,key='delivery')=>{const den=key==='delivery'?s.valid_times:s.pending_valid;return den?n(s[key+'_days_sum']/den)+' days':'N/A';},rate=(v,s)=>{const den=basis==='closed'?s.delivered+s.returned:s.dispatched;return den?n(100*v/den)+'%':'N/A';};
  const rows=(data?.rows||[]).filter(r=>!city||r.region===city),card={background:'#1a1710',border:'1px solid #393327',borderRadius:14,padding:14},cell={padding:'12px 10px',borderBottom:'1px solid #393327',textAlign:'right',whiteSpace:'nowrap'},colors=['#39d780','#ff6868','#f5aa21','#58a6ff','#827767'],keys=['delivered','returned','rip','pending','unknown'];
  return h('div',{className:'courier152'},h('style',null,`.courier152 input,.courier152 select{background:#242016;color:#f2efe7;border:1px solid #514731;border-radius:7px;padding:10px;color-scheme:dark}.courier152 button{background:#f5aa21;border:0;border-radius:20px;padding:10px 16px;color:#160f04;font-weight:700}.courier152 button:disabled{opacity:.5}.courier152 small{color:#b9ad94}.courier152 .panels152{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}@media(max-width:950px){.courier152 .panels152{grid-template-columns:1fr}}`),
- h('h2',null,'Courier performance — Regions'),h('div',{style:{...card,display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},h('label',null,'Month ',h('input',{type:'month',max:today.slice(0,7),value:from.slice(0,7),onChange:e=>{const m=e.target.value;if(!m)return;F(m+'-01');const end=new Date(Date.UTC(Number(m.slice(0,4)),Number(m.slice(5)),0)).toISOString().slice(0,10);T(end>today?today:end);}})),h('label',null,'Reporting from ',h('input',{type:'date',value:from,max:today,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,onChange:e=>T(e.target.value)})),h('button',{disabled:busy,onClick:refresh},busy?'Refreshing…':'Refresh courier panel'),h('select',{'aria-label':'Region',value:city,onChange:e=>C(e.target.value)},h('option',{value:''},'All regions'),...[...new Set((data?.rows||[]).map(r=>r.region))].sort().map(c=>h('option',{key:c,value:c},c))),h('select',{'aria-label':'Rate denominator',value:basis,onChange:e=>R(e.target.value)},h('option',{value:'all'},'Success / All dispatched'),h('option',{value:'closed'},'Success / Closed tracking outcomes'))),
+ cache158.note,h('h2',null,'Courier performance — Regions'),h('div',{style:{...card,display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},h('label',null,'Month ',h('input',{type:'month',max:today.slice(0,7),value:from.slice(0,7),onChange:e=>{const m=e.target.value;if(!m)return;F(m+'-01');const end=new Date(Date.UTC(Number(m.slice(0,4)),Number(m.slice(5)),0)).toISOString().slice(0,10);T(end>today?today:end);}})),h('label',null,'Reporting from ',h('input',{type:'date',value:from,max:today,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,onChange:e=>T(e.target.value)})),h('button',{disabled:busy,onClick:refresh},busy?'Refreshing…':'Refresh courier panel'),h('select',{'aria-label':'Region',value:city,onChange:e=>C(e.target.value)},h('option',{value:''},'All regions'),...[...new Set((data?.rows||[]).map(r=>r.region))].sort().map(c=>h('option',{key:c,value:c},c))),h('select',{'aria-label':'Rate denominator',value:basis,onChange:e=>R(e.target.value)},h('option',{value:'all'},'Success / All dispatched'),h('option',{value:'closed'},'Success / Closed tracking outcomes'))),
  error&&h('p',{role:'alert',style:{color:'#ff6868'}},error+(data?' · Previous snapshot retained.':'')),!data&&h('p',null,'Select reporting dates and refresh this panel.'),data&&h(React.Fragment,null,h('p',null,data.from_date+' — '+data.to_date+' · Snapshot '+new Date(data.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT'),(from!==data.from_date||to!==data.to_date)&&h('p',{style:{color:'#f5aa21'}},'Dates changed — refresh to apply.'),h('p',{style:{fontSize:12,color:'#b9ad94'}},'Delivery success basis: '+(basis==='all'?'all dispatched orders':'delivered + confirmed returned')+' · Processed-return ratio = period processed parcels ÷ period dispatch; includes older dispatches.'),
  data.delivery_time_verified===false&&h('p',{style:{color:'#f5aa21'}},'Delivery timestamp verification pending — lead-time averages unavailable. Counts and rates remain available.'),h('p',null,(()=>{const t=courierTotal152(rows);return 'M&P + PostEx: '+n(t.dispatched)+' dispatched · '+n(t.received_returns)+' processed returns · '+(t.dispatched?n(100*t.received_returns/t.dispatched)+'%':'N/A')+' returns / dispatch';})()),data.other_received_returns>0&&h('p',{style:{color:'#b9ad94'}},n(data.other_received_returns)+' processed returns belong to other / unknown couriers and are excluded from these two panels.'),h('div',{className:'panels152'},...['M&P','PostEx'].map(c=>{const rs=rows.filter(r=>r.courier===c),s=courierTotal152(rs),scale=Math.max(7,...rs.map(r=>r.valid_times?r.delivery_days_sum/r.valid_times:0));return h('article',{key:c,style:card},h('h2',null,c+' · '+n(s.dispatched)+' dispatched'),h('div',{style:{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:12}},...[
  ['Delivery success',rate(s.delivered,s),n(s.delivered)+' delivered',colors[0]],['Processed returns',n(s.received_returns),(s.dispatched?n(100*s.received_returns/s.dispatched)+'%':'N/A')+' of period dispatch · '+n(s.return_pcs)+' PCS',colors[1]],['Average delivery',avg(s),n(s.valid_times)+' / '+n(s.delivered)+' valid timestamps',colors[3]],['Pending deliveries',n(s.pending),'Average age '+avg(s,'pending'),colors[2]],['Return in process',n(s.rip),'Not confirmed returned',colors[2]],['Tracking unknown',n(s.unknown),'Needs tracking review','#b9ad94']].map(([label,value,sub,color])=>h('div',{key:label},h('small',null,label),h('div',{style:{fontSize:22,fontWeight:700,color,margin:'5px 0'}},value),h('small',null,sub)))),h('h3',null,'Dispatch vs processed returns'),...rs.map(r=>h('div',{key:'movement'+r.region,style:{margin:'12px 0'}},h('small',null,r.region),...[[r.dispatched||0,'Dispatched','#58a6ff'],[r.received_returns||0,'Processed returns','#ff6868']].map(([v,label,color])=>h('div',{key:label,style:{display:'flex',gap:8,alignItems:'center',fontSize:12,marginTop:5}},h('span',{style:{width:115}},label),h('div',{style:{flex:1,background:'#29241a'}},h('div',{style:{height:10,background:color,width:(100*v/Math.max(1,Number(r.dispatched||0),Number(r.received_returns||0)))+'%'}})),h('b',null,n(v)))))),h('h3',null,'Region delivery lead time'),...rs.map(r=>h('div',{key:r.region,style:{display:'grid',gridTemplateColumns:'110px 1fr 80px',alignItems:'center',gap:10,margin:'12px 0',fontSize:12}},h('span',null,r.region),h('div',{style:{height:8,background:'#29241a'}},h('div',{style:{height:8,background:'#58a6ff',width:(r.valid_times?100*r.delivery_days_sum/r.valid_times/scale:0)+'%'}})),h('span',null,avg(r)))),!rs.length&&h('p',null,'No dispatch or processed-return activity.'),h('small',null,'Scale 0–'+n(scale)+' days · shorter is faster'),s.ambiguous_handovers>0&&h('p',{style:{color:'#f5aa21'}},n(s.ambiguous_handovers)+' duplicate sheet memberships excluded from time averages.'));})),
@@ -40625,12 +40657,13 @@ function CourierProgress152({token,profile}){
 }
 function WarehouseProgress154({token,profile}){
  const h=React.createElement,today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Karachi'}),current=today.slice(0,7);
- const [month,M]=useState(current),[data,D]=useState(null),[busy,B]=useState(false),[error,E]=useState('');const live=React.useRef(true),running=React.useRef(false),root=React.useRef(null);
+ const [month,M]=useState(current),[busy,B]=useState(false),[error,E]=useState('');const live=React.useRef(true),running=React.useRef(false),root=React.useRef(null);
+ const cache158=usePanelSnapshot158('warehouse',dashboardScope158(profile),{month},{month:M}),data=cache158.data,D=cache158.commit;
  useEffect(()=>{live.current=true;return()=>{live.current=false;};},[]);
- const refresh=async()=>{if(running.current)return;running.current=true;B(true);E('');try{if(!/^\d{4}-\d{2}$/.test(month)||month>current)throw Error('Choose a valid month.');const v=await dashboardRequest147('/rest/v1/rpc/wms_warehouse_progress156',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_month:month+'-01'}});if(!Array.isArray(v?.rows)||!Array.isArray(v?.performance)||!Array.isArray(v?.pipeline))throw Error('Invalid warehouse report response');if(live.current)D(v);}catch(e){if(live.current)E(e.message);}finally{running.current=false;if(live.current)B(false);}};
+ const refresh=async()=>{if(!cache158.ready||running.current)return;running.current=true;B(true);E('');try{if(!/^\d{4}-\d{2}$/.test(month)||month>current)throw Error('Choose a valid month.');const v=await dashboardRequest147('/rest/v1/rpc/wms_warehouse_progress156',{method:'POST',token,body:{p_wh:profile.warehouse_id,p_month:month+'-01'}});if(!Array.isArray(v?.rows)||!Array.isArray(v?.performance)||!Array.isArray(v?.pipeline))throw Error('Invalid warehouse report response');if(live.current)D(v);}catch(e){if(live.current)E(e.message);}finally{running.current=false;if(live.current)B(false);}};
  const print=()=>{if(!data)return;const w=window.open('','_blank');if(!w){E('Allow popups to save PDF.');return;}w.document.write('<!doctype html><title>Warehouse Progress</title><style>@page{size:A4 landscape;margin:10mm}body{background:#100e09;color:#f2efe7;font:12px Arial}button,input,select{display:none}svg{max-height:240px}section,article,tr{break-inside:avoid}*{print-color-adjust:exact;-webkit-print-color-adjust:exact}</style>'+root.current.outerHTML);w.document.close();w.focus();setTimeout(()=>w.print(),300);};
  const n=x=>Number(x||0).toLocaleString('en-PK',{maximumFractionDigits:2}),keys=['received','dispatched','cancelled','returned'],names=['Received orders','Dispatched','Cancelled','Returns processed'],colors=['#58a6ff','#39d780','#f5aa21','#ff6868'],card={background:'#1a1710',border:'1px solid #393327',borderRadius:14,padding:18},cell={padding:'12px 14px',textAlign:'right',borderBottom:'1px solid #393327'},selected=data?.rows.find(r=>r.month===data.selected_month),money=v=>v.unpriced_pcs>0||v.missing_lines>0?'Incomplete':'Rs '+n(v.sale_value),label=m=>new Date(m+'T00:00:00Z').toLocaleDateString('en-GB',{month:'short',year:'numeric',timeZone:'UTC'})+(m.slice(0,7)===current?' MTD':''),ratio=selected?.metrics.dispatched.orders>0?n(100*selected.metrics.returned.orders/selected.metrics.dispatched.orders)+'%':'N/A';
- return h('section',{className:'warehouse154',ref:root},h('style',null,`.warehouse154 input{background:#262116;border:1px solid #514731;color:#f2efe7;padding:10px;border-radius:7px;color-scheme:dark}.warehouse154 button{border:1px solid #514731;background:#f5aa21;color:#151008;padding:10px 16px;border-radius:20px;font-weight:700}.warehouse154 button:disabled{opacity:.5}.warehouse154 small{color:#b9ad94}@media(max-width:900px){.warehouse154 .warehouse-grid156{grid-template-columns:1fr!important}}`),h('h2',null,'Warehouse Progress'),h('p',null,'Order & Dispatch · Target 2 working days · Sunday + saved holidays excluded'),h('div',{style:{...card,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}},h('label',null,'Month ',h('input',{type:'month',value:month,max:current,onChange:e=>M(e.target.value)})),h('button',{onClick:()=>M(current)},'This month till today'),h('button',{disabled:busy,onClick:refresh},busy?'Refreshing…':'Refresh warehouse panel'),h('button',{disabled:!data||busy,onClick:print},'Print / Save PDF')),error&&h('p',{role:'alert',style:{color:'#ff6868'}},error+(data?' · Previous snapshot retained.':'')),!data&&h('p',null,'Select a month and refresh. Current month runs till today; previous months show the full month.'),data&&h(React.Fragment,null,h('p',null,label(data.selected_month)+' · Through '+data.to_date+' · Updated '+new Date(data.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT'),month!==data.selected_month.slice(0,7)&&h('p',{style:{color:'#f5aa21'}},'Month changed — refresh to apply.'),h(WarehouseKpis156,{data}),h('h3',null,'Selected month · order movement'),h('div',{style:{...card,marginTop:16,overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Movement','Orders / parcels','PCS','Sale value (PKR)'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...keys.map((k,i)=>{const v=selected.metrics[k];return h('tr',{key:k},...[names[i],n(v.orders),n(v.pcs),money(v)].map((x,j)=>h('td',{key:j,style:{...cell,textAlign:j?'right':'left'}},x)));})))),h('p',{style:{color:'#b9ad94'}},'Monthly processed returns ÷ monthly dispatch: '+ratio+' · Includes returns from older dispatches.'),h('div',{style:{...card,marginTop:16}},h('h3',null,'Three-month order movement'),h('div',{style:{display:'flex',gap:18,flexWrap:'wrap'}},...names.map((v,i)=>h('span',{key:v,style:{color:colors[i]}},v))),h('svg',{viewBox:'0 0 960 300',role:'img','aria-label':'Received dispatched cancelled and processed returns by month',style:{width:'100%',maxHeight:320}},...data.rows.flatMap((r,i)=>{const max=Math.max(1,...data.rows.flatMap(x=>keys.map(k=>Number(x.metrics[k].orders)))),base=45+i*310;return [h('text',{key:r.month,x:base+125,y:285,textAnchor:'middle',fill:'#e8e2d5',fontSize:14},label(r.month)),...keys.flatMap((k,j)=>{const value=Number(r.metrics[k].orders),height=210*value/max,x=base+j*61;return [h('rect',{key:k+'bar'+i,x,y:250-height,width:42,height,rx:4,fill:colors[j]}),h('text',{key:k+'label'+i,x:x+21,y:240-height,textAnchor:'middle',fill:colors[j],fontSize:13},n(value))];})];}))),h(WarehouseDetails156,{data}),h('small',null,'Sale value uses current product sale prices. Returns use actual processed return lines. Dispatch date = physical courier handover.'),data.undated_cancellations>0&&h('p',{style:{color:'#f5aa21'}},n(data.undated_cancellations)+' cancelled orders lack a valid cancellation date and are excluded from monthly counts.')));
+ return h('section',{className:'warehouse154',ref:root},h('style',null,`.warehouse154 input{background:#262116;border:1px solid #514731;color:#f2efe7;padding:10px;border-radius:7px;color-scheme:dark}.warehouse154 button{border:1px solid #514731;background:#f5aa21;color:#151008;padding:10px 16px;border-radius:20px;font-weight:700}.warehouse154 button:disabled{opacity:.5}.warehouse154 small{color:#b9ad94}@media(max-width:900px){.warehouse154 .warehouse-grid156{grid-template-columns:1fr!important}}`),cache158.note,h('h2',null,'Warehouse Progress'),h('p',null,'Order & Dispatch · Target 2 working days · Sunday + saved holidays excluded'),h('div',{style:{...card,display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}},h('label',null,'Month ',h('input',{type:'month',value:month,max:current,onChange:e=>M(e.target.value)})),h('button',{onClick:()=>M(current)},'This month till today'),h('button',{disabled:busy,onClick:refresh},busy?'Refreshing…':'Refresh warehouse panel'),h('button',{disabled:!data||busy,onClick:print},'Print / Save PDF')),error&&h('p',{role:'alert',style:{color:'#ff6868'}},error+(data?' · Previous snapshot retained.':'')),!data&&h('p',null,'Select a month and refresh. Current month runs till today; previous months show the full month.'),data&&h(React.Fragment,null,h('p',null,label(data.selected_month)+' · Through '+data.to_date+' · Updated '+new Date(data.as_of).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT'),month!==data.selected_month.slice(0,7)&&h('p',{style:{color:'#f5aa21'}},'Month changed — refresh to apply.'),h(WarehouseKpis156,{data}),h('h3',null,'Selected month · order movement'),h('div',{style:{...card,marginTop:16,overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Movement','Orders / parcels','PCS','Sale value (PKR)'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...keys.map((k,i)=>{const v=selected.metrics[k];return h('tr',{key:k},...[names[i],n(v.orders),n(v.pcs),money(v)].map((x,j)=>h('td',{key:j,style:{...cell,textAlign:j?'right':'left'}},x)));})))),h('p',{style:{color:'#b9ad94'}},'Monthly processed returns ÷ monthly dispatch: '+ratio+' · Includes returns from older dispatches.'),h('div',{style:{...card,marginTop:16}},h('h3',null,'Three-month order movement'),h('div',{style:{display:'flex',gap:18,flexWrap:'wrap'}},...names.map((v,i)=>h('span',{key:v,style:{color:colors[i]}},v))),h('svg',{viewBox:'0 0 960 300',role:'img','aria-label':'Received dispatched cancelled and processed returns by month',style:{width:'100%',maxHeight:320}},...data.rows.flatMap((r,i)=>{const max=Math.max(1,...data.rows.flatMap(x=>keys.map(k=>Number(x.metrics[k].orders)))),base=45+i*310;return [h('text',{key:r.month,x:base+125,y:285,textAnchor:'middle',fill:'#e8e2d5',fontSize:14},label(r.month)),...keys.flatMap((k,j)=>{const value=Number(r.metrics[k].orders),height=210*value/max,x=base+j*61;return [h('rect',{key:k+'bar'+i,x,y:250-height,width:42,height,rx:4,fill:colors[j]}),h('text',{key:k+'label'+i,x:x+21,y:240-height,textAnchor:'middle',fill:colors[j],fontSize:13},n(value))];})];}))),h(WarehouseDetails156,{data}),h('small',null,'Sale value uses current product sale prices. Returns use actual processed return lines. Dispatch date = physical courier handover.'),data.undated_cancellations>0&&h('p',{style:{color:'#f5aa21'}},n(data.undated_cancellations)+' cancelled orders lack a valid cancellation date and are excluded from monthly counts.')));
 }
 function WarehouseKpis156({data}) {
  const h=React.createElement,n=x=>Number(x||0).toLocaleString('en-PK',{maximumFractionDigits:2}),p=data.performance.find(x=>x.month===data.selected_month),rows=data.pipeline,total=rows.reduce((s,r)=>s+Number(r.orders),0),overdue=rows.reduce((s,r)=>s+Number(r.overdue),0),held=rows.filter(r=>r.stage==='On hold / incomplete').reduce((s,r)=>s+Number(r.overdue),0),card={background:'#1b1811',border:'1px solid #393326',borderRadius:13,padding:20},values=[['Fulfillment',p.eligible?n(100*p.fulfilled/p.eligible)+'%':'N/A',n(p.fulfilled)+' / '+n(p.eligible)+' eligible received orders','#58a6ff'],['On-time handover',p.valid_times?n(100*p.on_time/p.valid_times)+'%':'N/A',n(p.on_time)+' on time · '+n(p.late)+' late · '+n(p.valid_times)+' / '+n(p.handovers)+' valid timestamps','#39d780'],['Avg warehouse lead time',p.avg_days==null?'N/A':n(p.avg_days)+' days','Working-day equivalent · received → handover','#f5aa21'],['Overdue pending · now',n(overdue)+' orders','Of '+n(total)+' open · includes '+n(held)+' on hold','#ff6868']];
