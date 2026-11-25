@@ -11281,7 +11281,7 @@ function OrdersBase112({
       }
     }, fmtTime(n.received_at)), React.createElement("td", {
       style: S.td
-    }, !resolutionOnly135 && "received" === n.status && React.createElement("button", {
+    }, !resolutionOnly135 && React.createElement(CancelBeforeLoad162,{token:e,profile:t,order:n,onDone:Ue,showToast:a}), !resolutionOnly135 && "received" === n.status && React.createElement("button", {
       style: S.secondaryBtnSm,
       onClick: wmsAction55(e => {
         e.stopPropagation(), rt(n);
@@ -21484,7 +21484,7 @@ function StkSourceBadge89({
     }
   }, key === 'E-COM' ? 'Ecommerce' : key === 'LOCAL' ? 'Local' : key === 'IMPORT' ? 'Import' : 'Source pending');
 }
-function StockingReceivingBase81({
+function StockingReceivingBase81Base163({
   token: e,
   profile: t,
   showToast: a
@@ -25631,7 +25631,7 @@ function StockingLegacyStrView56({
     text: "Abhi tak koi dispatch nahi hua"
   })))))));
 }
-function StockingPackingView({
+function StockingPackingViewBase163({
   token: e,
   profile: t,
   showToast: a
@@ -26520,7 +26520,7 @@ function StockingLogisticsView({
     text: "Abhi tak koi shipment nahi hui"
   })))))));
 }
-function StockingLegacyPickingView56({
+function StockingLegacyPickingView56Base163({
   token: e,
   profile: t,
   showToast: a
@@ -33636,7 +33636,7 @@ function StockingAssignedJobs61({
     initialPicker61: opened.picker_id
   })));
 }
-function StockingOutboundBase81({
+function StockingOutboundBase81Base163({
   token: e,
   profile: t,
   showToast: a
@@ -34123,7 +34123,7 @@ function StockingOutboundBase81({
     text: "Abhi kuch nahi"
   })))))));
 }
-function StockingLogisticsWork73({
+function StockingLogisticsWork73Base163({
   token,
   profile,
   showToast,
@@ -34798,7 +34798,7 @@ function StockingScanPutaway65({
     className: "w60-notice"
   }, notice));
 }
-function StockingDistribution61({
+function StockingDistribution61Base163({
   token,
   profile,
   showToast
@@ -35841,7 +35841,7 @@ function StockingBins67({
     key: x.id
   }, /*#__PURE__*/React.createElement("td", null, x.code), /*#__PURE__*/React.createElement("td", null, x.pickable ? 'Pickable' : 'Non-pickable / Hold')))))));
 }
-function StockingGuidedPick62({
+function StockingGuidedPick62Base163({
   token,
   profile,
   showToast,
@@ -38709,7 +38709,7 @@ function stkIncomingParse81(raw) {
     errors
   };
 }
-function StockingIncoming81({
+function StockingIncoming81Base163({
   token,
   profile,
   showToast
@@ -40561,13 +40561,13 @@ async function dashboardPage147(token,path){const out=[],sep=path.includes('?')?
 async function dashboardRequest147(path,opts={}){if((opts.method||'GET')==='GET'&&!path.includes('/rpc/')&&!/[?&]limit=/.test(path))return dashboardPage147(opts.token,path);return dashboardRaw147(path,opts);}
 function dashboardAll147(path,token){return dashboardPage147(token,path);}
 function DashboardTabs147({kind,token,profile,setView,showToast}){
- const h=React.createElement,sets={main:[['orders','Orders & dispatch'],['inbound','Inbound pending'],['courier','Courier & return transit'],['staff','Staff productivity'],['velocity','Fulfillment velocity'],['snapshot','Date-range orders']],v2:[['inventory','Inventory, movement & ageing'],['monthly','Monthly orders'],['transactions','Recent transactions'],['cartons','Carton consumption']],stock:[['inventory','Inventory'],['outbound','Outbound & lead time'],['trends','Monthly trends']]};
+ const h=React.createElement,sets={main:[['orders','Orders & dispatch'],['inbound','Inbound pending'],['courier','Courier & return transit'],['staff','Staff productivity'],['velocity','Fulfillment velocity'],['snapshot','Date-range orders']],v2:[['inventory','Inventory, movement & ageing'],['monthly','Monthly orders'],['transactions','Recent transactions'],['cartons','Carton consumption']],stock:[['inventory','Inventory'],['outbound','Outbound & lead time'],['trends','Monthly trends'],['staff','Staff productivity']]};
  const list=sets[kind],[panel,setPanel]=useState(list[0][0]),[busy,setBusy]=useState(false),[error,setError]=useState(''),generation=React.useRef(0);
  const cache158=usePanelSnapshot158('stock-published:'+panel,dashboardScope158(profile),{},{}),shared=cache158.data,setShared=cache158.commit;
- const isShared=kind==='stock'&&panel!=='trends'&&profile.role!=='admin';
+ const isShared=kind==='stock'&&!['trends','staff'].includes(panel)&&profile.role!=='admin';
  useEffect(()=>{generation.current++;setError('');setBusy(false);},[panel,token,profile.warehouse_id]);
  const published=async()=>{if(!cache158.ready||busy)return;const run=++generation.current;setBusy(true);setError('');try{const rows=await dashboardRequest147('/rest/v1/stk_dashboard_published99?warehouse_id=eq.'+profile.warehouse_id+'&dashboard=eq.stkdashboardv2&select=panel:payload->panels147->'+panel,{token});const result=rows?.[0]?.panel;if(!result?.payload)throw Error('Admin has not published this panel yet.');if(run===generation.current)setShared(result);}catch(e){if(run===generation.current)setError(e.message);}finally{if(run===generation.current)setBusy(false);}};
- const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
+ const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='staff'?StockingStaff162:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
  return h('div',null,h('div',{style:{...S.panel,display:'flex',gap:8,flexWrap:'wrap'}},...list.map(([key,label])=>h('button',{key,style:stkPill(panel===key),onClick:()=>setPanel(key)},label))),h('p',{style:{fontSize:12,color:'#7b7469'}},'Select a panel, then Refresh. Each panel has its own saved snapshot. Other panels are not refreshed.'),isShared&&cache158.note,isShared&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:published},busy?'Loading…':'Load latest published panel'),error&&h('p',{role:'alert'},error),(!isShared||shared)&&h(Component,{key:kind+':'+panel+':'+profile.id+':'+profile.warehouse_id+':'+(shared?.as_of||''),panel147:panel,token,profile,setView,showToast,shared}));
 }
 function DashboardView(props){return React.createElement(EcommerceDashboard152,props);}
@@ -40606,6 +40606,48 @@ function usePanelSnapshot158(panel,scope,filters,setters) {
     error||(!ready?'Restoring saved result…':entry?'Last successful refresh: '+new Date(entry.savedAt).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT · Saved until next successful refresh':'No saved result — refresh this panel.'));
   return {data:entry?.data??null,commit,ready,note};
 }
+
+function StockingStaff162({token,profile}){
+ const h=React.createElement,today=pkYmd(new Date()),[from,F]=useState(today),[to,T]=useState(today),[busy,B]=useState(false),[error,E]=useState('');
+ const cache=usePanelSnapshot158('stock-staff163',dashboardScope158(profile),{from,to},{from:F,to:T}),data=cache.data;
+ const refresh=async()=>{if(busy||!cache.ready)return;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>30)throw Error('Select up to 31 days through today');const v=await dashboardRequest147('/rest/v1/rpc/stk_staff_productivity163',{token,method:'POST',body:{p_wh:profile.warehouse_id,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid staff report');cache.commit(v);}catch(e){E(e.message);}finally{B(false);}};
+ const num=x=>Number(x||0).toLocaleString('en-PK'),time=x=>x?new Date(x).toLocaleTimeString('en-GB',{timeZone:'Asia/Karachi'}):'—',cell={padding:12,textAlign:'left',borderBottom:'1px solid #393327'};
+ return h('section',{style:{background:'#15120d',color:'#f2efe7',padding:20,borderRadius:14}},h('h2',null,'Staff productivity'),h('div',{style:{display:'flex',gap:12,flexWrap:'wrap'}},h('label',null,'From ',h('input',{type:'date',value:from,max:today,disabled:busy,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,disabled:busy,onChange:e=>T(e.target.value)})),h('button',{style:S.primaryBtnSm,onClick:refresh,disabled:busy||!cache.ready},busy?'Refreshing…':'Refresh staff panel')),cache.note,error&&h('p',{role:'alert',style:{color:'#ff7474'}},error+' · Previous result retained.'),data&&h(React.Fragment,null,h('p',null,data.from_date+' — '+data.to_date+' · Pakistan time'),h('div',{style:{display:'flex',gap:16,flexWrap:'wrap'}},...['Receiver','Putaway','Distribution','Picker','Packer'].map(work=>h('div',{key:work,style:{background:'#221d14',padding:16,borderRadius:10}},h('small',null,work),h('h3',{style:{color:'#f5a623'}},num(data.rows.filter(r=>r.work===work).reduce((a,r)=>a+Number(r.pcs),0))+' PCS')))),h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Date','Staff','Work','Records','PCS handled','First recorded activity','Last recorded activity','Activity span (hours)','Actual timed start','Timed through','Active hours','Timed PCS','PCS / active hour'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...data.rows.map((r,i)=>h('tr',{key:i},...[r.day,r.staff,r.work,num(r.records),num(r.pcs)+(r.missing_qty?' + unknown qty':''),time(r.first_activity),time(r.last_activity),r.activity_span_hours??'—',time(r.actual_start),time(r.timed_through)+(r.running?' · Running':''),r.active_hours??'Not recorded',r.timed_pcs??0,r.pcs_per_active_hour??'—'].map((x,j)=>h('td',{key:j,style:cell},x))))))),!data.rows.length&&h('p',null,'No recorded work in this period.'),h('h3',null,'Task sessions · references & actual times'),h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Staff','Work','Task reference','Started (PKT)','Completed (PKT)','State','Active hours in selected dates'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...(data.sessions||[]).map(r=>h('tr',{key:r.id},...[r.staff,r.work,r.reference,new Date(r.started_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}),r.completed_at?new Date(r.completed_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}):'—',r.status,r.active_hours_in_period].map((x,i)=>h('td',{key:i,style:cell},x))))))),data.sessions_truncated&&h('p',null,'Showing latest 500 sessions. Narrow dates for all task references; daily totals include all sessions.'),h('p',{style:{fontSize:12,color:'#baa98a'}},'Active hours use manually started task intervals, excluding pauses, split by Pakistan calendar day. Timed PCS are recorded work events during active intervals for that staff/work type; task references are staff-entered labels. PCS/hour uses timed PCS only. Untimed historical work remains visible with Not recorded hours. Activity span includes gaps.')));
+}
+function CancelBeforeLoad162({token,profile,order,onDone,showToast}){
+ const h=React.createElement,[busy,B]=useState(false),lock=useRef(false);
+ if(!['admin','warehouse_lead'].includes(profile.role)||!['received','queued','picking','picked','packing','rtd','scanned','ready_for_dispatch','split_hold'].includes(order.status))return null;
+ const cancel=async e=>{e.stopPropagation();if(lock.current)return;const reason=window.prompt('Customer cancellation reason for '+order.external_order_id+':');if(reason===null)return;if(!reason.trim()||reason.length>1000){showToast('Enter a cancellation reason (maximum 1000 characters)','err');return;}if(!window.confirm('Cancel '+order.external_order_id+'? Picked/packed stock will go to return putaway. Remove the parcel from courier handover and give it to the putaway officer.'))return;lock.current=true;B(true);try{const result=await wmsRpc(token,'wms_cancel_before_load162',{p_order:order.id,p_reason:reason.trim()});showToast('Order cancelled · '+Number(result.restock_units||0)+' PCS sent to return putaway','ok');onDone();}catch(err){showToast('Cancellation failed: '+err.message,'err');}finally{lock.current=false;B(false);}};
+ return h('button',{type:'button',disabled:busy,onClick:cancel,style:{...S.secondaryBtnSm,color:'#c84b43',marginLeft:6}},busy?'Cancelling…':'Cancel order → Putaway');
+}
+
+function StockingTaskClock163({token,profile,defaultWork}){
+ const h=React.createElement,wh=useStkWarehouseId(token,profile),all=['Receiver','Putaway','Distribution','Picker','Packer'],roles={physical_receiver:['Receiver'],inbound_executive:['Receiver'],putaway_officer:['Putaway','Distribution'],picker:['Picker'],packer:['Packer'],logistics_officer:['Packer'],outbound_executive:['Putaway','Distribution','Picker','Packer']},allowed=['admin','warehouse_lead','supervisor'].includes(profile.role)?all:(roles[profile.role]||[]);
+ const [work,W]=useState(allowed.includes(defaultWork)?defaultWork:allowed[0]||''),[reference,R]=useState(''),[result,D]=useState(null),[busy,B]=useState(false),[error,E]=useState(''),[tick,T]=useState(Date.now());const lock=useRef(false),live=useRef(true),loaded=useRef(Date.now()),generation=useRef(0);
+ const call=async action=>{if(lock.current||!wh)return;lock.current=true;B(true);E('');const g=generation.current;try{const v=await wmsRpc(token,'stk_task_clock163',{p_wh:wh,p_action:action,p_work:work,p_reference:reference,p_session:result?.session?.id||null});if(live.current&&g===generation.current){loaded.current=Date.now();D(v);T(Date.now());}}catch(e){if(live.current&&g===generation.current)E(e.message);}finally{lock.current=false;if(live.current&&g===generation.current)B(false);}};
+ useEffect(()=>{live.current=true;generation.current++;D(null);if(wh&&allowed.length)call('read');return()=>{live.current=false;generation.current++;};},[wh,profile.id,profile.role]);
+ const session=result?.session,open=session&&session.status!=='completed';
+ useEffect(()=>{if(session?.status!=='running')return;const timer=setInterval(()=>T(Date.now()),1000);return()=>clearInterval(timer);},[session?.status]);
+ if(!allowed.length)return null;
+ const secs=Math.max(0,Math.floor(Number(result?.active_seconds||0)+(session?.status==='running'?(tick-loaded.current)/1000:0))),duration=[Math.floor(secs/3600),Math.floor(secs%3600/60),secs%60].map(x=>String(x).padStart(2,'0')).join(':'),stamp=x=>new Date(x).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}),button=(label,action)=>h('button',{type:'button',style:S.secondaryBtnSm,disabled:busy||!result,onClick:()=>call(action)},label);
+ return h('section',{style:{border:'1px solid #b6914b',background:'#211d14',color:'#f3ebdb',padding:16,borderRadius:12,marginBottom:16}},h('div',{style:{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}},h('strong',null,'Actual task timer'),open?h('span',null,session.work+' · '+session.reference):h(React.Fragment,null,h('select',{value:work,disabled:busy,onChange:e=>W(e.target.value),style:S.select},...allowed.map(x=>h('option',{key:x,value:x},x))),h('input',{value:reference,maxLength:150,disabled:busy,onChange:e=>R(e.target.value),placeholder:'PO / DC / STR / task reference','aria-label':'Task reference',style:S.input})),h('b',{style:{color:'#f5a623',fontSize:22}},duration),open?h(React.Fragment,null,button(session.status==='running'?'Pause':'Resume',session.status==='running'?'pause':'resume'),button('Complete Work','complete')):button('Start Work','start'),h('button',{type:'button',style:S.secondaryBtnSm,disabled:busy,onClick:()=>call('read')},'Reload timer')),session&&h('p',null,'Started: '+stamp(session.started_at)+' PKT · '+session.status+(session.completed_at?' · Completed: '+stamp(session.completed_at)+' PKT':'')),h('small',null,'Start when you begin physical work. Pause during breaks or interruptions; press Complete Work when finished. Closing this page does not pause the timer. No timer starts automatically.'),error&&h('p',{role:'alert',style:{color:'#ff7474'}},error));
+}
+
+function StockingReceivingBase81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Receiver'}),React.createElement(StockingReceivingBase81Base163,props));}
+
+function StockingOutboundBase81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Putaway'}),React.createElement(StockingOutboundBase81Base163,props));}
+
+function StockingIncoming81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Putaway'}),React.createElement(StockingIncoming81Base163,props));}
+
+function StockingGuidedPick62(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Picker'}),React.createElement(StockingGuidedPick62Base163,props));}
+
+function StockingDistribution61(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Distribution'}),React.createElement(StockingDistribution61Base163,props));}
+
+function StockingLogisticsWork73(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Packer'}),React.createElement(StockingLogisticsWork73Base163,props));}
+
+function StockingPackingView(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Packer'}),React.createElement(StockingPackingViewBase163,props));}
+
+function StockingLegacyPickingView56(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Picker'}),React.createElement(StockingLegacyPickingView56Base163,props));}
 
 function monthlyModel149(data,destination='',department='') {
  const months=[];let d=new Date(data.from_date+'T00:00:00Z');const end=data.to_date.slice(0,7);
