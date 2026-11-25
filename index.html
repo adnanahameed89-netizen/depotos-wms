@@ -29794,7 +29794,7 @@ function StockingInboundPanel143({
     [to, setTo] = useState(today),
     [source, setSource] = useState('');
   const [detail, setDetail] = useState(null);
-  const cache158=usePanelSnapshot158('stock-inbound:'+panel,dashboardScope158(null,token,wh),{dates,from,to,source},{dates:setDates,from:setFrom,to:setTo,source:setSource}),snapshot=cache158.data,setSnapshot=cache158.commit;
+  const cache158=usePanelSnapshot158((panel==='rtv'?'stock-inbound159:':'stock-inbound:')+panel,dashboardScope158(null,token,wh),{dates,from,to,source},{dates:setDates,from:setFrom,to:setTo,source:setSource}),snapshot=cache158.data,setSnapshot=cache158.commit;
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const running = useRef(false);
@@ -29823,7 +29823,7 @@ function StockingInboundPanel143({
   };
   const currentKey = JSON.stringify(currentFilters);
   const view = snapshot;
-  const page = detail?.key === snapshot?.key ? detail : null;
+  const page = detail?.key === snapshot?.key ? detail : panel==='rtv'&&snapshot?{key:snapshot.key,group:'',offset:0,data:snapshot.data}:null;
   async function run(action) {
     if (!cache158.ready || running.current || !wh) return;
     running.current = true;
@@ -29838,7 +29838,8 @@ function StockingInboundPanel143({
       setBusy(false);
     }
   }
-  const read = (filters, group, offset, limit) => wmsRpc(token, 'stk_inbound_panel143', {
+  const read = (filters, group, offset, limit, summary = true) => wmsRpc(token, panel==='rtv'?'stk_inbound_panel159':'stk_inbound_panel143', {
+    ...(panel==='rtv'?{p_summary:summary}:{}),
     ...filters,
     p_group: group,
     p_offset: offset,
@@ -29846,7 +29847,7 @@ function StockingInboundPanel143({
   });
   const refresh = () => run(async () => {
     if (dates && (!from || !to || from > to || to > today)) throw new Error('Choose valid From and To dates through today.');
-    const data = await read(currentFilters, '', 0, 0);
+    const data = await read(currentFilters, '', 0, panel==='rtv'?pageSize:0);
     setSnapshot({
       key: currentKey,
       filters: currentFilters,
@@ -29871,6 +29872,7 @@ function StockingInboundPanel143({
     'In Inspection': 'Complete inspection',
     'Ready to Post': 'Post GRN'
   })[r.stage] || 'Review DC']] : [...commonCols, ['GRN', r => r.grn_number], ['Barcode', r => r.barcode], ['Product', r => r.product], ['Pending pcs', r => r.qty], ['DMG', r => r.dmg], ['MNF', r => r.mnf], ['Wrong', r => r.wrong], ['Excess', r => r.excess], ['Opened (PKT)', r => date(r.created_at)], ['Age days', r => r.age_days], ['Age bucket', r => r.bucket]];
+  const screenCols159 = [['Supplier',r=>r.supplier],['PO',r=>r.po_number],['DC',r=>r.dc_number],['Total PCS Count',r=>r.qty],['Arrival Date',r=>r.arrival_date?new Date(r.arrival_date).toLocaleDateString('en-GB',{timeZone:'Asia/Karachi'}):'—'],['Ageing',r=>r.age_days==null?'—':number(r.age_days)+' days']];
   function download(cols, rows, suffix) {
     const reportName = dates ? from + '-to-' + to : 'all-dates';
     exportCSV('stocking-' + panel + '-' + reportName + '-' + suffix + '.csv', cols.map(c => c[0]), rows.map(row => cols.map(([, value]) => {
@@ -29882,12 +29884,12 @@ function StockingInboundPanel143({
     const group = page?.group || '';
     const max = 2000,
       chunk = 200;
-    const first = await read(view.filters, group, 0, chunk);
+    const first = await read(view.filters, group, 0, chunk, false);
     if (first.total_rows > max) throw new Error('More than 2,000 rows. Narrow the dates, source or group before exporting.');
     const rows = [...first.rows],
       ids = new Set(rows.map(row => row.id));
     while (rows.length < first.total_rows) {
-      const next = await read(view.filters, group, rows.length, chunk);
+      const next = await read(view.filters, group, rows.length, chunk, false);
       if (next.total_rows !== first.total_rows || !next.rows.length || next.rows.some(row => ids.has(row.id))) {
         throw new Error('Pending records changed during export. Please try again.');
       }
@@ -29924,7 +29926,7 @@ function StockingInboundPanel143({
   const data = view?.data,
     total = data?.groups?.find(row => row.source === null);
   const tiles = progress && total ? [['POs / DCs received', number(total.pos) + ' / ' + number(total.dcs)], ['Received / inspected pcs', number(total.received_pcs) + ' / ' + number(total.inspected_pcs)], ['GRNs posted in period', number(total.posted_dcs) + ' · ' + number(total.posted_pcs) + ' pcs'], ['On time / delayed', pct(total.on_time, total.on_time + total.delayed) + ' / ' + pct(total.delayed, total.on_time + total.delayed)]] : data ? pending ? [['Open DCs', number(data.totals.dcs)], ['Overdue', number(data.totals.overdue)], ['Due within 1 working day', number(data.totals.due)], ['SLA unknown', number(data.totals.unknown_sla)]] : [['Suppliers', number(data.totals.suppliers)], ['DCs', number(data.totals.dcs)], ['Pending pcs', number(data.totals.pcs)], ['Rows missing references', number(data.totals.missing_reference_rows)]] : [];
-  const dateBasis = progress ? 'DC Received Date · Posted in Period uses GRN Posted Date' : pending ? 'Current open DCs · optional filter by DC Received Date' : 'Current pending RTV · optional filter by RTV Opened Date';
+  const dateBasis = progress ? 'DC Received Date · Posted in Period uses GRN Posted Date' : pending ? 'Current open DCs · optional filter by DC Received Date' : 'Current pending RTV · optional filter by DC Arrival Date';
   return h('section', {
     className: 'sm88-panel',
     'aria-label': label
@@ -29986,7 +29988,7 @@ function StockingInboundPanel143({
     className: 'sm88-muted'
   }, 'Missing quantities (DCs) · Received ' + total.missing_received_qty + ' · Inspected ' + total.missing_inspected_qty + ' · Cohort posted ' + total.missing_cohort_posted_qty + ' · Period posted ' + total.missing_posted_qty)) : h(React.Fragment, null, h('div', {
     className: 'sm88-toolbar'
-  }, button('View all details', () => open(''), {
+  }, button(pending?'View all details':'View all summaries', () => open(''), {
     'aria-pressed': page?.group === ''
   }), ...groups.map(group => {
     const item = data.groups.find(row => (pending ? row.stage : row.bucket) === group);
@@ -29996,7 +29998,7 @@ function StockingInboundPanel143({
     });
   })), h('p', {
     className: 'sm88-muted'
-  }, pending ? 'Overdue first, then due soon and ready to post. Ready to Post quantity is accepted pcs.' : 'Oldest first. Age uses calendar days from the RTV opened date.'), page && h(React.Fragment, null, h('h4', null, page.group || label + ' details'), page.data.rows.length ? table(detailCols, page.data.rows) : h('p', null, 'No matching records.'), h('div', {
+  }, pending ? 'Overdue first, then due soon and ready to post. Ready to Post quantity is accepted pcs.' : 'Oldest first. Ageing uses calendar days from DC arrival; missing arrival dates show —.'), page && h(React.Fragment, null, h('h4', null, page.group || label + (pending?' details':' summary')), page.data.rows.length ? table(pending?detailCols:screenCols159, page.data.rows) : h('p', null, 'No matching records.'), h('div', {
     className: 'sm88-pagination'
   }, button('Previous', () => open(page.group, page.offset - pageSize), {
     disabled: busy || page.offset === 0
