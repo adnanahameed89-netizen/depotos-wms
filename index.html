@@ -11175,11 +11175,7 @@ function OrdersBase112({
       c = l?.toteId && we[l.toteId]?.tote_number || "—",
       s = "0005" === n.courier_status_code ? "#4CAF7D" : ["0002", "0006", "0007"].includes(n.courier_status_code) ? "#E5484D" : n.courier_status_code ? "#5B9EE8" : "#8A8272";
     return React.createElement("tr", {
-      key: n.id,
-      style: {
-        cursor: "pointer"
-      },
-      onClick: () => ct(n)
+      key: n.id
     }, React.createElement("td", {
       style: S.td,
       onClick: e => e.stopPropagation()
@@ -11196,7 +11192,17 @@ function OrdersBase112({
         fontFamily: "'IBM Plex Mono', monospace",
         color: "#F5A623"
       }
-    }, n.external_order_id), React.createElement("td", {
+    }, React.createElement("button", {
+      type: "button",
+      "aria-label": "Open order " + n.external_order_id,
+      title: "Open order details",
+      style: {background:"transparent",border:0,padding:0,font:"inherit",color:"inherit",cursor:"pointer",userSelect:"text",textAlign:"left"},
+      onClick: event => {
+        event.stopPropagation();
+        if (event.detail > 0 && window.getSelection?.()?.toString().trim()) return;
+        ct(n);
+      }
+    }, n.external_order_id)), React.createElement("td", {
       style: {
         ...S.td,
         fontFamily: "'IBM Plex Mono', monospace",
