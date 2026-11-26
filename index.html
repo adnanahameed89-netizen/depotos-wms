@@ -40329,7 +40329,7 @@ function ReportShell83({
   }, /*#__PURE__*/React.createElement("button", {
     style: stkPill(tab === 'existing'),
     onClick: () => setTab('existing')
-  }, "Existing reports"), stocking && React.createElement("button", {
+  }, "Existing reports"), React.createElement("button", {
     style: stkPill(tab === 'count146'),
     onClick: () => setTab('count146')
   }, "Count adjustments"), /*#__PURE__*/React.createElement("button", {
@@ -40338,8 +40338,9 @@ function ReportShell83({
   }, "Dead Stock · 30+ days"), React.createElement("button", {
     style: stkPill(tab === "performance"),
     onClick: () => setTab("performance")
-  }, "Monthly performance")), tab === 'count146' && stocking && allowed ? React.createElement(CountReport146, {
+  }, "Monthly performance")), tab === 'count146' && allowed ? React.createElement(CountReport146, {
     token,
+    stocking,
     profile
   }) : tab === "performance" && allowed ? React.createElement(MonthlyPerformance122, {
     token,
@@ -40419,10 +40420,12 @@ function CountCard146({
 }
 function CountReport146({
   token,
-  profile
+  profile,
+  stocking = true
 }) {
   const h = React.createElement,
-    wh = useStkWarehouseId(token, profile),
+    stockWh = useStkWarehouseId(token, profile),
+    wh = stocking ? stockWh : profile.warehouse_id,
     today = pkYmd(new Date()),
     [from, setFrom] = useState(today.slice(0, 7) + '-01'),
     [to, setTo] = useState(today),
@@ -40436,13 +40439,14 @@ function CountReport146({
     generation.current++;
     setData(null);
     setBusy(false);
-  }, [token, wh]);
+  }, [token, wh, stocking]);
   const load = async (p = 0) => {
     const run = ++generation.current;
     setBusy(true);
     setError('');
     try {
-      const d = await wmsRpc(token, 'stk_count_report146', {
+      const d = await wmsRpc(token, 'wms_count_report165', {
+        p_module: stocking ? 'stocking' : 'ecommerce',
         p_wh: wh,
         p_from: from,
         p_to: to,
@@ -40468,15 +40472,15 @@ function CountReport146({
     setData(null);
     setBusy(false);
   };
-  const heads = ['Journal reference', 'Bin', 'Short PCS', 'Excess PCS', 'Net adjustment', 'Verified by', 'Adjusted by', 'Adjusted at'];
-  const values = r => [r.id, r.bin_code || '—', r.summary146.short, r.summary146.excess, r.summary146.net, r.verified_name || '—', r.adjusted_name || '—', new Date(r.approved_at).toLocaleString('en-GB', {
+  const heads = ['Journal reference', 'Bin', 'Short PCS', 'Excess PCS', 'Net adjustment', 'Counted by', 'Verified by', 'Adjusted at'];
+  const values = r => [r.id, r.bin_code || '—', r.summary146.short, r.summary146.excess, r.summary146.net, r.counted_name || 'Not recorded', r.verified_name || 'Not recorded', new Date(r.approved_at).toLocaleString('en-GB', {
     timeZone: 'Asia/Karachi'
   })];
   return h('div', {
     style: S.panel
   }, h('div', {
     style: S.panelTitle
-  }, 'Stocking · Count adjustment summary'), h('p', null, 'Posted child/bin journals only. Parent audits are excluded to prevent double counting. Dates use Pakistan time.'), h('div', {
+  }, (stocking ? 'Stocking' : 'Ecommerce') + ' · Count adjustment summary'), h('p', null, 'Posted child/bin journals only. Parent audits are excluded to prevent double counting. Dates use Pakistan time.'), h('div', {
     style: {
       display: 'flex',
       gap: 8,
@@ -40529,7 +40533,7 @@ function CountReport146({
   }, 'Next'), h('button', {
     style: S.secondaryBtnSm,
     disabled: !data.rows.length,
-    onClick: () => exportCSV('Stocking_Count_Adjustments_Page_' + (page + 1) + '.csv', heads, data.rows.map(values))
+    onClick: () => exportCSV((stocking ? 'Stocking' : 'Ecommerce') + '_Count_Adjustments_Page_' + (page + 1) + '.csv', heads, data.rows.map(r=>values(r).map(safeReportCell)))
   }, 'Export this page')));
 }
 // Dashboard-only request queue: no notification polling; operational API traffic unchanged.
