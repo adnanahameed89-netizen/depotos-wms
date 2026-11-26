@@ -7176,6 +7176,7 @@ function InventoryView({
   showToast: a
 }) {
   const eToken123 = e;
+  const [countPage164,setCountPage164]=useState(0),[countMore164,setCountMore164]=useState(false),[countBusyBins164,setCountBusyBins164]=useState([]),[countError164,setCountError164]=useState('');
   const [n, r] = useState("ledger"),
     [o, l] = useState([]),
     [i, c] = useState({}),
@@ -7241,13 +7242,11 @@ function InventoryView({
       }
     },
     Ee = useCallback(async () => {
-      const [a, n] = await Promise.all([sb(`/rest/v1/cycle_counts?warehouse_id=eq.${t.warehouse_id}&select=*&order=created_at.desc`, {
-        token: e
-      }), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=*`, {
-        token: e
-      })]);
-      D(a || []), Q(n || []);
-    }, [e, t.warehouse_id]);
+      setCountError164('');
+      try {const ctx=await wmsRpc(e,'eco_count_context164',{p_wh:t.warehouse_id,p_offset:countPage164*50});
+      D(ctx.counts||[]);Q(ctx.profiles||[]);setCountMore164(!!ctx.has_more);setCountBusyBins164(ctx.busy_bins||[]);
+      }catch(err){setCountError164(err.message);}
+    }, [e, t.warehouse_id,countPage164]);
   useEffect(() => {
     Ee();
   }, [Ee]);
@@ -8231,11 +8230,7 @@ function InventoryView({
     style: S.secondaryBtnSm,
     disabled: le,
     onClick: wmsAction55(() => Re(ae, !0))
-  }, "Load 50 more"))), "cyclecount" === n && React.createElement(React.Fragment, null, !F && React.createElement(React.Fragment, null, A && React.createElement("div", {
-    style: S.panel
-  }, React.createElement("div", {
-    style: S.panelTitle
-  }, "Naya Cycle Count Assign Karein"), React.createElement("div", {
+  }, "Load 50 more"))), "cyclecount" === n && React.createElement(React.Fragment, null, !F && React.createElement(React.Fragment, null, ['admin','warehouse_lead','supervisor','inbound_executive','outbound_executive'].includes(t.role) && React.createElement(React.Fragment,null,React.createElement(MultiBinAssign164,{token:e,profile:t,warehouse:t.warehouse_id,module:'ecommerce',bins:m,staff:K,busyBins:countBusyBins164,onDone:Ee,showToast:a}),React.createElement("details", {style:S.panel},React.createElement('summary',null,'Other scopes / full warehouse audit'), React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -8362,11 +8357,11 @@ function InventoryView({
     },
     onClick: wmsAction55(ke),
     disabled: Y
-  }, Y ? "Shuru ho raha…" : "▶ Complete Warehouse Audit Shuru Karein"))), React.createElement("div", {
+  }, Y ? "Shuru ho raha…" : "▶ Complete Warehouse Audit Shuru Karein")))), React.createElement("div", {
     style: S.panel
   }, React.createElement("div", {
     style: S.panelTitle
-  }, "Cycle Counts — History"), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+  }, "Pending cycle counts"),React.createElement('p',{style:{fontSize:12}},'Final adjustment: Admin only. Posted journals remain in inventory history.'),countError164&&React.createElement('p',{role:'alert',style:{color:'#c64b42'}},countError164),React.createElement('div',{style:{display:'flex',gap:10,marginBottom:12}},React.createElement('button',{style:S.secondaryBtnSm,disabled:countPage164===0,onClick:()=>setCountPage164(p=>p-1)},'Previous'),React.createElement('span',null,'Page '+(countPage164+1)),React.createElement('button',{style:S.secondaryBtnSm,disabled:!countMore164,onClick:()=>setCountPage164(p=>p+1)},'Next'),React.createElement('button',{style:S.secondaryBtnSm,onClick:Ee},'Refresh list')), React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
     style: S.th
   }, "Scope"), React.createElement("th", {
     style: S.th
@@ -8376,7 +8371,7 @@ function InventoryView({
     style: S.th
   }, "Started"), React.createElement("th", {
     style: S.th
-  }))), React.createElement("tbody", null, q.filter(e => !e.parent_audit_id).map(e => React.createElement("tr", {
+  }))), React.createElement("tbody", null, q.filter(e => !['approved','cancelled'].includes(e.status)).map(e => React.createElement("tr", {
     key: e.id
   }, React.createElement("td", {
     style: S.td
@@ -8401,14 +8396,10 @@ function InventoryView({
     }
   }, fmtTime(e.created_at)), React.createElement("td", {
     style: S.td
-  }, React.createElement(CountJournalSummary123, {
-    token: eToken123,
-    module: "ecommerce",
-    journal: e
-  }), React.createElement("button", {
+  }, React.createElement(EcoCountCard164, {token:eToken123,profile:t,journal:{...e,summary164:e.summary164||q.find(x=>x.id===e.id)?.summary164},onDone:async()=>{$(null);O([]);M([]);await Ee();await Ke();},showToast:a}), React.createElement("button", {
     style: S.secondaryBtnSm,
     onClick: wmsAction55(() => Se(e))
-  }, "Open")))), 0 === q.filter(e => !e.parent_audit_id).length && React.createElement("tr", null, React.createElement("td", {
+  }, "Open")))), 0 === q.filter(e => !['approved','cancelled'].includes(e.status)).length && React.createElement("tr", null, React.createElement("td", {
     colSpan: 5
   }, React.createElement(EmptyNote, {
     text: "Abhi tak koi cycle count nahi hui."
@@ -8446,7 +8437,7 @@ function InventoryView({
     onClick: wmsAction55(() => {
       $(null), O([]), M([]);
     })
-  }, "← Back to list")), I.length > 0 ? React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+  }, "← Back to list")), F.scope_type==='bin'&&React.createElement(EmptyBin164,{token:e,profile:t,module:'ecommerce',journal:F,binCode:m[F.scope_value]?.code,onDone:async j=>{await Ee();await Se(j);},showToast:a}), I.length > 0 ? React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
     style: S.th
   }, "Aisle"), React.createElement("th", {
     style: S.th
@@ -8476,11 +8467,7 @@ function InventoryView({
     }
   }, "counting" === e.status ? "Counting" : "pending_verification" === e.status ? "Pending Verification" : "pending_admin_approval" === e.status ? "Pending Admin" : "Approved")), React.createElement("td", {
     style: S.td
-  }, React.createElement(CountJournalSummary123, {
-    token: eToken123,
-    module: "ecommerce",
-    journal: e
-  }), React.createElement("button", {
+  }, React.createElement(EcoCountCard164, {token:eToken123,profile:t,journal:{...e,summary164:e.summary164||q.find(x=>x.id===e.id)?.summary164},onDone:async()=>{$(null);O([]);M([]);await Ee();await Ke();},showToast:a}), React.createElement("button", {
     style: S.secondaryBtnSm,
     onClick: wmsAction55(() => Se(e))
   }, "Open")))))) : React.createElement(React.Fragment, null, Be ? React.createElement(React.Fragment, null, React.createElement("div", {
@@ -21484,7 +21471,7 @@ function StkSourceBadge89({
     }
   }, key === 'E-COM' ? 'Ecommerce' : key === 'LOCAL' ? 'Local' : key === 'IMPORT' ? 'Import' : 'Source pending');
 }
-function StockingReceivingBase81Base163({
+function StockingReceivingBase81({
   token: e,
   profile: t,
   showToast: a
@@ -25631,7 +25618,7 @@ function StockingLegacyStrView56({
     text: "Abhi tak koi dispatch nahi hua"
   })))))));
 }
-function StockingPackingViewBase163({
+function StockingPackingView({
   token: e,
   profile: t,
   showToast: a
@@ -26520,7 +26507,7 @@ function StockingLogisticsView({
     text: "Abhi tak koi shipment nahi hui"
   })))))));
 }
-function StockingLegacyPickingView56Base163({
+function StockingLegacyPickingView56({
   token: e,
   profile: t,
   showToast: a
@@ -27044,7 +27031,7 @@ function StockingInventoryView({
       E(!0);
       try {
         if (countOnly) {
-          const ctx = await wmsRead59(e, 'stk_count_context117', {
+          const ctx = await wmsRead59(e, 'stk_count_context164', {
             p_wh: n
           });
           y(ctx.bins || []);
@@ -27108,7 +27095,7 @@ function StockingInventoryView({
     ye = useMemo(() => p.map(e => e.id).sort((e, t) => T(e).localeCompare(T(t))), [p]),
     he = async () => {
       if (!n) return;
-      const ctx = await wmsRead59(e, 'stk_count_context117', {
+      const ctx = await wmsRead59(e, 'stk_count_context164', {
         p_wh: n
       });
       j(ctx.counts || []);
@@ -27477,11 +27464,7 @@ function StockingInventoryView({
     colSpan: 7
   }, React.createElement(EmptyNote, {
     text: "Koi stock nahi mila"
-  })))))), "cyclecount" === i && !V && React.createElement(React.Fragment, null, l && React.createElement("div", {
-    style: S.panel
-  }, React.createElement("div", {
-    style: S.panelTitle
-  }, "Naya Cycle Count Assign Karein"), React.createElement("div", {
+  })))))), "cyclecount" === i && !V && React.createElement(React.Fragment, null, (l||t.role==='inbound_executive') && React.createElement(React.Fragment,null,React.createElement(MultiBinAssign164,{token:e,profile:t,warehouse:n,module:'stocking',bins:p,staff:h,busyBins:W.filter(x=>!['approved','cancelled'].includes(x.status)).map(x=>x.bin_id).filter(Boolean),onDone:he,showToast:a}),React.createElement("details", {style:S.panel},React.createElement('summary',null,'Single bin / full warehouse audit'), React.createElement("div", {
     style: {
       display: "flex",
       gap: 10,
@@ -27580,7 +27563,7 @@ function StockingInventoryView({
     style: S.primaryBtnSm,
     onClick: wmsAction55(fe),
     disabled: re
-  }, re ? "Shuru ho raha…" : "▶ Complete Warehouse Audit Shuru Karein"))), React.createElement("div", {
+  }, re ? "Shuru ho raha…" : "▶ Complete Warehouse Audit Shuru Karein")))), React.createElement("div", {
     style: S.panel
   }, React.createElement("div", {
     style: S.panelTitle
@@ -27670,7 +27653,7 @@ function StockingInventoryView({
     onClick: wmsAction55(() => {
       U(null), H([]), Q([]);
     })
-  }, "← Back to list")), K.length > 0 ? React.createElement("table", {
+  }, "← Back to list")), V.scope_type==='bin'&&React.createElement(EmptyBin164,{token:e,profile:t,module:'stocking',journal:V,binCode:T(V.bin_id),onDone:async j=>{await he();await ge(j);},showToast:a}), K.length > 0 ? React.createElement("table", {
     style: {
       width: "100%",
       borderCollapse: "collapse"
@@ -33636,7 +33619,7 @@ function StockingAssignedJobs61({
     initialPicker61: opened.picker_id
   })));
 }
-function StockingOutboundBase81Base163({
+function StockingOutboundBase81({
   token: e,
   profile: t,
   showToast: a
@@ -34123,7 +34106,7 @@ function StockingOutboundBase81Base163({
     text: "Abhi kuch nahi"
   })))))));
 }
-function StockingLogisticsWork73Base163({
+function StockingLogisticsWork73({
   token,
   profile,
   showToast,
@@ -34798,7 +34781,7 @@ function StockingScanPutaway65({
     className: "w60-notice"
   }, notice));
 }
-function StockingDistribution61Base163({
+function StockingDistribution61({
   token,
   profile,
   showToast
@@ -35841,7 +35824,7 @@ function StockingBins67({
     key: x.id
   }, /*#__PURE__*/React.createElement("td", null, x.code), /*#__PURE__*/React.createElement("td", null, x.pickable ? 'Pickable' : 'Non-pickable / Hold')))))));
 }
-function StockingGuidedPick62Base163({
+function StockingGuidedPick62({
   token,
   profile,
   showToast,
@@ -38709,7 +38692,7 @@ function stkIncomingParse81(raw) {
     errors
   };
 }
-function StockingIncoming81Base163({
+function StockingIncoming81({
   token,
   profile,
   showToast
@@ -40404,7 +40387,7 @@ function CountCard146({
     style: {
       display: 'block'
     }
-  }, 'Journal ' + journal.id), journal.status === 'pending_admin_approval' && h('small', {
+  }, 'Journal ' + journal.id),journal.empty164&&h('small',{style:{display:'block',color:'#2a916c'}},'Physically empty confirmed · '+journal.empty164.expected_pcs+' expected PCS'), journal.status === 'pending_admin_approval' && h('small', {
     style: {
       display: 'block'
     }
@@ -40567,7 +40550,7 @@ function DashboardTabs147({kind,token,profile,setView,showToast}){
  const isShared=kind==='stock'&&!['trends','staff'].includes(panel)&&profile.role!=='admin';
  useEffect(()=>{generation.current++;setError('');setBusy(false);},[panel,token,profile.warehouse_id]);
  const published=async()=>{if(!cache158.ready||busy)return;const run=++generation.current;setBusy(true);setError('');try{const rows=await dashboardRequest147('/rest/v1/stk_dashboard_published99?warehouse_id=eq.'+profile.warehouse_id+'&dashboard=eq.stkdashboardv2&select=panel:payload->panels147->'+panel,{token});const result=rows?.[0]?.panel;if(!result?.payload)throw Error('Admin has not published this panel yet.');if(run===generation.current)setShared(result);}catch(e){if(run===generation.current)setError(e.message);}finally{if(run===generation.current)setBusy(false);}};
- const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='staff'?StockingStaff162:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
+ const Component=kind==='main'?DashboardViewPanel147:kind==='v2'?DashboardV2ViewPanel147:panel==='staff'?StockingStaff164:panel==='trends'?MonthlyDispatch149:StockingDashboardV2ViewPanel147;
  return h('div',null,h('div',{style:{...S.panel,display:'flex',gap:8,flexWrap:'wrap'}},...list.map(([key,label])=>h('button',{key,style:stkPill(panel===key),onClick:()=>setPanel(key)},label))),h('p',{style:{fontSize:12,color:'#7b7469'}},'Select a panel, then Refresh. Each panel has its own saved snapshot. Other panels are not refreshed.'),isShared&&cache158.note,isShared&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:published},busy?'Loading…':'Load latest published panel'),error&&h('p',{role:'alert'},error),(!isShared||shared)&&h(Component,{key:kind+':'+panel+':'+profile.id+':'+profile.warehouse_id+':'+(shared?.as_of||''),panel147:panel,token,profile,setView,showToast,shared}));
 }
 function DashboardView(props){return React.createElement(EcommerceDashboard152,props);}
@@ -40607,13 +40590,37 @@ function usePanelSnapshot158(panel,scope,filters,setters) {
   return {data:entry?.data??null,commit,ready,note};
 }
 
-function StockingStaff162({token,profile}){
- const h=React.createElement,today=pkYmd(new Date()),[from,F]=useState(today),[to,T]=useState(today),[busy,B]=useState(false),[error,E]=useState('');
- const cache=usePanelSnapshot158('stock-staff163',dashboardScope158(profile),{from,to},{from:F,to:T}),data=cache.data;
- const refresh=async()=>{if(busy||!cache.ready)return;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>30)throw Error('Select up to 31 days through today');const v=await dashboardRequest147('/rest/v1/rpc/stk_staff_productivity163',{token,method:'POST',body:{p_wh:profile.warehouse_id,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid staff report');cache.commit(v);}catch(e){E(e.message);}finally{B(false);}};
- const num=x=>Number(x||0).toLocaleString('en-PK'),time=x=>x?new Date(x).toLocaleTimeString('en-GB',{timeZone:'Asia/Karachi'}):'—',cell={padding:12,textAlign:'left',borderBottom:'1px solid #393327'};
- return h('section',{style:{background:'#15120d',color:'#f2efe7',padding:20,borderRadius:14}},h('h2',null,'Staff productivity'),h('div',{style:{display:'flex',gap:12,flexWrap:'wrap'}},h('label',null,'From ',h('input',{type:'date',value:from,max:today,disabled:busy,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,disabled:busy,onChange:e=>T(e.target.value)})),h('button',{style:S.primaryBtnSm,onClick:refresh,disabled:busy||!cache.ready},busy?'Refreshing…':'Refresh staff panel')),cache.note,error&&h('p',{role:'alert',style:{color:'#ff7474'}},error+' · Previous result retained.'),data&&h(React.Fragment,null,h('p',null,data.from_date+' — '+data.to_date+' · Pakistan time'),h('div',{style:{display:'flex',gap:16,flexWrap:'wrap'}},...['Receiver','Putaway','Distribution','Picker','Packer'].map(work=>h('div',{key:work,style:{background:'#221d14',padding:16,borderRadius:10}},h('small',null,work),h('h3',{style:{color:'#f5a623'}},num(data.rows.filter(r=>r.work===work).reduce((a,r)=>a+Number(r.pcs),0))+' PCS')))),h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Date','Staff','Work','Records','PCS handled','First recorded activity','Last recorded activity','Activity span (hours)','Actual timed start','Timed through','Active hours','Timed PCS','PCS / active hour'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...data.rows.map((r,i)=>h('tr',{key:i},...[r.day,r.staff,r.work,num(r.records),num(r.pcs)+(r.missing_qty?' + unknown qty':''),time(r.first_activity),time(r.last_activity),r.activity_span_hours??'—',time(r.actual_start),time(r.timed_through)+(r.running?' · Running':''),r.active_hours??'Not recorded',r.timed_pcs??0,r.pcs_per_active_hour??'—'].map((x,j)=>h('td',{key:j,style:cell},x))))))),!data.rows.length&&h('p',null,'No recorded work in this period.'),h('h3',null,'Task sessions · references & actual times'),h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...['Staff','Work','Task reference','Started (PKT)','Completed (PKT)','State','Active hours in selected dates'].map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...(data.sessions||[]).map(r=>h('tr',{key:r.id},...[r.staff,r.work,r.reference,new Date(r.started_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}),r.completed_at?new Date(r.completed_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}):'—',r.status,r.active_hours_in_period].map((x,i)=>h('td',{key:i,style:cell},x))))))),data.sessions_truncated&&h('p',null,'Showing latest 500 sessions. Narrow dates for all task references; daily totals include all sessions.'),h('p',{style:{fontSize:12,color:'#baa98a'}},'Active hours use manually started task intervals, excluding pauses, split by Pakistan calendar day. Timed PCS are recorded work events during active intervals for that staff/work type; task references are staff-entered labels. PCS/hour uses timed PCS only. Untimed historical work remains visible with Not recorded hours. Activity span includes gaps.')));
+function StockingStaff164({token,profile}) {
+ const h=React.createElement,today=pkYmd(new Date()),[from,F]=useState(today),[to,T]=useState(today),[busy,B]=useState(false),[error,E]=useState(''),lock=useRef(false);
+ const wh=useStkWarehouseId(token,profile),cache=usePanelSnapshot158('stock-staff164',[profile.id,profile.role,wh],{from,to},{from:F,to:T}),data=cache.data;
+ const refresh=async()=>{if(lock.current||!cache.ready||!wh)return;lock.current=true;B(true);E('');try{if(!from||!to||from>to||to>today||(Date.parse(to)-Date.parse(from))/86400000>30)throw Error('Select up to 31 days through today');const v=await dashboardRequest147('/rest/v1/rpc/stk_staff_productivity164',{token,method:'POST',body:{p_wh:wh,p_from:from,p_to:to}});if(!Array.isArray(v?.rows))throw Error('Invalid staff report');cache.commit(v);}catch(e){E(e.message);}finally{lock.current=false;B(false);}};
+ const num=x=>Number(x||0).toLocaleString('en-PK'),time=x=>x?new Date(x).toLocaleString('en-GB',{timeZone:'Asia/Karachi',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'—',duration=s=>s>0?Math.floor(s/3600)+'h '+Math.floor(s%3600/60)+'m':'Not enough events';
+ const cell={padding:'10px 8px',textAlign:'left',borderBottom:'1px solid #393327',fontSize:12},heads=['Staff','Documents / tasks','PCS','Est. active time','Est. UPH','First → last activity'];
+ const exportDaily=()=>exportCSV('Stocking_Staff_'+data.from_date+'_'+data.to_date+'.csv',['Date','Staff','Work','Documents / tasks','Activity records','PCS','Missing qty records','Estimated active seconds','Estimated UPH','First activity PKT','Last activity PKT'],data.daily.map(r=>[r.day,r.staff,r.work,r.documents,r.records,r.pcs,r.missing_qty,r.active_seconds,r.uph??'',time(r.first_activity),time(r.last_activity)].map(safeReportCell)));
+ return h('section',{style:{background:'#15120d',color:'#f2efe7',padding:20,borderRadius:14}},h('h2',null,'Staff productivity'),h('div',{style:{display:'flex',gap:12,flexWrap:'wrap',alignItems:'center'}},h('label',null,'From ',h('input',{type:'date',value:from,max:today,disabled:busy,onChange:e=>F(e.target.value)})),h('label',null,'To ',h('input',{type:'date',value:to,max:today,disabled:busy,onChange:e=>T(e.target.value)})),h('button',{style:S.primaryBtnSm,onClick:refresh,disabled:busy||!cache.ready||!wh},busy?'Refreshing…':'Refresh staff panel'),data&&h('button',{style:S.secondaryBtnSm,onClick:exportDaily},'Export daily detail')),cache.note,error&&h('p',{role:'alert',style:{color:'#ff7474'}},error+' · Previous result retained.'),data&&h(React.Fragment,null,h('p',null,data.from_date+' — '+data.to_date+' · PKT'),h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(min(100%,450px),1fr))',gap:16,maxWidth:'100%'}},...['Receiver','Putaway','Distribution','Picker','Packer'].map(work=>{const rows=data.rows.filter(r=>r.work===work);return h('section',{key:work,style:{background:'#1e1a12',border:'1px solid #393327',padding:14,borderRadius:10,overflowX:'auto'}},h('h3',{style:{color:'#f5a623',marginTop:0}},work+' · '+num(rows.reduce((a,r)=>a+Number(r.pcs),0))+' PCS'),h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('thead',null,h('tr',null,...heads.map(x=>h('th',{key:x,style:cell},x)))),h('tbody',null,...rows.map((r,i)=>h('tr',{key:r.actor||i},...[r.staff,num(r.documents),num(r.pcs)+(r.missing_qty?' + unknown':''),duration(Number(r.active_seconds)),r.uph===null?'—':num(r.uph),time(r.first_activity)+' → '+time(r.last_activity)].map((x,j)=>h('td',{key:j,style:{...cell,color:j===2?'#34dc8a':undefined}},x)))))),!rows.length&&h('p',{style:{color:'#a89d83'}},'No recorded work.'));})),h('p',{style:{fontSize:12,color:'#baa98a'}},'Time / UPH are activity-based estimates, not exact task duration. Gaps over 20 minutes, work-type changes and overnight gaps are excluded. One isolated event cannot establish duration. PCS are recorded quantities per stage; do not add stages as unique warehouse throughput.'),h('details',{style:{fontSize:12,color:'#baa98a'}},h('summary',null,'Document counts'),h('p',null,'Receiver / Distribution: distinct DCs. Putaway: DCs or incoming line tasks. Picker: pick jobs, with STR fallback. Packer: distinct STR references. Missing references use the source task ID. Date-range document totals are distinct, not sums of daily counts.'))));
 }
+function MultiBinAssign164({token,profile,warehouse,module,bins,staff,busyBins=[],onDone,showToast}) {
+ const h=React.createElement,[aisle,A]=useState(''),[search,Sr]=useState(''),[selected,Select]=useState([]),[assignee,U]=useState(''),[busy,B]=useState(false),[error,E]=useState(''),lock=useRef(false),request=useRef(null);
+ const list=Array.isArray(bins)?bins:Object.values(bins||{}),aisles=[...new Set(list.map(b=>(b.code||'').split('-')[0]).filter(Boolean))].sort(),blocked=new Set(busyBins),allowed=['admin','warehouse_lead','supervisor','inbound_executive','outbound_executive'].includes(profile.role);
+ useEffect(()=>{Select([]);U('');A('');Sr('');E('');request.current=null;},[warehouse,module,profile.id]);
+ const filtered=list.filter(b=>(!aisle||(b.code||'').split('-')[0]===aisle)&&(!search||(b.code||'').toLowerCase().includes(search.toLowerCase()))).sort((a,b)=>(a.code||'').localeCompare(b.code||''));
+ const change=next=>{Select(next);request.current=null;};
+ const submit=async()=>{if(lock.current||!selected.length||!assignee)return;lock.current=true;B(true);E('');let saved=false;try{request.current=request.current||crypto.randomUUID();const result=await wmsRpc(token,'wms_count_assign_bins164',{p_module:module,p_wh:warehouse,p_bins:[...selected].sort(),p_assignee:assignee,p_request:request.current});saved=true;change([]);showToast(result.count+' bins assigned. One journal per bin.');await onDone();}catch(err){E(saved?'Assignment saved; list refresh failed. Refresh before assigning again.':err.message);}finally{lock.current=false;B(false);}};
+ if(!allowed)return null;
+ return h('section',{style:S.panel},h('h3',null,'Assign multiple bins'),h('div',{style:{display:'flex',gap:10,flexWrap:'wrap'}},h('select',{style:{...S.input,width:180},value:aisle,disabled:busy,onChange:e=>A(e.target.value)},h('option',{value:''},'All aisles'),...aisles.map(a=>h('option',{key:a,value:a},'Aisle '+a))),h('input',{style:{...S.input,width:220},placeholder:'Find bin code',value:search,disabled:busy,onChange:e=>Sr(e.target.value)})),h('div',{style:{display:'flex',gap:10,flexWrap:'wrap',maxHeight:200,overflowY:'auto',padding:'12px 0'}},...filtered.map(b=>h('label',{key:b.id,style:{padding:8,border:'1px solid #c7baa0',borderRadius:6,opacity:blocked.has(b.id)?0.5:1}},h('input',{type:'checkbox',checked:selected.includes(b.id),disabled:busy||blocked.has(b.id)||(!selected.includes(b.id)&&selected.length>=50),onChange:e=>change(e.target.checked?[...selected,b.id]:selected.filter(id=>id!==b.id))}), ' '+b.code+(blocked.has(b.id)?' · open count':''))),!filtered.length&&h('span',null,'No matching bins')),h('p',null,selected.length+' bins selected (up to 50). Selection stays when you change aisle.'),selected.length>0&&h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}},...selected.map(id=>h('button',{key:id,type:'button',style:S.secondaryBtnSm,disabled:busy,onClick:()=>change(selected.filter(x=>x!==id))},(list.find(b=>b.id===id)?.code||id)+' ×'))),h('div',{style:{display:'flex',gap:10,flexWrap:'wrap'}},h('select',{style:{...S.input,width:260},value:assignee,disabled:busy,onChange:e=>{U(e.target.value);request.current=null;}},h('option',{value:''},'Assign to staff…'),...(staff||[]).map(p=>h('option',{key:p.id,value:p.id},p.full_name+' ('+p.role+')'))),h('button',{style:S.primaryBtnSm,disabled:busy||!selected.length||!assignee||!warehouse,onClick:submit},busy?'Assigning…':'Assign '+selected.length+' bins'),h('button',{style:S.secondaryBtnSm,disabled:busy||!selected.length,onClick:()=>change([])},'Clear selection')),error&&h('p',{role:'alert',style:{color:'#c64b42'}},error));
+}
+function EcoCountCard164({token,profile,journal,onDone,showToast}) {
+ const h=React.createElement,[busy,B]=useState(false),lock=useRef(false),v=journal.summary164;
+ return h('div',null,v?h('small',null,'Short '+v.short+' · Excess '+v.excess+' · Net '+v.net+' · '+v.counted+'/'+v.total+' lines'):h('small',null,'Open journal for line summary'),h('small',{style:{display:'block'}},'Journal '+journal.id),journal.empty164&&h('small',{style:{display:'block',color:'#2a916c'}},'Physically empty confirmed · '+journal.empty164.expected_pcs+' expected PCS'),journal.status==='pending_admin_approval'&&h('small',{style:{display:'block'}},'Lead verified'),profile.role==='admin'&&journal.status==='pending_admin_approval'&&!(journal.scope_type==='all'&&!journal.parent_audit_id)&&h('button',{style:S.primaryBtnSm,disabled:busy,onClick:async()=>{if(lock.current)return;if(!window.confirm('Post verified journal '+journal.id+(v?'? Short '+v.short+' · Excess '+v.excess:'?')+' — existing inventory checks will run.'))return;lock.current=true;B(true);try{await wmsRpc(token,'wms_count_approve',{p_module:'ecommerce',p_count:journal.id});showToast('Adjustment posted; journal removed from pending list.');await onDone();}catch(err){showToast(err.message,'err');}finally{lock.current=false;B(false);}}},busy?'Adjusting…':'Adjust stock'));
+}
+function EmptyBin164({token,profile,module,journal,binCode,onDone,showToast}) {
+ const h=React.createElement,[code,C]=useState(''),[checked,Check]=useState(false),[busy,B]=useState(false),[error,E]=useState(''),[record,R]=useState(null),lock=useRef(false);
+ useEffect(()=>{let live=true;C('');Check(false);E('');R(null);wmsRpc(token,'wms_count_empty164',{p_module:module,p_count:journal.id,p_confirm:false}).then(x=>{if(live)R(x.confirmation);}).catch(e=>{if(live)E(e.message);});return()=>{live=false;};},[token,module,journal.id,journal.status]);
+ const can=journal.scope_type==='bin'&&journal.status==='counting'&&journal.assigned_to===profile.id;
+ const submit=async()=>{if(lock.current||!checked||!code.trim())return;if(!window.confirm('Confirm '+binCode+' is physically empty? All uncounted/zero lines will be recorded as zero and sent for Lead verification. Inventory will change only after Admin approval.'))return;lock.current=true;B(true);E('');try{const x=await wmsRpc(token,'wms_count_empty164',{p_module:module,p_count:journal.id,p_bin_code:code.trim(),p_confirm:true});R(x.confirmation);showToast('Empty count submitted for Lead verification.');await onDone(x.journal);}catch(e){E(e.message);}finally{lock.current=false;B(false);}};
+ return h('div',{style:{padding:12,border:'1px solid #c7baa0',borderRadius:8,marginBottom:12}},record&&h('p',null,'Empty-bin confirmation recorded · '+new Date(record.confirmed_at).toLocaleString('en-GB',{timeZone:'Asia/Karachi'})+' PKT · expected '+record.expected_pcs+' PCS'),can&&h(React.Fragment,null,h('label',null,h('input',{type:'checkbox',checked,disabled:busy,onChange:e=>Check(e.target.checked)}),' Bin physically empty'),checked&&h('div',{style:{display:'flex',gap:10,flexWrap:'wrap',marginTop:10}},h('input',{style:{...S.input,width:230},placeholder:'Scan assigned bin: '+(binCode||''),value:code,disabled:busy,onChange:e=>C(e.target.value)}),h('button',{style:S.primaryBtnSm,disabled:busy||!code.trim(),onClick:submit},busy?'Submitting…':'Confirm empty & submit')),h('small',{style:{display:'block',marginTop:8}},'Existing positive scans cannot be overwritten. Lead verification and Admin approval remain required.')),error&&h('p',{role:'alert',style:{color:'#c64b42'}},error),!can&&!record&&!error&&h('small',null,'No empty-bin confirmation recorded.'));
+}
+
 function CancelBeforeLoad162({token,profile,order,onDone,showToast}){
  const h=React.createElement,[busy,B]=useState(false),lock=useRef(false);
  if(!['admin','warehouse_lead'].includes(profile.role)||!['received','queued','picking','picked','packing','rtd','scanned','ready_for_dispatch','split_hold'].includes(order.status))return null;
@@ -40621,33 +40628,6 @@ function CancelBeforeLoad162({token,profile,order,onDone,showToast}){
  return h('button',{type:'button',disabled:busy,onClick:cancel,style:{...S.secondaryBtnSm,color:'#c84b43',marginLeft:6}},busy?'Cancelling…':'Cancel order → Putaway');
 }
 
-function StockingTaskClock163({token,profile,defaultWork}){
- const h=React.createElement,wh=useStkWarehouseId(token,profile),all=['Receiver','Putaway','Distribution','Picker','Packer'],roles={physical_receiver:['Receiver'],inbound_executive:['Receiver'],putaway_officer:['Putaway','Distribution'],picker:['Picker'],packer:['Packer'],logistics_officer:['Packer'],outbound_executive:['Putaway','Distribution','Picker','Packer']},allowed=['admin','warehouse_lead','supervisor'].includes(profile.role)?all:(roles[profile.role]||[]);
- const [work,W]=useState(allowed.includes(defaultWork)?defaultWork:allowed[0]||''),[reference,R]=useState(''),[result,D]=useState(null),[busy,B]=useState(false),[error,E]=useState(''),[tick,T]=useState(Date.now());const lock=useRef(false),live=useRef(true),loaded=useRef(Date.now()),generation=useRef(0);
- const call=async action=>{if(lock.current||!wh)return;lock.current=true;B(true);E('');const g=generation.current;try{const v=await wmsRpc(token,'stk_task_clock163',{p_wh:wh,p_action:action,p_work:work,p_reference:reference,p_session:result?.session?.id||null});if(live.current&&g===generation.current){loaded.current=Date.now();D(v);T(Date.now());}}catch(e){if(live.current&&g===generation.current)E(e.message);}finally{lock.current=false;if(live.current&&g===generation.current)B(false);}};
- useEffect(()=>{live.current=true;generation.current++;D(null);if(wh&&allowed.length)call('read');return()=>{live.current=false;generation.current++;};},[wh,profile.id,profile.role]);
- const session=result?.session,open=session&&session.status!=='completed';
- useEffect(()=>{if(session?.status!=='running')return;const timer=setInterval(()=>T(Date.now()),1000);return()=>clearInterval(timer);},[session?.status]);
- if(!allowed.length)return null;
- const secs=Math.max(0,Math.floor(Number(result?.active_seconds||0)+(session?.status==='running'?(tick-loaded.current)/1000:0))),duration=[Math.floor(secs/3600),Math.floor(secs%3600/60),secs%60].map(x=>String(x).padStart(2,'0')).join(':'),stamp=x=>new Date(x).toLocaleString('en-GB',{timeZone:'Asia/Karachi'}),button=(label,action)=>h('button',{type:'button',style:S.secondaryBtnSm,disabled:busy||!result,onClick:()=>call(action)},label);
- return h('section',{style:{border:'1px solid #b6914b',background:'#211d14',color:'#f3ebdb',padding:16,borderRadius:12,marginBottom:16}},h('div',{style:{display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}},h('strong',null,'Actual task timer'),open?h('span',null,session.work+' · '+session.reference):h(React.Fragment,null,h('select',{value:work,disabled:busy,onChange:e=>W(e.target.value),style:S.select},...allowed.map(x=>h('option',{key:x,value:x},x))),h('input',{value:reference,maxLength:150,disabled:busy,onChange:e=>R(e.target.value),placeholder:'PO / DC / STR / task reference','aria-label':'Task reference',style:S.input})),h('b',{style:{color:'#f5a623',fontSize:22}},duration),open?h(React.Fragment,null,button(session.status==='running'?'Pause':'Resume',session.status==='running'?'pause':'resume'),button('Complete Work','complete')):button('Start Work','start'),h('button',{type:'button',style:S.secondaryBtnSm,disabled:busy,onClick:()=>call('read')},'Reload timer')),session&&h('p',null,'Started: '+stamp(session.started_at)+' PKT · '+session.status+(session.completed_at?' · Completed: '+stamp(session.completed_at)+' PKT':'')),h('small',null,'Start when you begin physical work. Pause during breaks or interruptions; press Complete Work when finished. Closing this page does not pause the timer. No timer starts automatically.'),error&&h('p',{role:'alert',style:{color:'#ff7474'}},error));
-}
-
-function StockingReceivingBase81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Receiver'}),React.createElement(StockingReceivingBase81Base163,props));}
-
-function StockingOutboundBase81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Putaway'}),React.createElement(StockingOutboundBase81Base163,props));}
-
-function StockingIncoming81(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Putaway'}),React.createElement(StockingIncoming81Base163,props));}
-
-function StockingGuidedPick62(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Picker'}),React.createElement(StockingGuidedPick62Base163,props));}
-
-function StockingDistribution61(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Distribution'}),React.createElement(StockingDistribution61Base163,props));}
-
-function StockingLogisticsWork73(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Packer'}),React.createElement(StockingLogisticsWork73Base163,props));}
-
-function StockingPackingView(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Packer'}),React.createElement(StockingPackingViewBase163,props));}
-
-function StockingLegacyPickingView56(props){return React.createElement(React.Fragment,null,React.createElement(StockingTaskClock163,{...props,defaultWork:'Picker'}),React.createElement(StockingLegacyPickingView56Base163,props));}
 
 function monthlyModel149(data,destination='',department='') {
  const months=[];let d=new Date(data.from_date+'T00:00:00Z');const end=data.to_date.slice(0,7);
