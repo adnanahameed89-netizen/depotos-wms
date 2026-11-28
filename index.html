@@ -4113,7 +4113,7 @@ function DashboardV2ViewPanel147({
       try {
         const [a, n, r, o, l, i, c, s, m, u] = await Promise.all([panel147 === 'monthly' ? ie(`/rest/v1/sales_orders?warehouse_id=eq.${t.warehouse_id}&received_at=gte.${pkStart(pkMonthStart(pkYmd(new Date()), 3)).toISOString()}&select=id,received_at,status`, {
           token: e
-        }) : Promise.resolve([]), panel147 === 'inventory' ? ce(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=product_id,bin_id,on_hand&order=id`) : Promise.resolve([]), panel147 === 'inventory' ? ie(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=id`, {
+        }) : Promise.resolve([]), panel147 === 'inventory' ? ce(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=product_id,bin_id,on_hand&order=id`) : Promise.resolve([]), panel147 === 'inventory' ? ie(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=id`, {
           token: e
         }) : Promise.resolve([]), panel147 === 'inventory' ? ie("/rest/v1/rpc/wms_dashboard_inventory_stats138", {
           method: "POST",
@@ -6377,7 +6377,7 @@ function PutawayView({
     F = ["admin", "warehouse_lead", "supervisor", "putaway_officer", "returns_agent"].includes(t.role),
     $ = useCallback(async () => {
       try {
-        const [a, n, o, l] = await Promise.all([sbPaged(e, `/rest/v1/putaway_tasks?warehouse_id=eq.${t.warehouse_id}&status=eq.pending&assigned_to=is.null&return_line_id=is.null&select=*&order=id.asc`), sbPaged(e, `/rest/v1/putaway_tasks?warehouse_id=eq.${t.warehouse_id}&status=eq.pending&or=(assigned_to.eq.${t.id},and(assigned_to.is.null,return_line_id.not.is.null))&select=*&order=id.asc`), sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*`, {
+        const [a, n, o, l] = await Promise.all([sbPaged(e, `/rest/v1/putaway_tasks?warehouse_id=eq.${t.warehouse_id}&status=eq.pending&assigned_to=is.null&return_line_id=is.null&select=*&order=id.asc`), sbPaged(e, `/rest/v1/putaway_tasks?warehouse_id=eq.${t.warehouse_id}&status=eq.pending&or=(assigned_to.eq.${t.id},and(assigned_to.is.null,return_line_id.not.is.null))&select=*&order=id.asc`), sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*`, {
           token: e
         }), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=*`, {
           token: e
@@ -7387,7 +7387,7 @@ function InventoryView({
     [Ve, Ue] = useState(""),
     [Ge, He] = useState(!1),
     Ke = useCallback(async () => {
-      const [a, n, r, o] = await Promise.all([sbPaged(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/inventory_reserved?warehouse_id=eq.${t.warehouse_id}&select=*&order=product_id`), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/wms_stock_layers?warehouse_id=eq.${t.warehouse_id}&qty=gt.0&select=*&order=id`)]),
+      const [a, n, r, o] = await Promise.all([sbPaged(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/inventory_reserved?warehouse_id=eq.${t.warehouse_id}&select=*&order=product_id`), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/wms_stock_layers?warehouse_id=eq.${t.warehouse_id}&qty=gt.0&select=*&order=id`)]),
         i = await fetchByIds(e, "products", a.map(e => e.product_id), "id,barcode,name,sku,department");
       l(a || []), c(Object.fromEntries((n || []).map(e => [e.product_id, e.reserved]))), d(Object.fromEntries((i || []).map(e => [e.id, e]))), u(Object.fromEntries((r || []).map(e => [e.id, e]))), E(groupAgeLayers(o)), x(groupAgeLayers(o, !0)), w(""), k(null);
     }, [e, t.warehouse_id]),
@@ -11409,7 +11409,7 @@ function PickingView({
       try {
         let [a, n, o, i] = await Promise.all([sbPaged(e, "/rest/v1/pick_tasks?status=neq.picked&select=*&order=id.asc"), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=*`, {
           token: e
-        }), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sb(`/rest/v1/totes?warehouse_id=eq.${t.warehouse_id}&select=*`, {
+        }), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sb(`/rest/v1/totes?warehouse_id=eq.${t.warehouse_id}&select=*`, {
           token: e
         })]);
         const s = (i || []).filter(e => "picking" === e.status && e.bulk_batch_id).map(e => e.bulk_batch_id);
@@ -11786,7 +11786,7 @@ function PickingView({
       try {
         const o = r.refs.filter(e => e.allocated < e.qty_required);
         let c = !1;
-        const s = await sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&code=eq.PNA-HOLD&select=*`, {
+        const s = await sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&code=eq.PNA-HOLD&select=*`, {
           token: e
         });
         if (s && s[0] && i > 0) {
@@ -12957,7 +12957,7 @@ function PackingView({
       try {
         const [a, n, o, i] = await Promise.all([sbPaged(e, "/rest/v1/pack_tasks?status=eq.pending&select=*&order=id.asc"), sb(`/rest/v1/totes?warehouse_id=eq.${t.warehouse_id}&status=eq.picked&select=*`, {
             token: e
-          }), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=*`, {
+          }), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=*`, {
             token: e
           })]),
           c = await fetchByIds(e, "sales_orders", (a || []).map(e => e.order_id), "id,external_order_id,courier,status,delivery_city,receiver_name,raw_data");
@@ -13103,7 +13103,7 @@ function PackingView({
       if (!h) return void a("Pehle product scan karein jise damaged mark karna hai", "err");
       const t = Number(I);
       if (!t || t <= 0) return void a("Valid quantity enter karein", "err");
-      const n = F.find(e => (e.code || "").toLowerCase() === z.trim().toLowerCase());
+      const n = F.find(e => e.code === "DAMAGE");
       if (n) {
         if (f.find(e => e.product_id === h.id)) try {
           if (o[p.order_id]?.raw_data?.wms_v2) return await sb("/rest/v1/rpc/wms_pack_damage", {
@@ -13478,9 +13478,9 @@ function PackingView({
         minWidth: 150,
         fontFamily: "'IBM Plex Mono', monospace"
       },
-      placeholder: "Damage bin code",
-      value: z,
-      onChange: e => L(e.target.value)
+      placeholder: "DAMAGE",
+      value: "DAMAGE",
+      readOnly: true
     }), React.createElement("datalist", {
       id: "packDamageBinDatalist"
     }, F.map(e => React.createElement("option", {
@@ -15254,7 +15254,7 @@ function ReturnsView({
           token: e
         }), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=id,full_name`, {
           token: e
-        }), sbAll(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`, e)]);
+        }), sbAll(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=id`, e)]);
         const byId = new Map();
         for (const x of active || []) byId.set(x.id, x);
         for (const x of delReq || []) byId.set(x.id, x);
@@ -15404,7 +15404,7 @@ function ReturnsView({
     ie = async t => {
       const n = (void 0 !== t ? t : P).trim();
       if (T(""), n) try {
-        const t = "damaged" === D ? $.find(e => (e.code || "").toLowerCase() === O.trim().toLowerCase()) : null;
+        const t = "damaged" === D ? $.find(e => e.code === "DAMAGE") : null;
         if ("damaged" === D && !t) throw Error("Sahi damage bin select karein");
         const r = await lookupProductByCode(e, n);
         if (!r) throw Error("Barcode/SKU match nahi hua");
@@ -15429,7 +15429,7 @@ function ReturnsView({
     se = async t => {
       const n = (void 0 !== t ? t : P).trim();
       if (T(""), n) try {
-        const t = "damaged" === D ? $.find(e => (e.code || "").toLowerCase() === O.trim().toLowerCase()) : null;
+        const t = "damaged" === D ? $.find(e => e.code === "DAMAGE") : null;
         if ("damaged" === D && !t) throw Error("Sahi damage bin select karein");
         const r = await lookupProductByCode(e, n);
         if (!r) throw Error("Barcode/SKU match nahi hua");
@@ -15570,9 +15570,9 @@ function ReturnsView({
       minWidth: 160,
       fontFamily: "'IBM Plex Mono', monospace"
     },
-    placeholder: "Damage bin code",
-    value: O,
-    onChange: e => I(e.target.value)
+    placeholder: "DAMAGE",
+    value: "DAMAGE",
+    readOnly: true
   }), React.createElement("datalist", {
     id: "returnDamageBinDatalist"
   }, $.map(e => React.createElement("option", {
@@ -15710,9 +15710,9 @@ function ReturnsView({
       minWidth: 160,
       fontFamily: "'IBM Plex Mono', monospace"
     },
-    placeholder: "Damage bin code",
-    value: O,
-    onChange: e => I(e.target.value)
+    placeholder: "DAMAGE",
+    value: "DAMAGE",
+    readOnly: true
   }), React.createElement("datalist", {
     id: "returnDamageBinDatalist2"
   }, $.map(e => React.createElement("option", {
@@ -16312,7 +16312,7 @@ function ReportsBase83({
       h(!0);
       try {
         if ("inventory_ledger" === n || "inventory_bin_ledger" === n) {
-          const [a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/inventory_reserved?warehouse_id=eq.${t.warehouse_id}&select=*&order=product_id`), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/wms_stock_layers?warehouse_id=eq.${t.warehouse_id}&qty=gt.0&select=*&order=id`)]),
+          const [a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/inventory_reserved?warehouse_id=eq.${t.warehouse_id}&select=*&order=product_id`), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=id`), sbPaged(e, `/rest/v1/wms_stock_layers?warehouse_id=eq.${t.warehouse_id}&qty=gt.0&select=*&order=id`)]),
             i = await fetchByIds(e, "products", a.map(e => e.product_id), "id,barcode,name"),
             c = Object.fromEntries(i.map(e => [e.id, e])),
             s = Object.fromEntries(o.map(e => [e.id, e])),
@@ -17017,7 +17017,7 @@ function BinsView({
     [i, c] = useState(!1),
     [s, d] = useState(null),
     m = useCallback(async () => {
-      r((await sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*&order=code.asc`, {
+      r((await sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*&order=code.asc`, {
         token: e
       })) || []);
     }, [e, t.warehouse_id]);
@@ -18159,7 +18159,7 @@ function ComplaintsView({
         try {
           const [a, n, r] = await Promise.all([sb(`/rest/v1/complaints?warehouse_id=eq.${t.warehouse_id}&select=*&order=created_at.desc`, {
             token: e
-          }), sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*`, {
+          }), sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*`, {
             token: e
           }), sb(`/rest/v1/profiles?warehouse_id=eq.${t.warehouse_id}&select=id,full_name`, {
             token: e
@@ -19232,337 +19232,30 @@ function TrackingSplitView({
     text: "Koi pending split request nahi"
   })))))));
 }
-function DamageView({
-  token: e,
-  profile: t,
-  showToast: a
-}) {
-  const [n, r] = useState([]),
-    [o, l] = useState({}),
-    [i, c] = useState({}),
-    [s, d] = useState({}),
-    [m, u] = useState({}),
-    [p, y] = useState("pending"),
-    [h, g] = useState({}),
-    [f, _] = useState(!1),
-    R = ["admin", "warehouse_lead"].includes(t.role),
-    [E, b] = useState(""),
-    [k, v] = useState(null),
-    [w, C] = useState([]),
-    [x, B] = useState(""),
-    [P, T] = useState(""),
-    [A, q] = useState(!1),
-    D = useCallback(async () => {
-      try {
-        const a = await sb(`/rest/v1/damage_inventory?warehouse_id=eq.${t.warehouse_id}&select=*&order=reported_at.desc`, {
-          token: e
-        });
-        r(a || []);
-        const [n, o, i] = await Promise.all([fetchProductsByIds(e, [...new Set((a || []).map(e => e.product_id))]), sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*`, {
-          token: e
-        }), sb("/rest/v1/profiles?select=*", {
-          token: e
-        })]);
-        l(n), c(Object.fromEntries((o || []).map(e => [e.id, e]))), d(Object.fromEntries((i || []).map(e => [e.id, e])));
-        const s = [...new Set((a || []).map(e => e.order_id).filter(Boolean))];
-        if (s.length) {
-          const t = await sb(`/rest/v1/sales_orders?id=in.(${s.join(",")})&select=*`, {
-            token: e
-          });
-          u(Object.fromEntries((t || []).map(e => [e.id, e])));
-        }
-      } catch (e) {
-        a("Load failed", "err");
-      }
-    }, [e, t.warehouse_id]);
-  useEffect(() => {
-    D();
-  }, [D]);
-  const F = n.filter(e => !e.processed),
-    $ = n.filter(e => e.processed),
-    N = "pending" === p ? F : $,
-    O = async n => {
-      const r = (void 0 !== n ? n : E).trim();
-      if (b(""), !r) return;
-      const o = await lookupProductByCode(e, r);
-      if (o) try {
-        const n = ((await sb(`/rest/v1/inventory?warehouse_id=eq.${t.warehouse_id}&product_id=eq.${o.id}&select=*`, {
-          token: e
-        })) || []).filter(e => e.on_hand > 0).map(e => ({
-          binId: e.bin_id,
-          avail: e.on_hand
-        }));
-        if (!n.length) return void a("Is product ki kisi bin mein stock nahi hai", "err");
-        v(o), C(n), B(""), T("");
-      } catch (e) {
-        a("Lookup fail: " + e.message, "err");
-      } else a("Barcode/SKU match nahi hua", "err");
-    };
-  return React.createElement("div", null, React.createElement(SectionTitle, {
-    title: "Damage Inventory"
-  }), R && React.createElement("div", {
-    style: S.panel
-  }, React.createElement("div", {
-    style: S.panelTitle
-  }, "Bin Se Damage Mein Transfer Karein"), React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: "#8A8272",
-      marginBottom: 14
-    }
-  }, 'Kisi bhi bin mein agar damaged item mile (picking/packing k bagair), yahan se seedha transfer karein — inventory se qty nikal jayegi aur damage_inventory mein record ban jayega, jise aap "Pending STR" tab se STR bana k release kar sakte hain.'), React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 10,
-      flexWrap: "wrap",
-      alignItems: "center"
-    }
-  }, React.createElement("input", {
-    style: {
-      ...S.input,
-      minWidth: 180,
-      fontFamily: "'IBM Plex Mono', monospace"
-    },
-    placeholder: "Scan or type barcode/SKU, then Enter",
-    value: E,
-    onChange: e => b(e.target.value),
-    onKeyDown: e => "Enter" === e.key && O()
-  }), React.createElement(CameraScanButton, {
-    onScan: e => O(e)
-  }), React.createElement("button", {
-    style: S.secondaryBtnSm,
-    onClick: wmsAction55(() => O())
-  }, "Scan")), k && React.createElement("div", {
-    style: {
-      marginTop: 14,
-      paddingTop: 14,
-      borderTop: "1px solid #EFE8D8",
-      display: "flex",
-      gap: 10,
-      alignItems: "center",
-      flexWrap: "wrap"
-    }
-  }, React.createElement("div", {
-    style: {
-      fontFamily: "'IBM Plex Mono', monospace",
-      color: "#F5A623",
-      fontSize: 14
-    }
-  }, k.barcode), React.createElement("div", {
-    style: {
-      fontSize: 13
-    }
-  }, k.name), React.createElement("select", {
-    style: {
-      ...S.input,
-      minWidth: 140
-    },
-    value: x,
-    onChange: e => B(e.target.value)
-  }, React.createElement("option", {
-    value: ""
-  }, "Select bin…"), w.map(e => React.createElement("option", {
-    key: e.binId,
-    value: e.binId
-  }, i[e.binId]?.code || e.binId, " (", e.avail, " avail)"))), React.createElement("input", {
-    type: "number",
-    style: {
-      ...S.input,
-      width: 90
-    },
-    placeholder: "Qty",
-    value: P,
-    onChange: e => T(e.target.value)
-  }), React.createElement("button", {
-    style: S.primaryBtnSm,
-    onClick: wmsAction55(async () => {
-      q(!0);
-      try {
-        if (!x || !k) throw Error("Product aur bin select karein");
-        await wmsRpc(e, "wms_warehouse_damage", {
-          p_wh: t.warehouse_id,
-          p_product: k.id,
-          p_bin: x,
-          p_qty: wmsWholeQty(P, "Qty", !1)
-        }, {
-          once: !0
-        }), a("Damage transfer complete"), v(null), C([]), B(""), T(""), await D();
-      } catch (e) {
-        a(e.message, "err");
-      } finally {
-        q(!1);
-      }
-    }),
-    disabled: A
-  }, A ? "Transfer ho raha…" : "→ Transfer to Damage"), React.createElement("button", {
-    style: S.secondaryBtnSm,
-    onClick: wmsAction55(() => {
-      v(null), C([]);
-    })
-  }, "Cancel"))), React.createElement("div", {
-    style: {
-      display: "flex",
-      gap: 8,
-      marginBottom: 14
-    }
-  }, React.createElement("button", {
-    onClick: wmsAction55(() => y("pending")),
-    style: {
-      ...S.pill,
-      ...("pending" === p ? {
-        background: "#F5A623",
-        color: "#1A1206",
-        borderColor: "#F5A623"
-      } : {})
-    }
-  }, "Pending STR (", F.length, ")"), React.createElement("button", {
-    onClick: wmsAction55(() => y("processed")),
-    style: {
-      ...S.pill,
-      ...("processed" === p ? {
-        background: "#F5A623",
-        color: "#1A1206",
-        borderColor: "#F5A623"
-      } : {})
-    }
-  }, "Processed (", $.length, ")")), "pending" === p && R && F.length > 0 && React.createElement("div", {
-    style: S.panel
-  }, React.createElement("div", {
-    style: S.panelTitle
-  }, "Selected (", Object.values(h).filter(Boolean).length, ") — generate STR"), React.createElement("button", {
-    style: S.primaryBtnSm,
-    onClick: wmsAction55(async () => {
-      const n = Object.keys(h).filter(e => h[e]);
-      if (0 !== n.length) {
-        _(!0);
-        try {
-          const r = `STR-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString().slice(-4)}`;
-          for (const a of n) await sb(`/rest/v1/damage_inventory?id=eq.${a}`, {
-            method: "PATCH",
-            token: e,
-            body: {
-              str_number: r,
-              processed: !0,
-              processed_by: t.id,
-              processed_at: new Date().toISOString()
-            }
-          });
-          await sb("/rest/v1/event_log", {
-            method: "POST",
-            token: e,
-            body: {
-              entity_type: "damage_inventory",
-              entity_id: n[0],
-              user_id: t.id,
-              action: "str_generated",
-              metadata: {
-                str_number: r,
-                count: n.length
-              }
-            }
-          }), a(`${r} generated for ${n.length} item(s)`), g({}), D();
-        } catch (e) {
-          a("STR generation failed", "err");
-        }
-        _(!1);
-      } else a("Kam se kam ek row select karein", "err");
-    }),
-    disabled: f
-  }, f ? "Generating…" : "📋 Generate STR for selected")), React.createElement("div", {
-    style: S.panel
-  }, React.createElement("table", null, React.createElement("thead", null, React.createElement("tr", null, "pending" === p && R && React.createElement("th", {
-    style: S.th
-  }), React.createElement("th", {
-    style: S.th
-  }, "Barcode"), React.createElement("th", {
-    style: S.th
-  }, "Product"), React.createElement("th", {
-    style: S.th
-  }, "Bin"), React.createElement("th", {
-    style: S.th
-  }, "Qty"), React.createElement("th", {
-    style: S.th
-  }, "Stage"), React.createElement("th", {
-    style: S.th
-  }, "Reported By"), React.createElement("th", {
-    style: S.th
-  }, "Reported At"), React.createElement("th", {
-    style: S.th
-  }, "Order Ref"), "processed" === p && React.createElement("th", {
-    style: S.th
-  }, "STR #"))), React.createElement("tbody", null, N.map(e => {
-    const t = o[e.product_id],
-      a = i[e.bin_id],
-      n = e.order_id ? m[e.order_id] : null;
-    return React.createElement("tr", {
-      key: e.id
-    }, "pending" === p && R && React.createElement("td", {
-      style: S.td
-    }, React.createElement("input", {
-      type: "checkbox",
-      checked: !!h[e.id],
-      onChange: t => g({
-        ...h,
-        [e.id]: t.target.checked
-      })
-    })), React.createElement("td", {
-      style: {
-        ...S.td,
-        fontFamily: "'IBM Plex Mono', monospace",
-        color: "#F5A623"
-      }
-    }, t?.barcode || "—"), React.createElement("td", {
-      style: S.td
-    }, t?.name || "—"), React.createElement("td", {
-      style: {
-        ...S.td,
-        color: "#6B6355"
-      }
-    }, a?.code || "—"), React.createElement("td", {
-      style: {
-        ...S.td,
-        color: "#E5484D",
-        fontWeight: 600
-      }
-    }, e.qty), React.createElement("td", {
-      style: S.td
-    }, React.createElement("span", {
-      style: {
-        ...S.badgeSm,
-        color: "#B084F5",
-        borderColor: "#B084F5"
-      }
-    }, e.found_at_stage || "returns")), React.createElement("td", {
-      style: {
-        ...S.td,
-        color: "#6B6355"
-      }
-    }, s[e.reported_by]?.full_name || "—"), React.createElement("td", {
-      style: {
-        ...S.td,
-        color: "#6B6355",
-        fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 11
-      }
-    }, fmtTime(e.reported_at)), React.createElement("td", {
-      style: {
-        ...S.td,
-        color: "#6B6355",
-        fontFamily: "'IBM Plex Mono', monospace"
-      }
-    }, n?.external_order_id || "—"), "processed" === p && React.createElement("td", {
-      style: {
-        ...S.td,
-        fontFamily: "'IBM Plex Mono', monospace",
-        color: "#4CAF7D"
-      }
-    }, e.str_number));
-  }), 0 === N.length && React.createElement("tr", null, React.createElement("td", {
-    colSpan: 9
-  }, React.createElement(EmptyNote, {
-    text: "No records."
-  })))))));
+function DamageView({token,profile,showToast}) {
+ const h=React.createElement;
+ const [tab,setTab]=useState(false),[page,setPage]=useState(0),[data,setData]=useState({rows:[],pending_count:0,processed_count:0,pending_pcs:0}),[selected,setSelected]=useState({}),[str,setStr]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loading,setLoading]=useState(false),[barcode,setBarcode]=useState(''),[product,setProduct]=useState(null),[sources,setSources]=useState([]),[source,setSource]=useState(''),[qty,setQty]=useState('');
+ const key=useRef(null), request=useRef(0), actionLock=useRef(false);
+ const manager=['admin','warehouse_lead'].includes(profile.role);
+ const load=useCallback(async()=>{const seq=++request.current;setLoading(true);setError('');try{const d=await wmsRpc(token,'wms_damage_board167',{p_wh:profile.warehouse_id,p_processed:tab,p_offset:page*50});if(seq===request.current){setData(d);setSelected({});}}catch(e){if(seq===request.current)setError(e.message);}finally{if(seq===request.current)setLoading(false);}},[token,profile.warehouse_id,tab,page]);
+ useEffect(()=>{load();return()=>{request.current++;};},[load]);
+ const lookup=async(code)=>{try{const p=await lookupProductByCode(token,String(code===undefined?barcode:code).trim());if(!p)throw Error('Barcode/SKU match nahi hua');const [stock,bins]=await Promise.all([sb(`/rest/v1/inventory?warehouse_id=eq.${profile.warehouse_id}&product_id=eq.${p.id}&select=*`,{token}),sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${profile.warehouse_id}&select=*`,{token})]);const bs=Object.fromEntries(bins.map(b=>[b.id,b]));setSources(stock.filter(i=>i.on_hand>0&&isPickableBin(bs[i.bin_id])).map(i=>({...i,code:bs[i.bin_id].code})));setProduct(p);setSource('');setQty('');}catch(e){showToast(e.message,'err');}};
+ const transfer=async()=>{if(actionLock.current)return;const ids=Object.keys(selected).filter(id=>selected[id]).sort(),ref=str.trim();if(!ids.length||!ref)return showToast('Rows select karein aur Odoo transfer number enter karein','err');if(!window.confirm(`${ids.length} selected damage entries ko Odoo ${ref} ke against transfer karein? DAMAGE stock deduct hoga.`))return;
+ actionLock.current=true;setBusy(true);try{const fingerprint=JSON.stringify([ids,ref]);if(!key.current||key.current.fingerprint!==fingerprint)key.current={fingerprint,id:crypto.randomUUID()};const result=await wmsRpc(token,'wms_damage_transfer167',{p_wh:profile.warehouse_id,p_ids:ids,p_str:ref,p_key:key.current.id});showToast(`${result.str_number}: ${result.qty} PCS transferred`);setStr('');setSelected({});key.current=null;await load();}catch(e){showToast(e.message,'err');}finally{actionLock.current=false;setBusy(false);}};
+ const manual=async()=>{if(actionLock.current)return;actionLock.current=true;setBusy(true);try{if(!source||!product)throw Error('Source bin select karein');await wmsRpc(token,'wms_warehouse_damage',{p_wh:profile.warehouse_id,p_product:product.id,p_bin:source,p_qty:wmsWholeQty(qty,'Qty',false)},{once:true});showToast('Stock DAMAGE bin mein transfer ho gaya');setProduct(null);setBarcode('');await load();}catch(e){showToast(e.message,'err');}finally{actionLock.current=false;setBusy(false);}};
+ const button=(label,onClick,disabled=false)=>h('button',{style:S.secondaryBtnSm,onClick,disabled:busy||disabled},label);
+ const heads=[...(!tab&&manager?['Select']:[]),'Barcode','Product','Location','Source bin','Qty','Source','Reported by','Reported at','Order / return reference','Courier',...(tab?['Odoo transfer #','Transferred at']:[])];
+ const rows=data.rows||[];
+ return h('div',null,h(SectionTitle,{title:'Damage Inventory',action:button('Refresh',load,loading)}),
+ h('div',{style:S.panel},h('strong',null,'DAMAGE · Non-saleable stock'),h('p',null,`${data.pending_pcs||0} pending PCS · Returns, picking, packing and warehouse damage`)),
+ manager&&h('div',{style:S.panel},h('div',{style:S.panelTitle},'Source bin → DAMAGE'),h('input',{style:S.input,value:barcode,placeholder:'Barcode / SKU',onChange:e=>setBarcode(e.target.value),onKeyDown:e=>e.key==='Enter'&&lookup()}),h(CameraScanButton,{onScan:lookup}),button('Find stock',()=>lookup()),product&&h('div',{style:{marginTop:12}},h('p',null,product.name),h('select',{style:S.input,value:source,onChange:e=>setSource(e.target.value)},h('option',{value:''},'Select saleable source bin'),sources.map(i=>h('option',{key:i.id,value:i.bin_id},`${i.code} · ${i.on_hand} PCS`))),h('input',{style:S.input,type:'number',min:1,step:1,value:qty,placeholder:'Qty',onChange:e=>setQty(e.target.value)}),button('Move to DAMAGE',manual),button('Cancel',()=>setProduct(null)))),
+ h('div',{style:{display:'flex',gap:8,marginBottom:12}},button(`Pending transfer (${data.pending_count||0})`,()=>{setTab(false);setPage(0);setSelected({});},loading),button(`Processed (${data.processed_count||0})`,()=>{setTab(true);setPage(0);setSelected({});},loading)),
+ error&&h('p',{role:'alert',style:{color:'#E5484D'}},error),loading&&h('p',null,'Loading…'),
+ !tab&&manager&&h('div',{style:S.panel},h('strong',null,`${Object.values(selected).filter(Boolean).length} selected`),h('input',{style:{...S.input,marginTop:10},value:str,maxLength:120,placeholder:'Enter Odoo STR / transfer order number',disabled:busy,onChange:e=>setStr(e.target.value)}),h('button',{style:S.primaryBtnSm,onClick:transfer,disabled:busy||loading||!!error||!str.trim()||!Object.values(selected).some(Boolean)},busy?'Processing…':'Confirm transfer')),
+ h('div',{style:{...S.panel,overflowX:'auto'}},h('table',null,h('thead',null,h('tr',null,heads.map(s=>h('th',{style:S.th,key:s},s)))),h('tbody',null,rows.map(r=>h('tr',{key:r.id},...(!tab&&manager?[h('td',{style:S.td,key:'select'},h('input',{type:'checkbox',disabled:busy||loading,checked:!!selected[r.id],onChange:e=>setSelected(v=>({...v,[r.id]:e.target.checked}))}))]:[]),...[r.barcode,r.product_name,r.bin_code,r.source_bin_code||'—',r.qty,r.found_at_stage,r.reported_name||'—',fmtTime(r.reported_at),r.order_ref||r.return_tracking||'—',r.courier||'—',...(tab?[r.str_number||'Legacy reference unavailable',fmtTime(r.processed_at)]:[])].map((v,i)=>h('td',{style:S.td,key:i},v)))),!rows.length&&h('tr',null,h('td',{style:S.td,colSpan:heads.length},'No records'))))),
+ h('div',{style:{display:'flex',gap:12,alignItems:'center'}},button('Previous',()=>setPage(p=>p-1),loading||page===0),h('span',null,`Page ${page+1}`),button('Next',()=>setPage(p=>p+1),loading||(page+1)*50>=(tab?data.processed_count:data.pending_count))));
 }
+
 function PnaView({
   token: e,
   profile: t,
@@ -19578,7 +19271,7 @@ function PnaView({
       try {
         const [a, n, r, o] = await Promise.all([sb("/rest/v1/pna_records?select=*&order=reported_at.desc", {
           token: e
-        }), sb(`/rest/v1/bins?warehouse_id=eq.${t.warehouse_id}&select=*`, {
+        }), sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t.warehouse_id}&select=*`, {
           token: e
         }), sb("/rest/v1/profiles?select=*", {
           token: e
@@ -20907,7 +20600,7 @@ const STAGING_BIN_CODE = "PACK-STAGING",
 async function getSpecialBin(e, t, a) {
   const n = t + ":" + a;
   if (_specialBinCache[n]) return _specialBinCache[n];
-  let r = await sb(`/rest/v1/bins?warehouse_id=eq.${t}&code=eq.${encodeURIComponent(a)}&select=*`, {
+  let r = await sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t}&code=eq.${encodeURIComponent(a)}&select=*`, {
       token: e
     }),
     o = r && r[0];
@@ -21108,7 +20801,7 @@ async function getStockSummary(e, t, a) {
       token: e
     }), sb(`/rest/v1/inventory_reserved?warehouse_id=eq.${t}&product_id=eq.${a}&select=*`, {
       token: e
-    }), sb(`/rest/v1/bins?warehouse_id=eq.${t}&select=id,code,pickable`, {
+    }), sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${t}&select=id,code,pickable`, {
       token: e
     })]),
     l = new Set(["PACK-STAGING", "INCOMPLETE-HOLD", "PNA-HOLD"]),
@@ -26528,7 +26221,7 @@ function StockingLegacyPickingView56({
       if (n) {
         R(!0);
         try {
-          const [t, a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/stk_str?warehouse_id=eq.${n}&status=eq.reserved&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_putaway_queue?warehouse_id=eq.${n}&status=eq.completed&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${n}&select=id,warehouse_id,product_barcode,product_name,bin_id,qty_delta,reason,source,created_by,created_at&order=id.asc`), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${n}&select=*&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&role=eq.picker&select=id,full_name&order=id.asc`)]);
+          const [t, a, r, o, l] = await Promise.all([sbPaged(e, `/rest/v1/stk_str?warehouse_id=eq.${n}&status=eq.reserved&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_putaway_queue?warehouse_id=eq.${n}&status=eq.completed&select=*&order=id.asc`), sbPaged(e, `/rest/v1/stk_inventory_adjustments?warehouse_id=eq.${n}&select=id,warehouse_id,product_barcode,product_name,bin_id,qty_delta,reason,source,created_by,created_at&order=id.asc`), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${n}&select=*&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&role=eq.picker&select=id,full_name&order=id.asc`)]);
           s((t || []).filter(e => "grn_distribution" !== e.source)), m(a || []), p(r || []), h(o || []), f(l || []);
         } catch (e) {
           a("Load fail: " + e.message, "err");
@@ -27042,7 +26735,7 @@ function StockingInventoryView({
         }
         const [rows, bins, profiles, products] = await Promise.all([wmsRead59(e, 'stk_inventory_ledger142', {
           p_wh: n
-        }), sbPaged(e, `/rest/v1/bins?warehouse_id=eq.${n}&select=id,code&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&select=id,full_name,role&order=id.asc`), sbPaged(e, '/rest/v1/stk_products?select=internal_barcode,display_name,department&order=id.asc')]);
+        }), sbPaged(e, `/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${n}&select=id,code&order=code.asc`), sbPaged(e, `/rest/v1/profiles?warehouse_id=eq.${n}&select=id,full_name,role&order=id.asc`), sbPaged(e, '/rest/v1/stk_products?select=internal_barcode,display_name,department&order=id.asc')]);
         setLedgerRows(rows || []), y(bins || []), g(profiles || []), _(products || []);
       } catch (e) {
         a("Load fail: " + e.message, "err");
@@ -33408,7 +33101,7 @@ function StockingDemand56({
       onChange: e => setInput(x.id, "damage_bin", e.target.value)
     }, /*#__PURE__*/React.createElement("option", {
       value: ""
-    }, "Move to DMG bin"), data.bins.filter(b => b.pickable === false && /^DMG|DAMAGE/i.test(b.code)).map(b => /*#__PURE__*/React.createElement("option", {
+    }, "Move to DMG bin"), data.bins.filter(b => b.pickable === false && b.code === "DAMAGE").map(b => /*#__PURE__*/React.createElement("option", {
       key: b.id,
       value: b.id
     }, b.code))), [true, false].map(approve => /*#__PURE__*/React.createElement("button", {
@@ -33655,7 +33348,7 @@ function StockingOutboundBase81({
             token: e
           }), sb(`/rest/v1/stk_grn_allocations?warehouse_id=eq.${n}&select=*&order=created_at.desc`, {
             token: e
-          }), sb(`/rest/v1/bins?warehouse_id=eq.${n}&select=*&order=code.asc`, {
+          }), sb(`/rest/v1/bins?wms_retired167=eq.false&warehouse_id=eq.${n}&select=*&order=code.asc`, {
             token: e
           }), sb(`/rest/v1/stk_dc_arrivals?warehouse_id=eq.${n}&select=*`, {
             token: e
